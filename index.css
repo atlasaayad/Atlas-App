@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+  html {
+    @apply scroll-smooth;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display text-ink;
+  }
+  ::selection {
+    @apply bg-indigo-100 text-indigo-900;
+  }
+  :focus-visible {
+    outline: 2px solid theme('colors.indigo.500');
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Signature motif: a stitched seam — used as active-state markers and
+     section dividers throughout the app, echoing a garment's stitch line. */
+  .stitch-line {
+    background-image: repeating-linear-gradient(
+      90deg,
+      currentColor 0,
+      currentColor 5px,
+      transparent 5px,
+      transparent 10px
+    );
+    background-size: 10px 2px;
+    background-repeat: repeat-x;
+    background-position: left center;
+    height: 2px;
+  }
+  .stitch-line-v {
+    background-image: repeating-linear-gradient(
+      180deg,
+      currentColor 0,
+      currentColor 5px,
+      transparent 5px,
+      transparent 10px
+    );
+    background-size: 2px 10px;
+    background-repeat: repeat-y;
+    background-position: center top;
+    width: 2px;
+  }
+
+  .card {
+    @apply bg-surface border border-line rounded-xl shadow-card;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 focus-visible:outline-none;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-lg border border-line bg-surface px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-paper focus-visible:outline-none;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .badge-good { @apply bg-signal-good/10 text-signal-good; }
+  .badge-warn { @apply bg-signal-warn/10 text-signal-warn; }
+  .badge-bad  { @apply bg-signal-bad/10 text-signal-bad; }
+  .badge-info { @apply bg-signal-info/10 text-signal-info; }
+
+  .table-shell {
+    @apply w-full text-sm;
+  }
+  .table-shell th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-ink-faint border-b border-line;
+  }
+  .table-shell td {
+    @apply px-4 py-3 border-b border-line/70 text-ink;
+  }
+  .table-shell tbody tr {
+    @apply transition-colors hover:bg-paper/70;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
