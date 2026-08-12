@@ -1,18 +1,48 @@
-import Database from 'better-sqlite3'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import pg from 'pg'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const dataDir = path.join(__dirname, '..', '..', 'data')
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
+const { Pool } = pg
 
-const dbPath = process.env.DB_PATH || path.join(dataDir, 'atlas.db')
-export const db = new Database(dbPath)
-db.pragma('journal_mode = WAL')
-db.pragma('foreign_keys = ON')
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL
+if (!connectionString) {
+  throw new Error('DATABASE_URL (or POSTGRES_URL) env var is required — set it to your Neon Postgres connection string.')
+}
 
-db.exec(`
+// max: 1 — each serverless function instance gets its own single connection;
+// Neon's pooled endpoint (pgbouncer) handles fanning that out across many
+// concurrent function instances. Safe for local Postgres too (just less
+// relevant there since there's no serverless fan-out).
+export const pool = new Pool({
+  connectionString,
+  ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+  max: 1,
+})
+
+export async function all(text, params = []) {
+  const { rows } = await pool.query(text, params)
+  return rows
+}
+
+export async function get(text, params = []) {
+  const { rows } = await pool.query(text, params)
+  return rows[0]
+}
+
+export async function run(text, params = []) {
+  return pool.query(text, params)
+}
+
+let schemaReady = null
+
+// Idempotent, cheap (CREATE TABLE IF NOT EXISTS). Called lazily before the
+// first query of each cold start rather than at import time, so a bad
+// DATABASE_URL surfaces as a normal request error instead of crashing the
+// whole function on load.
+export function ensureSchema() {
+  if (!schemaReady) schemaReady = run(SCHEMA_SQL)
+  return schemaReady
+}
+
+const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS config (
   key TEXT PRIMARY KEY,
   value TEXT
@@ -36,8 +66,8 @@ CREATE TABLE IF NOT EXISTS models (
   chain_number INTEGER,
   active INTEGER DEFAULT 1,
   nd INTEGER DEFAULT 0,
-  vt REAL DEFAULT 0,
-  dt REAL DEFAULT 0,
+  vt DOUBLE PRECISION DEFAULT 0,
+  dt DOUBLE PRECISION DEFAULT 0,
   created_at TEXT,
   updated_at TEXT
 );
@@ -48,7 +78,7 @@ CREATE TABLE IF NOT EXISTS gamme_lines (
   seq_no INTEGER NOT NULL,
   operation TEXT,
   machine TEXT,
-  tps REAL DEFAULT 0
+  tps DOUBLE PRECISION DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS effectif_requis (
@@ -83,7 +113,7 @@ CREATE TABLE IF NOT EXISTS rh_attendance (
 
 CREATE TABLE IF NOT EXISTS quality (
   model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
-  percentage REAL DEFAULT 100,
+  percentage DOUBLE PRECISION DEFAULT 100,
   reprises INTEGER DEFAULT 0,
   updated_at TEXT
 );
@@ -112,7 +142,7 @@ CREATE TABLE IF NOT EXISTS logistics_exports (
 CREATE TABLE IF NOT EXISTS poste_status (
   model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
   dept_key TEXT NOT NULL,
-  percentage REAL DEFAULT 100,
+  percentage DOUBLE PRECISION DEFAULT 100,
   note TEXT,
   updated_at TEXT,
   PRIMARY KEY (model_id, dept_key)
@@ -120,10 +150,10 @@ CREATE TABLE IF NOT EXISTS poste_status (
 
 CREATE TABLE IF NOT EXISTS patron_finance (
   model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
-  cout_modele REAL DEFAULT 0,
-  cout_ouvriers REAL DEFAULT 0,
-  autres_depenses REAL DEFAULT 0,
-  prix_vente_unitaire REAL DEFAULT 0,
+  cout_modele DOUBLE PRECISION DEFAULT 0,
+  cout_ouvriers DOUBLE PRECISION DEFAULT 0,
+  autres_depenses DOUBLE PRECISION DEFAULT 0,
+  prix_vente_unitaire DOUBLE PRECISION DEFAULT 0,
   updated_at TEXT
 );
 
@@ -135,17 +165,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
   details TEXT,
   created_at TEXT
 );
-`)
+`
 
-export function logAudit({ deptKey, modelId, action, details }) {
-  db.prepare(
-    `INSERT INTO audit_log (id, dept_key, model_id, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(
-    `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    deptKey || null,
-    modelId || null,
-    action,
-    details ? JSON.stringify(details) : null,
-    new Date().toISOString()
+export async function logAudit({ deptKey, modelId, action, details }) {
+  await run(
+    `INSERT INTO audit_log (id, dept_key, model_id, action, details, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      deptKey || null,
+      modelId || null,
+      action,
+      details ? JSON.stringify(details) : null,
+      new Date().toISOString(),
+    ]
   )
 }
