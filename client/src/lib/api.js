@@ -1,0 +1,88 @@
+const BASE = import.meta.env.VITE_API_BASE_URL || '/api'
+
+function tokenKey(deptKey) {
+  return `atlas_token_${deptKey}`
+}
+
+export function getDeptToken(deptKey) {
+  return localStorage.getItem(tokenKey(deptKey))
+}
+
+export function setDeptToken(deptKey, token) {
+  localStorage.setItem(tokenKey(deptKey), token)
+}
+
+export function clearDeptToken(deptKey) {
+  localStorage.removeItem(tokenKey(deptKey))
+}
+
+async function request(path, { method = 'GET', body, token } = {}) {
+  const headers = {}
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+
+  let data = null
+  try {
+    data = await res.json()
+  } catch {
+    // no body
+  }
+  if (!res.ok) {
+    const error = new Error(data?.error || `request_failed_${res.status}`)
+    error.status = res.status
+    error.data = data
+    throw error
+  }
+  return data
+}
+
+export const api = {
+  getConfig: () => request('/config'),
+  getDepartments: () => request('/departments'),
+  login: (deptKey, pin) => request(`/auth/${deptKey}/login`, { method: 'POST', body: { pin } }),
+  getModels: () => request('/models'),
+  getChains: () => request('/chains'),
+  getModel: (id) => request(`/models/${id}`),
+  getDashboard: (id) => request(`/models/${id}/dashboard`),
+  getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
+
+  methode: {
+    createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),
+    updateModel: (token, id, payload) => request(`/methode/models/${id}`, { method: 'PUT', body: payload, token }),
+    updateGamme: (token, id, lines) => request(`/methode/models/${id}/gamme`, { method: 'PUT', body: { lines }, token }),
+    updateEffectif: (token, id, effectif) => request(`/methode/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
+  },
+  production: {
+    updateHourly: (token, id, slotIndex, qty) => request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty }, token }),
+    updateTotals: (token, id, totalEntree, totalSortie) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree, totalSortie }, token }),
+  },
+  rh: {
+    updateAttendance: (token, id, attendance) => request(`/rh/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
+  },
+  quality: {
+    update: (token, id, percentage, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { percentage, reprises }, token }),
+  },
+  finale: {
+    update: (token, id, enCours) => request(`/finale/models/${id}`, { method: 'PUT', body: { enCours }, token }),
+  },
+  depot: {
+    update: (token, id, totalPieces) => request(`/depot/models/${id}`, { method: 'PUT', body: { totalPieces }, token }),
+  },
+  logistics: {
+    addExport: (token, id, payload) => request(`/logistics/models/${id}/exports`, { method: 'POST', body: payload, token }),
+    deleteExport: (token, exportId) => request(`/logistics/exports/${exportId}`, { method: 'DELETE', token }),
+  },
+  poste: {
+    update: (token, id, percentage, note) => request(`/poste/models/${id}`, { method: 'PUT', body: { percentage, note }, token }),
+  },
+  patron: {
+    getModels: (token) => request('/patron/models', { token }),
+    update: (token, id, payload) => request(`/patron/models/${id}`, { method: 'PUT', body: payload, token }),
+  },
+}

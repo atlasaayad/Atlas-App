@@ -1,69 +1,103 @@
-# Atlas-App
+# ATLAS — Production Tracking Platform
 
-Production management dashboard for garment factories — built with **React 18**, **Vite**, **Tailwind CSS**, **React Router**, **Recharts** and **lucide-react**.
+Real-time production tracking for a garment/textile factory floor. A public
+home dashboard shows live status per Module/Chaîne (no login), and each
+department (Agent Méthode, Agent Production, RH, Quality, Finale, Dépôt,
+Logistics, La Coupe, Magasin, Mécanicien, Échantillon, Patron) enters its own
+data behind a 4-digit PIN.
 
-Atlas-App is built around real garment-factory workflows, not generic admin-panel widgets: a style doesn't exist without a **technical dossier** (client, PO, season, fabric, trims), a dossier drives a **gamme** (operation-by-operation routing with machine, operator, SMV and reference media), a gamme runs on a **module** (workforce, hourly target/actual, downtime, absences), and the **Dashboard** is the control room that surfaces what's behind plan right now.
+Visual identity: dark navy background with glowing turquoise corner
+brackets, inspired by JACK Smart Factory Kanban displays. Space Grotesk for
+numbers/titles, Inter for body text, JetBrains Mono for technical detail.
 
-## Sections
+## Structure
 
-| Route         | Purpose                                                                          |
-|---------------|-----------------------------------------------------------------------------------|
-| `/`           | **Control room** — live KPIs, alerts, delayed modules, exports due today, output trend, module efficiency |
-| `/products`   | Product catalog, each linked to its technical dossier and gamme                  |
-| `/dossiers`   | **Technical Dossiers** — client, PO, season, fabric, trims, and PDF/photo/video references |
-| `/gammes`     | Operation routings: operation number, machine, operator, SMV, reference photo/video per step |
-| `/modules`    | Workforce present/absent, hourly target vs. actual, efficiency, downtime         |
-| `/planning`   | Order scheduling across lines, with progress                                     |
-| `/production` | Live target vs. actual output per line                                           |
-| `/quality`    | AQL batch inspections and defect breakdown                                       |
-| `/reports`    | Scheduled/on-demand reports                                                      |
-| `/settings`   | Factory profile, team access, integrations                                       |
+```
+server/   Express API + SQLite (better-sqlite3). Owns all data, PIN auth, calculations.
+client/   Vite + React + Tailwind. Public dashboard + PIN-gated department forms.
+```
 
 ## Getting started
 
+Two processes, run from two terminals:
+
 ```bash
+# 1. API (http://localhost:4000)
+cd server
+npm install
+npm run seed   # creates tables, department PINs, and one demo model on Chaîne 1
+npm run dev
+
+# 2. Client (http://localhost:5173, proxies /api to the server)
+cd client
 npm install
 npm run dev
 ```
 
-Build for production:
+Open http://localhost:5173 — the home dashboard, Départements grid, and PIN
+entry all work against the demo data seeded above.
 
-```bash
-npm run build
-npm run preview
-```
+### Default department PINs (change before going to production)
 
-## Project structure
+Printed by `npm run seed`. Override per-department via env vars
+(`PIN_METHODE`, `PIN_PRODUCTION`, …) before the first seed on a fresh
+database — see `server/.env.example`.
 
-```
-src/
-  components/   Reusable UI: Sidebar, Topbar, AIPanel, StatCard, PageHeader
-  layouts/      AppLayout — the shell every route renders inside
-  pages/        One file per section listed above
-  data/         Mock data — swap for real API calls / a data layer as the backend lands
-```
+| Department | PIN |
+|---|---|
+| Agent Méthode | 1001 |
+| Agent Production | 1002 |
+| Patron | 1003 |
+| Mécanicien | 1004 |
+| Magasin | 1005 |
+| Logistics | 1006 |
+| Quality | 1007 |
+| RH | 1008 |
+| La Coupe | 1009 |
+| Dépôt | 1010 |
+| Finale | 1011 |
+| Échantillon | 1012 |
 
-## Design system
+## How it fits together
 
-- **Palette** — warehouse white background, graphite ink, denim indigo as the primary accent, amber/green/red for status. Defined as Tailwind tokens in `tailwind.config.js`.
-- **Type** — Space Grotesk (display), Inter (body), IBM Plex Mono (codes, references, quantities).
-- **Signature motif** — a stitched seam line (`.stitch-line` / `.stitch-line-v` in `src/index.css`), used for active nav states and the gamme operation timeline, nodding to the product this app manages.
-- Responsive down to mobile (collapsible sidebar), visible focus rings, and `prefers-reduced-motion` respected.
+- **Agent Méthode** creates a model, assigns it to a chain (1-8), builds the
+  **gamme de montage** (operation list with machine + TPS in seconds), and
+  sets required headcount per specialty. The server computes **VT**
+  (= Σ TPS ÷ 60), **DT** (Objectif/heure = ND × 3600 ÷ Σ TPS) and
+  **Objectif/jour** (= DT × 9h) — never entered by hand.
+- **Agent Production** enters actual output for each of the 9 fixed hourly
+  slots (6:30-16:00, including the 11:30-13:00 slot that spans the lunch
+  break) plus running Total entré / Total sortie for the chain.
+- **RH** enters daily headcount present for the 11 specialties (301, 502,
+  504, 516, Main, Sp, M/sp, Finition, Control, Stg, Fer); required headcount
+  comes from Agent Méthode.
+- **Quality, Finale, Dépôt** each own one metric (quality % + reprises,
+  en-cours finale, pièces sur dépôt).
+- **Logistics** appends rows to the export program (description, quantité,
+  date) — client/mod come from the model.
+- **La Coupe, Magasin, Mécanicien, Échantillon** each report a single daily
+  "État du poste %" + optional note; these drive the three-color (green /
+  yellow / red) status grid on the home dashboard.
+- **Patron** (built last, per the brief) enters cost/price inputs per model
+  and gets computed cost total, revenue and profit % — kept separate from
+  the public dashboard.
 
-## Wiring in AI
+All writes are journaled to `audit_log` (who / what / when) via the
+department's PIN-derived identity. The public home dashboard polls
+`/api/chains/:n/dashboard` every ~12s for near-real-time updates across
+devices.
 
-The Copilot's four target capabilities are already scaffolded as quick actions in `src/components/AIPanel.jsx` — wire `dispatch()` to a real inference endpoint and each one has a concrete data source to work from:
+## Customizing for another factory
 
-1. **Technical dossier analysis** — read fabric, trims, construction notes from `src/data/mockData.js` → `dossiers` and flag gaps or inconsistencies.
-2. **Operation sequence suggestion** — given a dossier, propose a gamme (`gammeOperations` shape: operation, machine, SMV) by pattern-matching against existing gammes for similar garments.
-3. **SMV estimation** — estimate standard minute values for a new style from its dossier plus comparable historical gammes.
-4. **Line balancing** — use live `modules` data (hourly target/actual, workforce, downtime) to recommend rebalancing when a module bottlenecks, as flagged on the Dashboard.
-
-Also in place:
-- The "Ask AI" button in the Topbar opens the panel from anywhere in the app; a contextual prompt on the Technical Dossiers and Gammes pages links straight into it.
-- `.env.example` — copy to `.env.local` and set `VITE_API_BASE_URL` / `VITE_AI_PROVIDER` / `VITE_AI_API_KEY` once a backend exists.
+- **Company name**: `config` table, seeded from `COMPANY_NAME` env var,
+  served at `/api/config` and shown in the header.
+- **Departments, icons, specialties, machines**: `server/src/constants.js`
+  and the matching `client/src/lib/constants.js`.
+- **Colors**: `client/tailwind.config.js` (`navy`, `turquoise`, `status`).
 
 ## Notes
 
-- All data is currently mocked in `src/data/mockData.js` — replace with real API calls (or a data-fetching library like TanStack Query) as the backend comes online.
-- Icons via [lucide-react](https://lucide.dev), charts via [Recharts](https://recharts.org).
+- SQLite file lives at `server/data/atlas.db` (gitignored). Delete the
+  `server/data/` directory and re-run `npm run seed` to start over.
+- `JWT_SECRET` in `server/.env` should be set to a real secret before any
+  non-local deployment (see `server/.env.example`).
