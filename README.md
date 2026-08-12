@@ -87,27 +87,35 @@ department's PIN-derived identity. The public home dashboard polls
 `/api/chains/:n/dashboard` every ~12s for near-real-time updates across
 devices.
 
-## Deploying (Vercel + Render)
+## Deploying (Vercel + Glitch)
 
 The client and server deploy separately since the server is a stateful
 Express process (not a good fit for Vercel's serverless functions).
 
-### 1. Backend → Render
+### 1. Backend → Glitch (free, no credit card)
 
-Click to deploy `render.yaml` as a Blueprint (creates a free web service
-from this repo, auto-generates `JWT_SECRET`):
+The repo root has a `package.json` whose `install`/`start` scripts delegate
+into `server/`, specifically so hosts that expect a root `package.json`
+(like Glitch) can run the API without touching `client/`.
 
-**https://render.com/deploy?repo=https://github.com/atlasaayad/Atlas-App**
+1. On https://glitch.com, **New Project → Import from GitHub**, paste this
+   repo's URL.
+2. Glitch installs (`npm install` → delegates to `server/`) and starts
+   (`npm start` → `node src/index.js`) automatically, listening on the
+   `PORT` Glitch assigns.
+3. The server seeds itself on first boot (departments/PINs/demo model), so
+   no manual seed step is needed. Once it's up, the API is reachable at
+   `https://<your-project-name>.glitch.me`.
 
-The server seeds itself on every boot (departments/PINs/demo model are only
-created if missing), so no manual seed step is needed. Once live, note the
-service URL, e.g. `https://atlas-server.onrender.com`.
+> Free Glitch projects sleep after 5 min with no traffic — the first
+> request after that takes a few seconds to wake. Project storage
+> (including `server/data/atlas.db`) persists across sleep/restarts, just
+> not guaranteed forever on the free tier — treat it as good enough to try
+> the app, not as the system of record for real factory data.
 
-> Free-tier Render services spin down after 15 min idle — the first request
-> after a cold start can take ~30-50s. Free tier also has no persistent
-> disk, so data resets on each redeploy/restart; that's fine for trying the
-> app, but attach a paid disk (or move to a hosted Postgres/Turso) before
-> relying on it for real factory data.
+An alternative `render.yaml` (Render Blueprint) is also included if you'd
+rather use Render later — Render's free tier now requires a card for
+verification, which Glitch doesn't.
 
 ### 2. Frontend → Vercel
 
@@ -117,7 +125,7 @@ import the repo. Then, in the Vercel project's **Settings → Environment
 Variables**, add:
 
 ```
-VITE_API_BASE_URL = https://<your-render-service>.onrender.com/api
+VITE_API_BASE_URL = https://<your-project-name>.glitch.me/api
 ```
 
 and redeploy (env vars are baked in at build time, so a redeploy is

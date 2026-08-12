@@ -1,0 +1,10 @@
+{
+  "name": "atlas-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ATLAS monorepo root. Only exists so hosts that expect a root package.json (e.g. Glitch) can install and run the API in server/ without touching client/.",
+  "scripts": {
+    "install": "npm --prefix server install",
+    "start": "npm --prefix server start"
+  }
+}
