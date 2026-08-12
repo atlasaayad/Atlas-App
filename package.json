@@ -1,10 +1,20 @@
 {
   "name": "atlas-app",
   "private": true,
-  "version": "0.1.0",
-  "description": "ATLAS monorepo root. Only exists so hosts that expect a root package.json (e.g. Glitch) can install and run the API in server/ without touching client/.",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "ATLAS — production tracking platform. This root package.json holds the API's dependencies so Vercel can build the serverless functions under /api (which import server/src/app.js); client/ is the separate Vite frontend with its own package.json.",
   "scripts": {
-    "install": "npm --prefix server install",
-    "start": "npm --prefix server start"
+    "dev:server": "node --watch server/src/index.js",
+    "seed": "node server/src/db/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "nanoid": "^5.0.9",
+    "pg": "^8.13.1"
   }
 }

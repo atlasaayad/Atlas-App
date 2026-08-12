@@ -1,12 +1,12 @@
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { db } from './db/index.js'
+import { get } from './db/index.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'atlas-dev-secret-change-me'
 const TOKEN_TTL = '12h'
 
-export function verifyPin(deptKey, pin) {
-  const dept = db.prepare('SELECT * FROM departments WHERE key = ?').get(deptKey)
+export async function verifyPin(deptKey, pin) {
+  const dept = await get('SELECT * FROM departments WHERE key = $1', [deptKey])
   if (!dept) return null
   if (!bcrypt.compareSync(String(pin), dept.pin_hash)) return null
   return dept

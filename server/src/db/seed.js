@@ -1,10 +1,11 @@
 import bcrypt from 'bcryptjs'
-import { db, logAudit } from './index.js'
+import { all, get, run, ensureSchema, logAudit } from './index.js'
 import { DEPARTMENTS, SPECIALTIES } from '../constants.js'
 import { computeVTMinutes, computeDT } from '../calc.js'
 
 // Default 4-digit PINs, one per department. Override per-deployment via env
-// vars (PIN_METHODE, PIN_PRODUCTION, ...) before running `npm run seed`.
+// vars (PIN_METHODE, PIN_PRODUCTION, ...) before the first boot against a
+// fresh database.
 const DEFAULT_PINS = {
   methode: '1001',
   production: '1002',
@@ -20,50 +21,41 @@ const DEFAULT_PINS = {
   echantillon: '1012',
 }
 
-function seedDepartments() {
-  const insert = db.prepare(
-    `INSERT INTO departments (key, label, icon, pin_hash) VALUES (@key, @label, @icon, @pin_hash)
-     ON CONFLICT(key) DO UPDATE SET label = excluded.label, icon = excluded.icon`
-  )
-  const existing = db.prepare('SELECT key FROM departments').all().map((r) => r.key)
-  const tx = db.transaction(() => {
-    for (const dept of DEPARTMENTS) {
-      if (existing.includes(dept.key)) continue
-      const pin = process.env[`PIN_${dept.key.toUpperCase()}`] || DEFAULT_PINS[dept.key]
-      insert.run({ ...dept, pin_hash: bcrypt.hashSync(pin, 10) })
-    }
-  })
-  tx()
+async function seedDepartments() {
+  const existingRows = await all('SELECT key FROM departments')
+  const existing = existingRows.map((r) => r.key)
+  for (const dept of DEPARTMENTS) {
+    if (existing.includes(dept.key)) continue
+    const pin = process.env[`PIN_${dept.key.toUpperCase()}`] || DEFAULT_PINS[dept.key]
+    const pinHash = bcrypt.hashSync(pin, 10)
+    await run('INSERT INTO departments (key, label, icon, pin_hash) VALUES ($1, $2, $3, $4)', [
+      dept.key,
+      dept.label,
+      dept.icon,
+      pinHash,
+    ])
+  }
 }
 
-function seedConfig() {
-  const insert = db.prepare(
-    `INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`
+async function seedConfig() {
+  await run(
+    `INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
+    ['company_name', process.env.COMPANY_NAME || 'ATLAS']
   )
-  insert.run('company_name', process.env.COMPANY_NAME || 'ATLAS')
 }
 
-function seedDemoModel() {
-  const already = db.prepare('SELECT COUNT(*) c FROM models').get()
-  if (already.c > 0) return
+async function seedDemoModel() {
+  const already = await get('SELECT COUNT(*) c FROM models')
+  if (Number(already.c) > 0) return
 
   const now = new Date().toISOString()
   const modelId = 'mdl_demo_1'
 
-  db.prepare(
+  await run(
     `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at)
-     VALUES (@id, @client, @qte_totale, @debut, @fin_prevue, @dessin, @commande, @chain_number, 1, @now, @now)`
-  ).run({
-    id: modelId,
-    client: 'Zara Home',
-    qte_totale: 10000,
-    debut: '2026-08-01',
-    fin_prevue: '2026-08-30',
-    dessin: 'DSN-2451',
-    commande: 10000,
-    chain_number: 1,
-    now,
-  })
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9)`,
+    [modelId, 'Zara Home', 10000, '2026-08-01', '2026-08-30', 'DSN-2451', 10000, 1, now]
+  )
 
   const gamme = [
     { op: 'Coulisser col', machine: '301', tps: 18 },
@@ -75,79 +67,94 @@ function seedDemoModel() {
     { op: 'Repassage', machine: 'fer', tps: 35 },
     { op: 'Contrôle final', machine: 'rz/stg', tps: 12 },
   ]
-  const insertGamme = db.prepare(
-    `INSERT INTO gamme_lines (id, model_id, seq_no, operation, machine, tps) VALUES (?, ?, ?, ?, ?, ?)`
-  )
-  gamme.forEach((g, i) => {
-    insertGamme.run(`gml_demo_${i}`, modelId, i + 1, g.op, g.machine, g.tps)
-  })
+  for (let i = 0; i < gamme.length; i++) {
+    const g = gamme[i]
+    await run(
+      `INSERT INTO gamme_lines (id, model_id, seq_no, operation, machine, tps) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [`gml_demo_${i}`, modelId, i + 1, g.op, g.machine, g.tps]
+    )
+  }
 
   const effectifs = { '301': 2, '502': 2, '504': 1, '516': 2, Main: 4, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 2 }
-  const insertEff = db.prepare(
-    `INSERT INTO effectif_requis (model_id, specialty, required) VALUES (?, ?, ?)`
-  )
   let nd = 0
   for (const spec of SPECIALTIES) {
     const req = effectifs[spec] || 0
     nd += req
-    insertEff.run(modelId, spec, req)
+    await run('INSERT INTO effectif_requis (model_id, specialty, required) VALUES ($1, $2, $3)', [modelId, spec, req])
   }
 
   const totalTps = gamme.reduce((s, g) => s + g.tps, 0)
   const vt = computeVTMinutes(gamme.map((g) => ({ tps: g.tps })))
   const dt = computeDT(nd, totalTps)
-  db.prepare('UPDATE models SET nd = ?, vt = ?, dt = ?, updated_at = ? WHERE id = ?').run(nd, vt, dt, now, modelId)
+  await run('UPDATE models SET nd = $1, vt = $2, dt = $3, updated_at = $4 WHERE id = $5', [nd, vt, dt, now, modelId])
 
-  const insertHourly = db.prepare(
-    `INSERT INTO hourly_production (model_id, slot_index, qty, updated_at) VALUES (?, ?, ?, ?)`
-  )
   const demoQty = [385, 402, 390, 360, 410, 520, 395, 388, 0]
-  demoQty.forEach((qty, idx) => insertHourly.run(modelId, idx, qty, now))
+  for (let idx = 0; idx < demoQty.length; idx++) {
+    await run('INSERT INTO hourly_production (model_id, slot_index, qty, updated_at) VALUES ($1, $2, $3, $4)', [
+      modelId,
+      idx,
+      demoQty[idx],
+      now,
+    ])
+  }
 
-  db.prepare(
-    `INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES (?, ?, ?, ?)`
-  ).run(modelId, 3420, 2980, now)
-
-  const insertRh = db.prepare(
-    `INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES (?, ?, ?, ?)`
+  await run(
+    `INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, $2, $3, $4)`,
+    [modelId, 3420, 2980, now]
   )
+
   const presentDemo = { '301': 2, '502': 1, '504': 1, '516': 2, Main: 3, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 1 }
-  for (const spec of SPECIALTIES) insertRh.run(modelId, spec, presentDemo[spec] || 0, now)
+  for (const spec of SPECIALTIES) {
+    await run('INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)', [
+      modelId,
+      spec,
+      presentDemo[spec] || 0,
+      now,
+    ])
+  }
 
-  db.prepare(`INSERT INTO quality (model_id, percentage, reprises, updated_at) VALUES (?, ?, ?, ?)`).run(modelId, 96.5, 14, now)
-  db.prepare(`INSERT INTO finale (model_id, en_cours, updated_at) VALUES (?, ?, ?)`).run(modelId, 96, now)
-  db.prepare(`INSERT INTO depot (model_id, total_pieces, updated_at) VALUES (?, ?, ?)`).run(modelId, 780, now)
+  await run(`INSERT INTO quality (model_id, percentage, reprises, updated_at) VALUES ($1, $2, $3, $4)`, [modelId, 96.5, 14, now])
+  await run(`INSERT INTO finale (model_id, en_cours, updated_at) VALUES ($1, $2, $3)`, [modelId, 96, now])
+  await run(`INSERT INTO depot (model_id, total_pieces, updated_at) VALUES ($1, $2, $3)`, [modelId, 780, now])
 
-  const insertExport = db.prepare(
-    `INSERT INTO logistics_exports (id, model_id, description, quantite, date, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+  await run(
+    `INSERT INTO logistics_exports (id, model_id, description, quantite, date, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+    ['exp_demo_1', modelId, 'Chemises homme manches longues', 3000, '2026-08-20', now]
   )
-  insertExport.run('exp_demo_1', modelId, 'Chemises homme manches longues', 3000, '2026-08-20', now)
-  insertExport.run('exp_demo_2', modelId, 'Chemises homme manches longues', 4000, '2026-08-25', now)
-
-  const insertPoste = db.prepare(
-    `INSERT INTO poste_status (model_id, dept_key, percentage, note, updated_at) VALUES (?, ?, ?, ?, ?)`
+  await run(
+    `INSERT INTO logistics_exports (id, model_id, description, quantite, date, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+    ['exp_demo_2', modelId, 'Chemises homme manches longues', 4000, '2026-08-25', now]
   )
-  insertPoste.run(modelId, 'coupe', 92, '', now)
-  insertPoste.run(modelId, 'magasin', 88, '', now)
-  insertPoste.run(modelId, 'mecanicien', 65, 'Panne machine 504', now)
-  insertPoste.run(modelId, 'echantillon', 100, '', now)
 
-  logAudit({ deptKey: 'system', modelId, action: 'seed_demo_model', details: { client: 'Zara Home' } })
+  const postes = [
+    ['coupe', 92, ''],
+    ['magasin', 88, ''],
+    ['mecanicien', 65, 'Panne machine 504'],
+    ['echantillon', 100, ''],
+  ]
+  for (const [deptKey, pct, note] of postes) {
+    await run(
+      `INSERT INTO poste_status (model_id, dept_key, percentage, note, updated_at) VALUES ($1, $2, $3, $4, $5)`,
+      [modelId, deptKey, pct, note, now]
+    )
+  }
+
+  await logAudit({ deptKey: 'system', modelId, action: 'seed_demo_model', details: { client: 'Zara Home' } })
 }
 
-// Idempotent — safe to call on every server boot (departments/config are
-// only inserted if missing, the demo model only if the table is empty).
-// This is what makes the app self-initializing on hosts with an ephemeral
-// filesystem (e.g. Render's free tier, where the SQLite file doesn't
-// survive a restart).
-export function runSeed({ log = false } = {}) {
-  seedDepartments()
-  seedConfig()
-  seedDemoModel()
+// Idempotent — safe to call on every cold start (departments/config are only
+// inserted if missing, the demo model only if the table is empty). This is
+// what makes the app self-initializing against a fresh Postgres database
+// with no manual migration step.
+export async function runSeed({ log = false } = {}) {
+  await ensureSchema()
+  await seedDepartments()
+  await seedConfig()
+  await seedDemoModel()
 
   if (log) {
     console.log('Seed complete.')
-    console.log('Default department PINs (change via PIN_<DEPT> env vars before seeding on a fresh DB):')
+    console.log('Default department PINs (change via PIN_<DEPT> env vars before seeding a fresh database):')
     for (const [key, pin] of Object.entries(DEFAULT_PINS)) {
       console.log(`  ${key.padEnd(12)} ${pin}`)
     }
@@ -157,4 +164,9 @@ export function runSeed({ log = false } = {}) {
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (isMain) {
   runSeed({ log: true })
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error(err)
+      process.exit(1)
+    })
 }

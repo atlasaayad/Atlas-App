@@ -13,20 +13,34 @@ numbers/titles, Inter for body text, JetBrains Mono for technical detail.
 ## Structure
 
 ```
-server/   Express API + SQLite (better-sqlite3). Owns all data, PIN auth, calculations.
+api/      Vercel serverless entry point — imports server/src/app.js as-is.
+server/   Express app + Postgres (pg). Routes, PIN auth, calculations, schema/seed.
 client/   Vite + React + Tailwind. Public dashboard + PIN-gated department forms.
 ```
 
-## Getting started
+The whole app deploys as **one Vercel project**: `client/` builds to a static
+SPA, and `server/`'s Express app is re-exported from `api/index.js` as a
+single serverless function that Vercel routes every `/api/*` request to (see
+`vercel.json`). Same origin, so the client just calls relative `/api/...`
+paths — no CORS, no separate host to stand up.
 
-Two processes, run from two terminals:
+Data lives in Postgres (built and tested against both a local Postgres and
+[Neon](https://neon.tech)'s free tier, which is what powers Vercel's native
+Postgres integration). SQLite was the original choice but doesn't survive on
+serverless hosts (no persistent disk), so the DB layer (`server/src/db/`)
+talks to Postgres over `pg`, async throughout.
+
+## Getting started (local dev)
+
+Needs a Postgres database — either `docker run -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`
+or any local/hosted instance.
 
 ```bash
-# 1. API (http://localhost:4000)
-cd server
+# 1. API deps (project root — these are what api/index.js's serverless
+#    function needs; client/ has its own separate package.json)
 npm install
-npm run seed   # creates tables, department PINs, and one demo model on Chaîne 1
-npm run dev
+cp .env.example .env   # set DATABASE_URL to your Postgres instance
+npm run dev:server     # http://localhost:4000 — creates tables + seeds demo data on first boot
 
 # 2. Client (http://localhost:5173, proxies /api to the server)
 cd client
@@ -39,9 +53,9 @@ entry all work against the demo data seeded above.
 
 ### Default department PINs (change before going to production)
 
-Printed by `npm run seed`. Override per-department via env vars
-(`PIN_METHODE`, `PIN_PRODUCTION`, …) before the first seed on a fresh
-database — see `server/.env.example`.
+Printed on first boot. Override per-department via env vars
+(`PIN_METHODE`, `PIN_PRODUCTION`, …) before the first run against a fresh
+database — see `.env.example`.
 
 | Department | PIN |
 |---|---|
@@ -87,50 +101,41 @@ department's PIN-derived identity. The public home dashboard polls
 `/api/chains/:n/dashboard` every ~12s for near-real-time updates across
 devices.
 
-## Deploying (Vercel + Glitch)
+## Deploying (Vercel + Neon, both free, no credit card)
 
-The client and server deploy separately since the server is a stateful
-Express process (not a good fit for Vercel's serverless functions).
+One Vercel project serves everything — no second host needed.
 
-### 1. Backend → Glitch (free, no credit card)
+1. **Import the repo into Vercel** — vercel.json at the root already builds
+   `client/` and wires `/api/*` to the serverless function, so no project
+   setting changes are required.
+2. **Add Postgres** — in the Vercel project, **Storage → Create Database →
+   Neon (Postgres)**. This provisions a free Neon database and auto-injects
+   `DATABASE_URL`/`POSTGRES_URL` into the project's environment variables —
+   no manual connection string copying.
+3. **Deploy / redeploy.** On first request, the API creates its tables and
+   seeds departments/PINs/a demo model automatically (idempotent — safe on
+   every cold start, does nothing once data exists).
+4. Open the Vercel URL — that's the working app.
 
-The repo root has a `package.json` whose `install`/`start` scripts delegate
-into `server/`, specifically so hosts that expect a root `package.json`
-(like Glitch) can run the API without touching `client/`.
+Both Vercel's Hobby plan and Neon's free tier are genuinely free with no
+card required (verified directly against their current pricing pages, not
+assumed) — see the tradeoffs below before relying on either for real
+factory data:
 
-1. On https://glitch.com, **New Project → Import from GitHub**, paste this
-   repo's URL.
-2. Glitch installs (`npm install` → delegates to `server/`) and starts
-   (`npm start` → `node src/index.js`) automatically, listening on the
-   `PORT` Glitch assigns.
-3. The server seeds itself on first boot (departments/PINs/demo model), so
-   no manual seed step is needed. Once it's up, the API is reachable at
-   `https://<your-project-name>.glitch.me`.
+> Neon's free tier: no card, never expires, 0.5 GB storage. Fine for this
+> app's data volume. Vercel's Hobby plan is officially for personal,
+> non-commercial projects — using it for an internal factory tool is a gray
+> area worth being aware of if this grows past a pilot; Vercel Pro removes
+> that restriction.
 
-> Free Glitch projects sleep after 5 min with no traffic — the first
-> request after that takes a few seconds to wake. Project storage
-> (including `server/data/atlas.db`) persists across sleep/restarts, just
-> not guaranteed forever on the free tier — treat it as good enough to try
-> the app, not as the system of record for real factory data.
+### Environment variables (Vercel Project Settings)
 
-An alternative `render.yaml` (Render Blueprint) is also included if you'd
-rather use Render later — Render's free tier now requires a card for
-verification, which Glitch doesn't.
-
-### 2. Frontend → Vercel
-
-The repo root has a `vercel.json` that builds `client/` and serves
-`client/dist` as a SPA, so no project-setting changes are required — just
-import the repo. Then, in the Vercel project's **Settings → Environment
-Variables**, add:
-
-```
-VITE_API_BASE_URL = https://<your-project-name>.glitch.me/api
-```
-
-and redeploy (env vars are baked in at build time, so a redeploy is
-required after adding/changing this one). The resulting Vercel URL is the
-one to open and use.
+| Variable | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | Yes | Auto-set by the Neon integration; a `POSTGRES_URL` from Vercel's own Postgres integration works too |
+| `JWT_SECRET` | Yes | Set to a real random secret before real use — defaults to a dev value otherwise |
+| `COMPANY_NAME` | No | Defaults to `ATLAS` |
+| `PIN_<DEPT>` | No | Override a department's default PIN, only read on first seed |
 
 ## Customizing for another factory
 
@@ -142,7 +147,8 @@ one to open and use.
 
 ## Notes
 
-- SQLite file lives at `server/data/atlas.db` (gitignored). Delete the
-  `server/data/` directory and re-run `npm run seed` to start over.
-- `JWT_SECRET` in `server/.env` should be set to a real secret before any
-  non-local deployment (see `server/.env.example`).
+- To start over locally, drop and recreate the tables (`DROP SCHEMA public
+  CASCADE; CREATE SCHEMA public;` against your Postgres instance) and
+  restart the server — it re-seeds automatically.
+- `JWT_SECRET` should be set to a real secret before any non-local
+  deployment (see `.env.example`).
