@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import { runSeed } from './db/seed.js'
 import { publicRouter } from './routes/public.js'
 import { methodeRouter } from './routes/methode.js'
 import { productionRouter } from './routes/production.js'
@@ -11,6 +12,11 @@ import { depotRouter } from './routes/depot.js'
 import { logisticsRouter } from './routes/logistics.js'
 import { posteRouter } from './routes/poste.js'
 import { patronRouter } from './routes/patron.js'
+
+// Idempotent: creates departments/PINs/config and the demo model if missing.
+// Runs on every boot so the app self-initializes on hosts with an ephemeral
+// filesystem (e.g. Render's free tier), not just on first deploy.
+runSeed({ log: true })
 
 const app = express()
 app.use(cors())

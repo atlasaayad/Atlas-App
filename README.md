@@ -87,6 +87,43 @@ department's PIN-derived identity. The public home dashboard polls
 `/api/chains/:n/dashboard` every ~12s for near-real-time updates across
 devices.
 
+## Deploying (Vercel + Render)
+
+The client and server deploy separately since the server is a stateful
+Express process (not a good fit for Vercel's serverless functions).
+
+### 1. Backend → Render
+
+Click to deploy `render.yaml` as a Blueprint (creates a free web service
+from this repo, auto-generates `JWT_SECRET`):
+
+**https://render.com/deploy?repo=https://github.com/atlasaayad/Atlas-App**
+
+The server seeds itself on every boot (departments/PINs/demo model are only
+created if missing), so no manual seed step is needed. Once live, note the
+service URL, e.g. `https://atlas-server.onrender.com`.
+
+> Free-tier Render services spin down after 15 min idle — the first request
+> after a cold start can take ~30-50s. Free tier also has no persistent
+> disk, so data resets on each redeploy/restart; that's fine for trying the
+> app, but attach a paid disk (or move to a hosted Postgres/Turso) before
+> relying on it for real factory data.
+
+### 2. Frontend → Vercel
+
+The repo root has a `vercel.json` that builds `client/` and serves
+`client/dist` as a SPA, so no project-setting changes are required — just
+import the repo. Then, in the Vercel project's **Settings → Environment
+Variables**, add:
+
+```
+VITE_API_BASE_URL = https://<your-render-service>.onrender.com/api
+```
+
+and redeploy (env vars are baked in at build time, so a redeploy is
+required after adding/changing this one). The resulting Vercel URL is the
+one to open and use.
+
 ## Customizing for another factory
 
 - **Company name**: `config` table, seeded from `COMPANY_NAME` env var,

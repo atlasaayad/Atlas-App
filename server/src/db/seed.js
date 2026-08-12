@@ -135,12 +135,26 @@ function seedDemoModel() {
   logAudit({ deptKey: 'system', modelId, action: 'seed_demo_model', details: { client: 'Zara Home' } })
 }
 
-seedDepartments()
-seedConfig()
-seedDemoModel()
+// Idempotent — safe to call on every server boot (departments/config are
+// only inserted if missing, the demo model only if the table is empty).
+// This is what makes the app self-initializing on hosts with an ephemeral
+// filesystem (e.g. Render's free tier, where the SQLite file doesn't
+// survive a restart).
+export function runSeed({ log = false } = {}) {
+  seedDepartments()
+  seedConfig()
+  seedDemoModel()
 
-console.log('Seed complete.')
-console.log('Default department PINs (change via PIN_<DEPT> env vars before seeding on a fresh DB):')
-for (const [key, pin] of Object.entries(DEFAULT_PINS)) {
-  console.log(`  ${key.padEnd(12)} ${pin}`)
+  if (log) {
+    console.log('Seed complete.')
+    console.log('Default department PINs (change via PIN_<DEPT> env vars before seeding on a fresh DB):')
+    for (const [key, pin] of Object.entries(DEFAULT_PINS)) {
+      console.log(`  ${key.padEnd(12)} ${pin}`)
+    }
+  }
+}
+
+const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
+if (isMain) {
+  runSeed({ log: true })
 }
