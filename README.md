@@ -71,7 +71,7 @@ redeploying is enough to rotate it, even on an already-seeded database.
 | RH | 8888 |
 | La Coupe | 9999 |
 | Dépôt | 1010 |
-| Finale | 1111 |
+| Finale | 1313 |
 | Échantillon | 1212 |
 
 ## How it fits together

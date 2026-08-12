@@ -19,7 +19,7 @@ const DEFAULT_PINS = {
   rh: '8888',
   coupe: '9999',
   depot: '1010',
-  finale: '1111',
+  finale: '1313',
   echantillon: '1212',
 }
 
