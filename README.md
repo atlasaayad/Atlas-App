@@ -51,26 +51,28 @@ npm run dev
 Open http://localhost:5173 — the home dashboard, Départements grid, and PIN
 entry all work against the demo data seeded above.
 
-### Default department PINs (change before going to production)
+### Default department PINs
 
-Printed on first boot. Override per-department via env vars
-(`PIN_METHODE`, `PIN_PRODUCTION`, …) before the first run against a fresh
-database — see `.env.example`.
+Printed on every boot. Override per-department via env vars
+(`PIN_METHODE`, `PIN_PRODUCTION`, …) — see `.env.example`. Unlike the rest
+of the seed data, PINs are re-synced on every boot, so changing one of
+these (in `server/src/db/seed.js`'s `DEFAULT_PINS`, or via the env var) and
+redeploying is enough to rotate it, even on an already-seeded database.
 
 | Department | PIN |
 |---|---|
-| Agent Méthode | 1001 |
-| Agent Production | 1002 |
-| Patron | 1003 |
-| Mécanicien | 1004 |
-| Magasin | 1005 |
-| Logistics | 1006 |
-| Quality | 1007 |
-| RH | 1008 |
-| La Coupe | 1009 |
+| Agent Méthode | 1111 |
+| Agent Production | 2222 |
+| Patron | 3333 |
+| Mécanicien | 4444 |
+| Magasin | 5555 |
+| Logistics | 6666 |
+| Quality | 7777 |
+| RH | 8888 |
+| La Coupe | 9999 |
 | Dépôt | 1010 |
-| Finale | 1011 |
-| Échantillon | 1012 |
+| Finale | 1111 |
+| Échantillon | 1212 |
 
 ## How it fits together
 
@@ -113,8 +115,11 @@ One Vercel project serves everything — no second host needed.
    `DATABASE_URL`/`POSTGRES_URL` into the project's environment variables —
    no manual connection string copying.
 3. **Deploy / redeploy.** On first request, the API creates its tables and
-   seeds departments/PINs/a demo model automatically (idempotent — safe on
-   every cold start, does nothing once data exists).
+   seeds departments/a demo model automatically. Safe to run on every cold
+   start: the demo model and schema are only created once, while
+   departments' label/icon/PIN are re-synced from `server/src/db/seed.js`
+   (or the `PIN_<DEPT>` env vars) every time — so redeploying after
+   changing a PIN there is enough to rotate it.
 4. Open the Vercel URL — that's the working app.
 
 Both Vercel's Hobby plan and Neon's free tier are genuinely free with no
@@ -135,7 +140,7 @@ factory data:
 | `DATABASE_URL` | Yes | Auto-set by the Neon integration; a `POSTGRES_URL` from Vercel's own Postgres integration works too |
 | `JWT_SECRET` | Yes | Set to a real random secret before real use — defaults to a dev value otherwise |
 | `COMPANY_NAME` | No | Defaults to `ATLAS` |
-| `PIN_<DEPT>` | No | Override a department's default PIN, only read on first seed |
+| `PIN_<DEPT>` | No | Override a department's PIN — re-synced on every boot, so it can be rotated later too |
 
 ## Customizing for another factory
 
