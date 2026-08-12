@@ -1,39 +1,37 @@
 import bcrypt from 'bcryptjs'
-import { all, get, run, ensureSchema, logAudit } from './index.js'
+import { get, run, ensureSchema, logAudit } from './index.js'
 import { DEPARTMENTS, SPECIALTIES } from '../constants.js'
 import { computeVTMinutes, computeDT } from '../calc.js'
 
 // Default 4-digit PINs, one per department. Override per-deployment via env
-// vars (PIN_METHODE, PIN_PRODUCTION, ...) before the first boot against a
-// fresh database.
+// vars (PIN_METHODE, PIN_PRODUCTION, ...). Unlike the rest of the seed data,
+// these are re-synced on every boot (see seedDepartments below) rather than
+// only set once, so changing a value here and redeploying is enough to
+// rotate a department's PIN on an already-seeded database.
 const DEFAULT_PINS = {
-  methode: '1001',
-  production: '1002',
-  patron: '1003',
-  mecanicien: '1004',
-  magasin: '1005',
-  logistics: '1006',
-  quality: '1007',
-  rh: '1008',
-  coupe: '1009',
+  methode: '1111',
+  production: '2222',
+  patron: '3333',
+  mecanicien: '4444',
+  magasin: '5555',
+  logistics: '6666',
+  quality: '7777',
+  rh: '8888',
+  coupe: '9999',
   depot: '1010',
-  finale: '1011',
-  echantillon: '1012',
+  finale: '1313',
+  echantillon: '1212',
 }
 
 async function seedDepartments() {
-  const existingRows = await all('SELECT key FROM departments')
-  const existing = existingRows.map((r) => r.key)
   for (const dept of DEPARTMENTS) {
-    if (existing.includes(dept.key)) continue
     const pin = process.env[`PIN_${dept.key.toUpperCase()}`] || DEFAULT_PINS[dept.key]
     const pinHash = bcrypt.hashSync(pin, 10)
-    await run('INSERT INTO departments (key, label, icon, pin_hash) VALUES ($1, $2, $3, $4)', [
-      dept.key,
-      dept.label,
-      dept.icon,
-      pinHash,
-    ])
+    await run(
+      `INSERT INTO departments (key, label, icon, pin_hash) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (key) DO UPDATE SET label = excluded.label, icon = excluded.icon, pin_hash = excluded.pin_hash`,
+      [dept.key, dept.label, dept.icon, pinHash]
+    )
   }
 }
 
