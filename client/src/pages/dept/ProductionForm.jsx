@@ -45,20 +45,22 @@ export default function ProductionForm({ token, chainNumber }) {
   return (
     <div className="space-y-4">
       <GlowCard title="Production par heure">
-        <div className="space-y-2">
+        <p className="mb-3 text-sm text-slate-400">أدخل عدد القطع المنتجة بكل ساعة، واضغط OK لحفظها.</p>
+        <div className="space-y-2.5">
           {dashboard.hourly.map((slot) => (
-            <div key={slot.index} className="flex items-center gap-3">
-              <span className="w-28 font-mono text-xs text-slate-400">{slot.label}</span>
+            <div key={slot.index} className="flex items-center gap-2.5">
+              <span className="w-24 shrink-0 font-mono text-xs text-slate-400">{slot.label}</span>
               <input
                 type="number"
+                inputMode="numeric"
                 value={hourly[slot.index] ?? 0}
                 onChange={(e) => setHourly({ ...hourly, [slot.index]: e.target.value })}
-                className="w-24 rounded border border-slate-700 bg-navy-900 px-2 py-1.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
               />
               <button
                 onClick={() => saveSlot(slot.index)}
                 disabled={savingSlot === slot.index}
-                className="rounded border border-turquoise/50 px-3 py-1.5 text-xs text-turquoise hover:bg-turquoise/10 disabled:opacity-50"
+                className="h-11 shrink-0 rounded border border-turquoise/50 px-4 text-sm font-medium text-turquoise active:bg-turquoise/10 disabled:opacity-50"
               >
                 {savingSlot === slot.index ? '…' : 'OK'}
               </button>
@@ -68,29 +70,31 @@ export default function ProductionForm({ token, chainNumber }) {
       </GlowCard>
 
       <GlowCard title="Totaux de la chaîne">
-        <form onSubmit={saveTotals} className="grid grid-cols-2 gap-3">
+        <form onSubmit={saveTotals} className="grid grid-cols-2 gap-4">
           <label className="block">
             <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total entré</span>
             <input
               type="number"
+              inputMode="numeric"
               value={totals.totalEntree}
               onChange={(e) => setTotals({ ...totals, totalEntree: e.target.value })}
-              className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+              className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
             />
           </label>
           <label className="block">
             <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total sortie</span>
             <input
               type="number"
+              inputMode="numeric"
               value={totals.totalSortie}
               onChange={(e) => setTotals({ ...totals, totalSortie: e.target.value })}
-              className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+              className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
             />
           </label>
           <button
             type="submit"
             disabled={savingTotals}
-            className="col-span-2 rounded-md border border-turquoise bg-turquoise/10 py-2.5 font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+            className="col-span-2 rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
             {savingTotals ? 'Enregistrement…' : 'Enregistrer'}
           </button>

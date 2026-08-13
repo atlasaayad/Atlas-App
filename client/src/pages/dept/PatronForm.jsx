@@ -235,7 +235,7 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
           <button
             type="submit"
             disabled={saving}
-            className="col-span-full rounded-md border border-turquoise bg-turquoise/10 py-2.5 font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+            className="col-span-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
             {saving ? 'Enregistrement…' : 'Enregistrer'}
           </button>
@@ -251,9 +251,10 @@ function NumField({ label, value, onChange }) {
       <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
       <input
         type="number"
+        inputMode="numeric"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+        className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
       />
     </label>
   )
