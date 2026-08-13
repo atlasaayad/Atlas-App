@@ -21,7 +21,7 @@ publicRouter.post('/auth/:deptKey/login', async (req, res) => {
   if (!pin) return res.status(400).json({ error: 'pin_required' })
   const dept = await verifyPin(deptKey, pin)
   if (!dept) return res.status(401).json({ error: 'invalid_pin' })
-  const token = issueToken(deptKey)
+  const token = issueToken(deptKey, dept.pin_hash)
   res.json({ token, dept: deptKey })
 })
 
