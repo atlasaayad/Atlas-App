@@ -27,6 +27,27 @@ const EXPORT_TABLES = [
   { sheet: 'Journal des Modifications', table: 'audit_log', orderBy: 'created_at DESC', limit: 5000 },
 ]
 
+patronRouter.get('/audit-log', async (req, res) => {
+  const rows = await all(
+    `SELECT a.id, a.dept_key, a.model_id, a.action, a.details, a.created_at, m.client, m.dessin
+     FROM audit_log a
+     LEFT JOIN models m ON m.id = a.model_id
+     ORDER BY a.created_at DESC
+     LIMIT 50`
+  )
+  res.json(
+    rows.map((r) => ({
+      id: r.id,
+      deptKey: r.dept_key,
+      action: r.action,
+      details: r.details ? JSON.parse(r.details) : null,
+      modelClient: r.client,
+      modelDessin: r.dessin,
+      createdAt: r.created_at,
+    }))
+  )
+})
+
 patronRouter.get('/export', async (req, res) => {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'ATLAS'
