@@ -138,7 +138,7 @@ factory data:
 | Variable | Required | Notes |
 |---|---|---|
 | `DATABASE_URL` | Yes | Auto-set by the Neon integration; a `POSTGRES_URL` from Vercel's own Postgres integration works too |
-| `JWT_SECRET` | Yes | Set to a real random secret before real use — defaults to a dev value otherwise |
+| `JWT_SECRET` | **Yes, hard requirement** | The app refuses to start without it (no insecure fallback). Generate one with `openssl rand -hex 32` |
 | `COMPANY_NAME` | No | Defaults to `ATLAS` |
 | `PIN_<DEPT>` | No | Override a department's PIN — re-synced on every boot, so it can be rotated later too |
 
@@ -155,5 +155,9 @@ factory data:
 - To start over locally, drop and recreate the tables (`DROP SCHEMA public
   CASCADE; CREATE SCHEMA public;` against your Postgres instance) and
   restart the server — it re-seeds automatically.
-- `JWT_SECRET` should be set to a real secret before any non-local
-  deployment (see `.env.example`).
+- **`JWT_SECRET` is mandatory** — the app throws at startup if it's unset
+  or left as one of the known placeholder values, rather than silently
+  signing tokens with a secret anyone could read in this public repo (see
+  `.env.example`). Tokens also embed a fingerprint of the department's
+  current PIN hash, so rotating a PIN immediately invalidates any token
+  issued under the old one, instead of leaving it valid until it expires.
