@@ -90,5 +90,10 @@ export const api = {
   patron: {
     getModels: (token) => request('/patron/models', { token }),
     update: (token, id, payload) => request(`/patron/models/${id}`, { method: 'PUT', body: payload, token }),
+    exportData: async (token) => {
+      const res = await fetch(`${BASE}/patron/export`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error(`export_failed_${res.status}`)
+      return res.blob()
+    },
   },
 }

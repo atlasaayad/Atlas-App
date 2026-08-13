@@ -16,21 +16,72 @@ export default function PatronForm({ token }) {
   }, [])
 
   if (!models) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (models.length === 0) return <div className="py-10 text-center text-slate-400">Aucun modèle enregistré.</div>
 
   return (
     <div className="space-y-3">
-      {models.map((m) => (
-        <ModelFinanceCard
-          key={m.id}
-          token={token}
-          model={m}
-          open={openId === m.id}
-          onToggle={() => setOpenId(openId === m.id ? null : m.id)}
-          onSaved={load}
-        />
-      ))}
+      <ExportCard token={token} />
+      {models.length === 0 ? (
+        <div className="py-10 text-center text-slate-400">Aucun modèle enregistré.</div>
+      ) : (
+        models.map((m) => (
+          <ModelFinanceCard
+            key={m.id}
+            token={token}
+            model={m}
+            open={openId === m.id}
+            onToggle={() => setOpenId(openId === m.id ? null : m.id)}
+            onSaved={load}
+          />
+        ))
+      )}
     </div>
+  )
+}
+
+function ExportCard({ token }) {
+  const [exporting, setExporting] = useState(false)
+  const [error, setError] = useState(false)
+
+  async function handleExport() {
+    setExporting(true)
+    setError(false)
+    try {
+      const blob = await api.patron.exportData(token)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `atlas-export-${new Date().toISOString().slice(0, 10)}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError(true)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <GlowCard>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="font-display text-sm font-semibold text-slate-100">Exporter toutes les données</div>
+          <div className="text-xs text-slate-500">
+            Fichier Excel (.xlsx) — tous les modèles, la production, RH, qualité, logistique et le journal des
+            modifications, un onglet par table.
+          </div>
+        </div>
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          className="rounded-md border border-turquoise bg-turquoise/10 px-4 py-2 text-sm font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+        >
+          {exporting ? 'Export en cours…' : '⬇ Exporter (.xlsx)'}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-sm text-status-bad">Échec de l'export, réessayez.</div>}
+    </GlowCard>
   )
 }
 
