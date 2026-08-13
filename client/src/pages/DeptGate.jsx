@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import PinPad from '../components/PinPad'
+import LockedScreen from '../components/LockedScreen'
 import ChainPicker from '../components/ChainPicker'
 import { DEPARTMENT_META } from '../lib/constants'
 import { api, getDeptToken, setDeptToken, clearDeptToken } from '../lib/api'
@@ -36,7 +37,9 @@ export default function DeptGate() {
   const meta = DEPARTMENT_META[deptKey]
   const [token, setToken] = useState(() => getDeptToken(deptKey))
   const [pinError, setPinError] = useState(false)
+  const [attemptsRemaining, setAttemptsRemaining] = useState(null)
   const [pinLoading, setPinLoading] = useState(false)
+  const [lockInfo, setLockInfo] = useState(null)
   const [chainNumber, setChainNumber] = useState(null)
 
   const handlePin = useCallback(
@@ -48,7 +51,12 @@ export default function DeptGate() {
         setDeptToken(deptKey, res.token)
         setToken(res.token)
       } catch (err) {
-        setPinError(true)
+        if (err.status === 423) {
+          setLockInfo({ retryAfterSeconds: err.data?.retryAfterSeconds || 600 })
+        } else {
+          setPinError(true)
+          setAttemptsRemaining(typeof err.data?.attemptsRemaining === 'number' ? err.data.attemptsRemaining : null)
+        }
         throw err
       } finally {
         setPinLoading(false)
@@ -67,11 +75,32 @@ export default function DeptGate() {
     return <div className="p-6 text-center text-slate-400">Département introuvable.</div>
   }
 
+  if (!token && lockInfo) {
+    return (
+      <div>
+        <BackBar onBack={() => navigate('/departements')} />
+        <LockedScreen
+          deptLabel={meta.label}
+          deptIcon={meta.icon}
+          retryAfterSeconds={lockInfo.retryAfterSeconds}
+          onExpire={() => setLockInfo(null)}
+        />
+      </div>
+    )
+  }
+
   if (!token) {
     return (
       <div>
         <BackBar onBack={() => navigate('/departements')} />
-        <PinPad deptLabel={meta.label} deptIcon={meta.icon} onSubmit={handlePin} error={pinError} loading={pinLoading} />
+        <PinPad
+          deptLabel={meta.label}
+          deptIcon={meta.icon}
+          onSubmit={handlePin}
+          error={pinError}
+          loading={pinLoading}
+          attemptsRemaining={attemptsRemaining}
+        />
       </div>
     )
   }

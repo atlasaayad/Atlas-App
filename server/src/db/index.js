@@ -52,8 +52,15 @@ CREATE TABLE IF NOT EXISTS departments (
   key TEXT PRIMARY KEY,
   label TEXT NOT NULL,
   icon TEXT NOT NULL,
-  pin_hash TEXT NOT NULL
+  pin_hash TEXT NOT NULL,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT
 );
+
+-- ADD COLUMN IF NOT EXISTS so this reaches the departments table that
+-- already exists on a deployed database, not just a fresh one.
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS locked_until TEXT;
 
 CREATE TABLE IF NOT EXISTS models (
   id TEXT PRIMARY KEY,

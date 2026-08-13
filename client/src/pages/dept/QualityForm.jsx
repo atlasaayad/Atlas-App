@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import Stepper from '../../components/Stepper'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -36,11 +37,11 @@ export default function QualityForm({ token, chainNumber }) {
 
   return (
     <GlowCard title="Qualité">
-      <form onSubmit={submit} className="space-y-5">
+      <form onSubmit={submit} className="space-y-6">
         <div>
           <div className="mb-2 flex justify-between text-sm">
-            <span className="text-slate-400">Qualité %</span>
-            <span className="font-mono text-turquoise">{percentage}%</span>
+            <span className="text-slate-400">نسبة الجودة</span>
+            <span className="font-mono text-xl text-turquoise">{percentage}%</span>
           </div>
           <input
             type="range"
@@ -48,23 +49,18 @@ export default function QualityForm({ token, chainNumber }) {
             max="100"
             value={percentage}
             onChange={(e) => setPercentage(e.target.value)}
-            className="w-full accent-turquoise"
+            className="h-3 w-full accent-turquoise"
           />
         </div>
-        <label className="block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Reprises</span>
-          <input
-            type="number"
-            min="0"
-            value={reprises}
-            onChange={(e) => setReprises(e.target.value)}
-            className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
-          />
-        </label>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Reprises</div>
+          <div className="mb-2 text-xs text-slate-500">عدد القطع اللي تحتاج إعادة شغل بسبب عيب</div>
+          <Stepper value={reprises} onChange={setReprises} max={999} />
+        </div>
         <button
           type="submit"
           disabled={saving}
-          className="rounded-md border border-turquoise bg-turquoise/10 px-4 py-2 font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+          className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
         >
           {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
         </button>

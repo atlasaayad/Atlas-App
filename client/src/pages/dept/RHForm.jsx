@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import Stepper from '../../components/Stepper'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 import { SPECIALTIES } from '../../lib/constants'
@@ -35,30 +36,31 @@ export default function RHForm({ token, chainNumber }) {
 
   return (
     <GlowCard title="Présence par spécialité">
+      <p className="mb-4 text-sm text-slate-400">
+        عدد العمال الحاضرين اليوم لكل تخصص. استخدم <span className="text-turquoise">+</span> و
+        <span className="text-turquoise"> −</span> للتعديل. الرقم الصغير تحت كل تخصص هو العدد المطلوب (حسب Agent
+        Méthode).
+      </p>
       <form onSubmit={submit}>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {SPECIALTIES.map((sp) => {
             const required = dashboard.effectifs.find((e) => e.specialty === sp)?.required ?? 0
             return (
-              <label key={sp} className="block">
-                <span className="mb-1 block text-center font-mono text-xs text-slate-500">
-                  {sp} <span className="text-slate-600">/ {required}</span>
-                </span>
-                <input
-                  type="number"
-                  min="0"
+              <div key={sp} className="flex flex-col items-center gap-1 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+                <Stepper
+                  label={`${sp} / ${required} مطلوب`}
                   value={attendance[sp] ?? 0}
-                  onChange={(e) => setAttendance({ ...attendance, [sp]: e.target.value })}
-                  className="w-full rounded border border-slate-700 bg-navy-900 px-2 py-1.5 text-center text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                  onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
+                  max={30}
                 />
-              </label>
+              </div>
             )
           })}
         </div>
         <button
           type="submit"
           disabled={saving}
-          className="mt-4 rounded-md border border-turquoise bg-turquoise/10 px-4 py-2 font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+          className="mt-5 w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-6"
         >
           {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
         </button>

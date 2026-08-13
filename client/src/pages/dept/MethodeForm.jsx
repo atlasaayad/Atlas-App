@@ -1,8 +1,27 @@
 import { useEffect, useMemo, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
+import Stepper from '../../components/Stepper'
 import { api } from '../../lib/api'
 import { SPECIALTIES, MACHINES } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour } from '../../lib/calc'
+
+// Quick-pick suggestions for common operation names — still a free-text
+// field (garment operations vary too much to force a fixed list), but this
+// means most entries are a couple of taps instead of typing.
+const OPERATION_SUGGESTIONS = [
+  'Coulisser col',
+  'Rep col',
+  'Surp col',
+  'Montage manche',
+  'Assemblage côtés',
+  'Ourlet bas',
+  'Repassage',
+  'Contrôle final',
+  'Piquage poche',
+  'Fermeture éclair',
+  'Boutonnière',
+  'Surjet',
+]
 
 export default function MethodeForm({ token, chainNumber }) {
   const [loading, setLoading] = useState(true)
@@ -50,17 +69,34 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
       <div className="mb-3 font-display text-base font-semibold text-slate-100">
         Nouveau modèle — Chaîne {chainNumber}
       </div>
-      <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <TextField label="Client" value={form.client} onChange={(v) => setForm({ ...form, client: v })} required />
-        <TextField label="Dessin" value={form.dessin} onChange={(v) => setForm({ ...form, dessin: v })} />
-        <TextField label="Qté totale" type="number" value={form.qteTotale} onChange={(v) => setForm({ ...form, qteTotale: v })} />
-        <TextField label="Commande" type="number" value={form.commande} onChange={(v) => setForm({ ...form, commande: v })} />
+        <TextField
+          label="Dessin"
+          value={form.dessin}
+          onChange={(v) => setForm({ ...form, dessin: v })}
+          hint="رقم أو مرجع تصميم الموديل، مثال: DSN-2451"
+        />
+        <TextField
+          label="Qté totale"
+          type="number"
+          value={form.qteTotale}
+          onChange={(v) => setForm({ ...form, qteTotale: v })}
+          hint="إجمالي كمية الطلبية الكاملة من العميل"
+        />
+        <TextField
+          label="Commande"
+          type="number"
+          value={form.commande}
+          onChange={(v) => setForm({ ...form, commande: v })}
+          hint="الكمية المؤكدة بأمر الشغل الحالي"
+        />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
         <button
           type="submit"
           disabled={saving}
-          className="col-span-full mt-2 rounded-md border border-turquoise bg-turquoise/10 py-2.5 font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+          className="col-span-full mt-2 rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
         >
           {saving ? 'Création…' : 'Créer le modèle'}
         </button>
@@ -82,7 +118,7 @@ function EditModel({ token, model, onSaved }) {
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`whitespace-nowrap rounded-md border px-3 py-1.5 text-sm ${
+            className={`whitespace-nowrap rounded-md border px-4 py-2.5 text-sm font-medium ${
               tab === key ? 'border-turquoise bg-turquoise/10 text-turquoise' : 'border-slate-700 text-slate-400'
             }`}
           >
@@ -97,6 +133,10 @@ function EditModel({ token, model, onSaved }) {
           <Metric label="DT (Objectif/heure)" value={Math.round(model.dt)} />
           <Metric label="ND (effectif)" value={model.nd} />
           <Metric label="Objectif/jour" value={Math.round(computeObjectifJour(model.dt)).toLocaleString('fr-FR')} />
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          VT وDT وObjectif/jour تُحسب تلقائياً من الگامة (تبويب "Gamme de montage") والإفكتيف (تبويب "Effectif") — ما
+          تحتاج تدخلها يدوياً.
         </div>
       </GlowCard>
 
@@ -134,11 +174,28 @@ function IdentiteTab({ token, model, onSaved }) {
 
   return (
     <GlowCard>
-      <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <TextField label="Client" value={form.client} onChange={(v) => setForm({ ...form, client: v })} required />
-        <TextField label="Dessin" value={form.dessin} onChange={(v) => setForm({ ...form, dessin: v })} />
-        <TextField label="Qté totale" type="number" value={form.qteTotale} onChange={(v) => setForm({ ...form, qteTotale: v })} />
-        <TextField label="Commande" type="number" value={form.commande} onChange={(v) => setForm({ ...form, commande: v })} />
+        <TextField
+          label="Dessin"
+          value={form.dessin}
+          onChange={(v) => setForm({ ...form, dessin: v })}
+          hint="رقم أو مرجع تصميم الموديل، مثال: DSN-2451"
+        />
+        <TextField
+          label="Qté totale"
+          type="number"
+          value={form.qteTotale}
+          onChange={(v) => setForm({ ...form, qteTotale: v })}
+          hint="إجمالي كمية الطلبية الكاملة من العميل"
+        />
+        <TextField
+          label="Commande"
+          type="number"
+          value={form.commande}
+          onChange={(v) => setForm({ ...form, commande: v })}
+          hint="الكمية المؤكدة بأمر الشغل الحالي"
+        />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
         <SaveButton type="submit" saving={saving} saved={saved} />
@@ -183,6 +240,15 @@ function GammeTab({ token, model, onSaved }) {
 
   return (
     <GlowCard>
+      <p className="mb-3 text-sm text-slate-400">
+        لكل عملية بالگامة: اسمها، الآلة اللي تُستعمل، والوقت بالثواني. الوقت يُستخدم تلقائياً لحساب VT وDT فوق —
+        اكتب الاسم أو اختر من الاقتراحات.
+      </p>
+      <datalist id="operation-suggestions">
+        {OPERATION_SUGGESTIONS.map((op) => (
+          <option key={op} value={op} />
+        ))}
+      </datalist>
       <div className="mb-3 flex flex-wrap gap-4 text-xs text-slate-400">
         <span>
           Aperçu VT: <span className="font-mono text-turquoise">{preview.vt.toFixed(2)} min</span>
@@ -191,20 +257,21 @@ function GammeTab({ token, model, onSaved }) {
           Aperçu DT: <span className="font-mono text-turquoise">{Math.round(preview.dt)}</span>
         </span>
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {lines.map((line, i) => (
-          <div key={i} className="grid grid-cols-[2rem_1fr_6rem_5rem_2rem] items-center gap-2">
+          <div key={i} className="grid grid-cols-[1.5rem_1fr_5.5rem_4.5rem_2.75rem] items-center gap-2">
             <span className="text-center font-mono text-xs text-slate-500">{i + 1}</span>
             <input
               value={line.operation}
               onChange={(e) => updateLine(i, { operation: e.target.value })}
               placeholder="Opération"
-              className="rounded border border-slate-700 bg-navy-900 px-2 py-1.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+              list="operation-suggestions"
+              className="rounded border border-slate-700 bg-navy-900 px-2.5 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
             />
             <select
               value={line.machine}
               onChange={(e) => updateLine(i, { machine: e.target.value })}
-              className="rounded border border-slate-700 bg-navy-900 px-2 py-1.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+              className="rounded border border-slate-700 bg-navy-900 px-2 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
             >
               {MACHINES.map((m) => (
                 <option key={m} value={m}>
@@ -214,18 +281,28 @@ function GammeTab({ token, model, onSaved }) {
             </select>
             <input
               type="number"
+              inputMode="numeric"
               value={line.tps}
               onChange={(e) => updateLine(i, { tps: e.target.value })}
               placeholder="TPS (s)"
-              className="rounded border border-slate-700 bg-navy-900 px-2 py-1.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+              className="rounded border border-slate-700 bg-navy-900 px-2.5 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
             />
-            <button onClick={() => removeLine(i)} className="text-slate-500 hover:text-status-bad">
+            <button
+              type="button"
+              onClick={() => removeLine(i)}
+              aria-label="Supprimer l'opération"
+              className="flex h-11 w-11 items-center justify-center rounded border border-slate-700 text-slate-400 active:border-status-bad active:text-status-bad"
+            >
               ✕
             </button>
           </div>
         ))}
       </div>
-      <button onClick={addLine} className="mt-3 text-sm text-turquoise hover:underline">
+      <button
+        type="button"
+        onClick={addLine}
+        className="mt-3 w-full rounded-md border border-dashed border-turquoise/40 py-3 text-sm font-medium text-turquoise active:bg-turquoise/10 sm:w-auto sm:px-6"
+      >
         + Ajouter une opération
       </button>
       <div className="mt-4">
@@ -256,20 +333,17 @@ function EffectifTab({ token, model, onSaved }) {
 
   return (
     <GlowCard>
+      <p className="mb-3 text-sm text-slate-400">
+        عدد العمال المطلوبين لكل تخصص (301, 502, 504, 516, Main, Sp, M/sp, Finition, Control, Stg, Fer). المجموع
+        (ND) يُحسب تلقائياً وتُستخدم لحساب DT.
+      </p>
       <div className="mb-3 text-sm text-slate-400">
         ND total: <span className="font-mono text-turquoise">{nd}</span>
       </div>
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
         {SPECIALTIES.map((sp) => (
-          <div key={sp}>
-            <label className="mb-1 block text-center font-mono text-xs text-slate-500">{sp}</label>
-            <input
-              type="number"
-              min="0"
-              value={effectif[sp] ?? 0}
-              onChange={(e) => setEffectif({ ...effectif, [sp]: e.target.value })}
-              className="w-full rounded border border-slate-700 bg-navy-900 px-2 py-1.5 text-center text-sm text-slate-200 focus:border-turquoise focus:outline-none"
-            />
+          <div key={sp} className="flex flex-col items-center gap-1 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+            <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={30} />
           </div>
         ))}
       </div>
@@ -280,17 +354,19 @@ function EffectifTab({ token, model, onSaved }) {
   )
 }
 
-function TextField({ label, value, onChange, type = 'text', required }) {
+function TextField({ label, value, onChange, type = 'text', required, hint }) {
   return (
     <label className="block">
       <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
       <input
         type={type}
+        inputMode={type === 'number' ? 'numeric' : undefined}
         value={value}
         required={required}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+        className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
       />
+      {hint && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
     </label>
   )
 }
@@ -310,7 +386,7 @@ function SaveButton({ onClick, saving, saved, type }) {
       type={type || 'button'}
       onClick={onClick}
       disabled={saving}
-      className="col-span-full rounded-md border border-turquoise bg-turquoise/10 px-4 py-2 font-medium text-turquoise shadow-glow-sm hover:bg-turquoise/20 disabled:opacity-50"
+      className="col-span-full w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
     >
       {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
     </button>
