@@ -19,9 +19,16 @@ publicRouter.post('/auth/:deptKey/login', async (req, res) => {
   const { deptKey } = req.params
   const { pin } = req.body || {}
   if (!pin) return res.status(400).json({ error: 'pin_required' })
-  const dept = await verifyPin(deptKey, pin)
-  if (!dept) return res.status(401).json({ error: 'invalid_pin' })
-  const token = issueToken(deptKey, dept.pin_hash)
+
+  const result = await verifyPin(deptKey, pin)
+  if (!result.ok) {
+    if (result.reason === 'locked') {
+      return res.status(423).json({ error: 'locked', retryAfterSeconds: result.retryAfterSeconds })
+    }
+    return res.status(401).json({ error: 'invalid_pin', attemptsRemaining: result.attemptsRemaining })
+  }
+
+  const token = issueToken(deptKey, result.dept.pin_hash)
   res.json({ token, dept: deptKey })
 })
 

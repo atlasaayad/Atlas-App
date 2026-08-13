@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { get } from './db/index.js'
+import { get, run } from './db/index.js'
 
 const INSECURE_DEFAULTS = new Set(['atlas-dev-secret-change-me', 'change-me-in-production', ''])
 const JWT_SECRET = process.env.JWT_SECRET
@@ -27,11 +27,43 @@ function pinFingerprint(pinHash) {
   return crypto.createHash('sha256').update(pinHash).digest('hex').slice(0, 16)
 }
 
+const MAX_ATTEMPTS = 5
+const LOCKOUT_MINUTES = 10
+
+// Result shapes:
+//   { ok: true, dept }
+//   { ok: false, reason: 'locked', retryAfterSeconds }
+//   { ok: false, reason: 'invalid', attemptsRemaining }
 export async function verifyPin(deptKey, pin) {
   const dept = await get('SELECT * FROM departments WHERE key = $1', [deptKey])
-  if (!dept) return null
-  if (!bcrypt.compareSync(String(pin), dept.pin_hash)) return null
-  return dept
+  // Department keys aren't secret (the whole list is public via
+  // /api/departments) — treat "no such department" as just another wrong
+  // PIN rather than a distinct case, so there's nothing to enumerate.
+  if (!dept) return { ok: false, reason: 'invalid', attemptsRemaining: MAX_ATTEMPTS - 1 }
+
+  if (dept.locked_until) {
+    const remainingMs = new Date(dept.locked_until).getTime() - Date.now()
+    if (remainingMs > 0) {
+      return { ok: false, reason: 'locked', retryAfterSeconds: Math.ceil(remainingMs / 1000) }
+    }
+  }
+
+  if (bcrypt.compareSync(String(pin), dept.pin_hash)) {
+    if (dept.failed_attempts > 0 || dept.locked_until) {
+      await run('UPDATE departments SET failed_attempts = 0, locked_until = NULL WHERE key = $1', [deptKey])
+    }
+    return { ok: true, dept }
+  }
+
+  const attempts = (dept.failed_attempts || 0) + 1
+  if (attempts >= MAX_ATTEMPTS) {
+    const lockedUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000).toISOString()
+    await run('UPDATE departments SET failed_attempts = 0, locked_until = $1 WHERE key = $2', [lockedUntil, deptKey])
+    return { ok: false, reason: 'locked', retryAfterSeconds: LOCKOUT_MINUTES * 60 }
+  }
+
+  await run('UPDATE departments SET failed_attempts = $1 WHERE key = $2', [attempts, deptKey])
+  return { ok: false, reason: 'invalid', attemptsRemaining: MAX_ATTEMPTS - attempts }
 }
 
 export function issueToken(deptKey, pinHash) {

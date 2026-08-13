@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-export default function PinPad({ deptLabel, deptIcon, onSubmit, error, loading }) {
+export default function PinPad({ deptLabel, deptIcon, onSubmit, error, loading, attemptsRemaining }) {
   const [pin, setPin] = useState('')
 
   function press(digit) {
@@ -31,7 +31,18 @@ export default function PinPad({ deptLabel, deptIcon, onSubmit, error, loading }
         ))}
       </div>
 
-      {error && <div className="text-sm text-status-bad">Code incorrect, réessayez.</div>}
+      {error && (
+        <div className="text-center text-sm text-status-bad">
+          Code incorrect, réessayez.
+          {typeof attemptsRemaining === 'number' && (
+            <div className="mt-0.5 text-xs text-status-bad/80">
+              {attemptsRemaining > 0
+                ? `${attemptsRemaining} محاولة متبقية قبل القفل المؤقت`
+                : 'آخر محاولة قبل القفل المؤقت'}
+            </div>
+          )}
+        </div>
+      )}
       {loading && <div className="text-sm text-turquoise">Vérification…</div>}
 
       <div className="grid grid-cols-3 gap-3">
