@@ -4,16 +4,22 @@ function tokenKey(deptKey) {
   return `atlas_token_${deptKey}`
 }
 
+// sessionStorage, not localStorage: a department stays "logged in" while its
+// browser tab/window stays open (no PIN re-prompt on every click), but
+// closing the browser clears it — reopening later, even the same day,
+// requires the PIN again. The server-side token itself is still valid for
+// its full TOKEN_TTL either way; this only controls how long the *browser*
+// remembers it.
 export function getDeptToken(deptKey) {
-  return localStorage.getItem(tokenKey(deptKey))
+  return sessionStorage.getItem(tokenKey(deptKey))
 }
 
 export function setDeptToken(deptKey, token) {
-  localStorage.setItem(tokenKey(deptKey), token)
+  sessionStorage.setItem(tokenKey(deptKey), token)
 }
 
 export function clearDeptToken(deptKey) {
-  localStorage.removeItem(tokenKey(deptKey))
+  sessionStorage.removeItem(tokenKey(deptKey))
 }
 
 async function request(path, { method = 'GET', body, token } = {}) {
