@@ -5,6 +5,7 @@ import HourlyBarChart from '../components/HourlyBarChart'
 import ExportTable from '../components/ExportTable'
 import PosteStatusGrid from '../components/PosteStatusGrid'
 import EffectifsGrid from '../components/EffectifsGrid'
+import LiveIndicator from '../components/LiveIndicator'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS } from '../lib/constants'
@@ -12,6 +13,7 @@ import { CHAIN_NUMBERS } from '../lib/constants'
 export default function Home() {
   const [chains, setChains] = useState([])
   const [chainNumber, setChainNumber] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
     api.getChains().then((data) => {
@@ -28,12 +30,21 @@ export default function Home() {
     [chainNumber]
   )
 
+  useEffect(() => {
+    if (data) setLastUpdated(Date.now())
+  }, [data])
+
   const moduleOptions = useMemo(() => chains.filter((c) => c.model), [chains])
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-xl font-semibold text-slate-100">Tableau de bord</h1>
+        <div>
+          <h1 className="font-display text-xl font-semibold text-slate-100">Tableau de bord</h1>
+          <div className="mt-1">
+            <LiveIndicator lastUpdated={lastUpdated} />
+          </div>
+        </div>
         <div className="flex gap-2">
           <select
             value={chainNumber || ''}
