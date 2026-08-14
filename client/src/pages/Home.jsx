@@ -6,6 +6,7 @@ import ExportTable from '../components/ExportTable'
 import PosteStatusGrid from '../components/PosteStatusGrid'
 import EffectifsGrid from '../components/EffectifsGrid'
 import LiveIndicator from '../components/LiveIndicator'
+import HistoriqueModal from '../components/HistoriqueModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS } from '../lib/constants'
@@ -100,6 +101,14 @@ export default function Home() {
 }
 
 function DashboardBody({ data }) {
+  const [showHistorique, setShowHistorique] = useState(false)
+  const today = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Africa/Casablanca',
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+  }).format(new Date())
+
   return (
     <div className="space-y-4">
       {/* 1. Identity card */}
@@ -124,14 +133,23 @@ function DashboardBody({ data }) {
         <GlowCard>
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
             <div className="font-display text-xs font-medium uppercase tracking-widest text-turquoise/80">
-              Production horaire
+              Production horaire — aujourd'hui <span className="text-slate-500 normal-case">({today})</span>
             </div>
             <div className="flex items-baseline gap-5">
               <HeaderMetric label="Objectif/heure" value={Math.round(data.dt)} />
               <HeaderMetric label="Objectif atteint" value={`${data.objectifAtteintPct}%`} />
+              <button
+                onClick={() => setShowHistorique(true)}
+                className="self-center rounded-md border border-turquoise/40 px-2.5 py-1.5 text-xs text-turquoise active:bg-turquoise/10"
+              >
+                📅 Historique
+              </button>
             </div>
           </div>
           <HourlyBarChart hourly={data.hourly} />
+          {showHistorique && (
+            <HistoriqueModal chainNumber={data.chainNumber} onClose={() => setShowHistorique(false)} />
+          )}
           <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-800 pt-3 text-center">
             <Field label="Demandé" value={data.demande.toLocaleString('fr-FR')} block />
             <Field label="Produit" value={data.produit.toLocaleString('fr-FR')} accent block />

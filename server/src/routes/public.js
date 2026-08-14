@@ -147,3 +147,53 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
   if (!model) return res.status(404).json({ error: 'no_active_model' })
   res.json(await fullDashboard(model))
 })
+
+// Historique — everything computed live from production_history, nothing
+// assumed or hardcoded. recordsCount is the number of hourly records
+// actually stored for the window (not an assumed 9/day), so the average is
+// always total ÷ real records logged. total/average are null (not 0) when
+// there's no data at all for the window, so the client can show "no data"
+// instead of a fake zero.
+async function historyAggregate(chainNumber, fromDate, toDate) {
+  const row = await get(
+    `SELECT COALESCE(SUM(qty), 0) AS total, COUNT(*) AS records
+     FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3`,
+    [chainNumber, fromDate, toDate]
+  )
+  const records = Number(row.records)
+  const total = Number(row.total)
+  return {
+    from: fromDate,
+    to: toDate,
+    total: records > 0 ? total : null,
+    recordsCount: records,
+    average: records > 0 ? total / records : null,
+  }
+}
+
+publicRouter.get('/chains/:chainNumber/history/day', async (req, res) => {
+  const { date } = req.query
+  if (!date) return res.status(400).json({ error: 'date_required' })
+  const result = await historyAggregate(Number(req.params.chainNumber), date, date)
+  res.json({ date, total: result.total, recordsCount: result.recordsCount })
+})
+
+publicRouter.get('/chains/:chainNumber/history/range', async (req, res) => {
+  const { from, to } = req.query
+  if (!from || !to) return res.status(400).json({ error: 'from_and_to_required' })
+  res.json(await historyAggregate(Number(req.params.chainNumber), from, to))
+})
+
+publicRouter.get('/chains/:chainNumber/history/months', async (req, res) => {
+  const fromYear = Number(req.query.fromYear)
+  const fromMonth = Number(req.query.fromMonth)
+  const toYear = Number(req.query.toYear)
+  const toMonth = Number(req.query.toMonth)
+  if (!fromYear || !fromMonth || !toYear || !toMonth) {
+    return res.status(400).json({ error: 'from_and_to_year_month_required' })
+  }
+  const fromDate = `${fromYear}-${String(fromMonth).padStart(2, '0')}-01`
+  const lastDay = new Date(Date.UTC(toYear, toMonth, 0)).getUTCDate()
+  const toDate = `${toYear}-${String(toMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  res.json(await historyAggregate(Number(req.params.chainNumber), fromDate, toDate))
+})

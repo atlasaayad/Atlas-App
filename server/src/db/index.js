@@ -110,6 +110,24 @@ CREATE TABLE IF NOT EXISTS production_totals (
   updated_at TEXT
 );
 
+-- Permanent record of every hourly entry, keyed by chain (not model) so a
+-- history query for "Chaîne 1" still spans correctly across a model change
+-- mid-range. hourly_production above stays as the live "today" view that
+-- gets overwritten in place; this table only ever grows, and is what
+-- Historique's day/range/month aggregates are computed from.
+CREATE TABLE IF NOT EXISTS production_history (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  chain_number INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  slot_index INTEGER NOT NULL,
+  qty INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE (chain_number, date, slot_index)
+);
+CREATE INDEX IF NOT EXISTS idx_production_history_chain_date ON production_history (chain_number, date);
+
 CREATE TABLE IF NOT EXISTS rh_attendance (
   model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
   specialty TEXT NOT NULL,

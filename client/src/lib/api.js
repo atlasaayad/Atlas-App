@@ -57,6 +57,12 @@ export const api = {
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
+  history: {
+    day: (chainNumber, date) => request(`/chains/${chainNumber}/history/day?date=${date}`),
+    range: (chainNumber, from, to) => request(`/chains/${chainNumber}/history/range?from=${from}&to=${to}`),
+    months: (chainNumber, fromYear, fromMonth, toYear, toMonth) =>
+      request(`/chains/${chainNumber}/history/months?fromYear=${fromYear}&fromMonth=${fromMonth}&toYear=${toYear}&toMonth=${toMonth}`),
+  },
 
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),
