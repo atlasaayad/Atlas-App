@@ -49,8 +49,9 @@ patronRouter.get('/audit-log', async (req, res) => {
 })
 
 patronRouter.get('/export', async (req, res) => {
+  const companyRow = await get('SELECT value FROM config WHERE key = $1', ['company_name'])
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'ATLAS'
+  workbook.creator = companyRow?.value || 'Casual'
   workbook.created = new Date()
 
   for (const { sheet, table, columns, orderBy, limit } of EXPORT_TABLES) {

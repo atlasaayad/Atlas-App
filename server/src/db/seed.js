@@ -36,9 +36,12 @@ async function seedDepartments() {
 }
 
 async function seedConfig() {
+  // Re-synced on every boot, like department PINs — so changing COMPANY_NAME
+  // (or the default below) and redeploying takes effect on an already-seeded
+  // database too, not just a fresh one.
   await run(
-    `INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
-    ['company_name', process.env.COMPANY_NAME || 'ATLAS']
+    `INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    ['company_name', process.env.COMPANY_NAME || 'Casual']
   )
 }
 

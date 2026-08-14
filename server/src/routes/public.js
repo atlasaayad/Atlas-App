@@ -8,7 +8,7 @@ export const publicRouter = Router()
 
 publicRouter.get('/config', async (req, res) => {
   const row = await get('SELECT value FROM config WHERE key = $1', ['company_name'])
-  res.json({ companyName: row?.value || 'ATLAS' })
+  res.json({ companyName: row?.value || 'Casual' })
 })
 
 publicRouter.get('/departments', (req, res) => {
