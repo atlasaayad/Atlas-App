@@ -91,7 +91,7 @@ export default function Home() {
 function DashboardBody({ data }) {
   return (
     <div className="space-y-4">
-      {/* Identity card */}
+      {/* 1. Identity card */}
       <GlowCard>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -104,14 +104,22 @@ function DashboardBody({ data }) {
             <Field label="Qté totale" value={data.identity.qteTotale?.toLocaleString('fr-FR')} />
             <Field label="Début" value={data.identity.debut} />
             <Field label="Fin prévue" value={data.identity.finPrevue} />
-            <Field label="Objectif atteint" value={`${data.objectifAtteintPct}%`} accent />
           </div>
         </div>
       </GlowCard>
 
-      {/* Hourly chart + side stats */}
+      {/* 2. Hourly chart + side stats — Objectif/heure and Objectif atteint live in the header, modest size */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_220px]">
-        <GlowCard title="Production horaire">
+        <GlowCard>
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+            <div className="font-display text-xs font-medium uppercase tracking-widest text-turquoise/80">
+              Production horaire
+            </div>
+            <div className="flex items-baseline gap-5">
+              <HeaderMetric label="Objectif/heure" value={Math.round(data.dt)} />
+              <HeaderMetric label="Objectif atteint" value={`${data.objectifAtteintPct}%`} />
+            </div>
+          </div>
           <HourlyBarChart hourly={data.hourly} />
           <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-800 pt-3 text-center">
             <Field label="Demandé" value={data.demande.toLocaleString('fr-FR')} block />
@@ -136,7 +144,7 @@ function DashboardBody({ data }) {
         </div>
       </div>
 
-      {/* Bilan de la chaîne */}
+      {/* 3. Bilan de la chaîne */}
       <GlowCard title="Bilan de la chaîne">
         <div className="flex flex-wrap justify-around gap-4">
           <StatCircle label="Total entré" value={data.bilan.totalEntree} size="lg" />
@@ -146,28 +154,8 @@ function DashboardBody({ data }) {
         </div>
       </GlowCard>
 
-      {/* Post-chain stages */}
-      <GlowCard title="Post-chaîne">
-        <div className="flex flex-wrap justify-around gap-4">
-          <StatCircle label="↓ En cours Finale" value={data.finaleEnCours} />
-          <StatCircle label="↓ Total pièces sur dépôt" value={data.depotTotal} />
-        </div>
-      </GlowCard>
-
-      {/* Export program */}
-      <GlowCard>
-        <div className="mb-3 font-display text-base font-semibold text-turquoise glow-number">
-          Programme d'export
-        </div>
-        <ExportTable exports={data.exports} />
-      </GlowCard>
-
       {/* Quality indicators */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Objectif atteint</div>
-          <div className="mt-1 font-display text-xl font-semibold text-turquoise glow-number">{data.objectifAtteintPct}%</div>
-        </GlowCard>
+      <div className="grid grid-cols-2 gap-4">
         <GlowCard className="text-center">
           <div className="text-xs uppercase tracking-wide text-slate-500">Qualité</div>
           <div className="mt-1 font-display text-xl font-semibold text-turquoise glow-number">{data.quality.percentage}%</div>
@@ -176,21 +164,42 @@ function DashboardBody({ data }) {
           <div className="text-xs uppercase tracking-wide text-slate-500">Reprises</div>
           <div className="mt-1 font-display text-xl font-semibold text-slate-200">{data.quality.reprises}</div>
         </GlowCard>
-        <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Objectif/heure (DT)</div>
-          <div className="mt-1 font-display text-xl font-semibold text-slate-200">{Math.round(data.dt)}</div>
-        </GlowCard>
       </div>
 
-      {/* État des postes */}
+      {/* 4. Post-chain stages */}
+      <GlowCard title="Post-chaîne">
+        <div className="flex flex-wrap justify-around gap-4">
+          <StatCircle label="↓ En cours Finale" value={data.finaleEnCours} />
+          <StatCircle label="↓ Total pièces sur dépôt" value={data.depotTotal} />
+        </div>
+      </GlowCard>
+
+      {/* 5. Export program */}
+      <GlowCard>
+        <div className="mb-3 font-display text-base font-semibold text-turquoise glow-number">
+          Programme d'export
+        </div>
+        <ExportTable exports={data.exports} />
+      </GlowCard>
+
+      {/* 6. État des postes */}
       <GlowCard title="État des postes">
         <PosteStatusGrid postes={data.etatDesPostes} />
       </GlowCard>
 
-      {/* État des effectifs */}
+      {/* 7. État des effectifs — last, least urgent */}
       <GlowCard title="État des effectifs">
         <EffectifsGrid effectifs={data.effectifs} />
       </GlowCard>
+    </div>
+  )
+}
+
+function HeaderMetric({ label, value }) {
+  return (
+    <div className="text-right">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="font-mono text-base font-semibold text-turquoise">{value}</div>
     </div>
   )
 }
