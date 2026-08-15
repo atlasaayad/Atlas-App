@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
 import Stepper from '../../components/Stepper'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 import { SPECIALTIES } from '../../lib/constants'
@@ -11,6 +13,7 @@ export default function RHForm({ token, chainNumber }) {
   const [attendance, setAttendance] = useState({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
     if (dashboard) {
@@ -41,18 +44,22 @@ export default function RHForm({ token, chainNumber }) {
         <span className="text-turquoise"> −</span> للتعديل. الرقم الصغير تحت كل تخصص هو العدد المطلوب (حسب Agent
         Méthode).
       </p>
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit}>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {SPECIALTIES.map((sp) => {
             const required = dashboard.effectifs.find((e) => e.specialty === sp)?.required ?? 0
             return (
-              <div key={sp} className="flex flex-col items-center gap-1 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+              <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
                 <Stepper
                   label={`${sp} / ${required} مطلوب`}
                   value={attendance[sp] ?? 0}
                   onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
                   max={30}
                 />
+                {voiceMode && (
+                  <VoiceMicButton label={sp} onConfirm={(n) => setAttendance({ ...attendance, [sp]: n })} />
+                )}
               </div>
             )
           })}

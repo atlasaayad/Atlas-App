@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -9,6 +11,7 @@ export default function DepotForm({ token, chainNumber }) {
   const [totalPieces, setTotalPieces] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
     if (dashboard) setTotalPieces(dashboard.depotTotal)
@@ -32,18 +35,22 @@ export default function DepotForm({ token, chainNumber }) {
 
   return (
     <GlowCard title="Dépôt">
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="space-y-4">
         <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total pièces sur dépôt</span>
           <span className="mb-1.5 block text-xs text-slate-500">إجمالي عدد القطع الجاهزة والمخزّنة بالدépôt الآن</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            value={totalPieces}
-            onChange={(e) => setTotalPieces(e.target.value)}
-            className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              value={totalPieces}
+              onChange={(e) => setTotalPieces(e.target.value)}
+              className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
+            />
+            {voiceMode && <VoiceMicButton label="Total pièces sur dépôt" onConfirm={setTotalPieces} />}
+          </div>
         </label>
         <button
           type="submit"

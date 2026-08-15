@@ -64,6 +64,8 @@ export const api = {
       request(`/chains/${chainNumber}/history/months?fromYear=${fromYear}&fromMonth=${fromMonth}&toYear=${toYear}&toMonth=${toMonth}`),
   },
 
+  ask: (question, chainNumber) => request('/ask', { method: 'POST', body: { question, chainNumber } }),
+
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),
     updateModel: (token, id, payload) => request(`/methode/models/${id}`, { method: 'PUT', body: payload, token }),

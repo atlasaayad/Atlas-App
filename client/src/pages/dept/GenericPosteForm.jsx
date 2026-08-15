@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -12,6 +14,7 @@ export default function GenericPosteForm({ token, chainNumber, deptKey }) {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
     if (dashboard) {
@@ -39,11 +42,17 @@ export default function GenericPosteForm({ token, chainNumber, deptKey }) {
 
   return (
     <GlowCard title="État du poste">
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="space-y-6">
         <div>
-          <div className="mb-2 flex justify-between text-sm">
+          <div className="mb-2 flex items-center justify-between gap-2 text-sm">
             <span className="text-slate-400">نسبة إنجاز مهمة اليوم</span>
-            <span className="font-mono text-xl text-turquoise">{percentage}%</span>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xl text-turquoise">{percentage}%</span>
+              {voiceMode && (
+                <VoiceMicButton label="نسبة إنجاز مهمة اليوم" onConfirm={(n) => setPercentage(Math.min(100, n))} />
+              )}
+            </div>
           </div>
           <input
             type="range"

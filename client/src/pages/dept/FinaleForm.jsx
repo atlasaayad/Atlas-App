@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -39,6 +41,7 @@ export default function FinaleForm({ token, chainNumber }) {
   const [details, setDetails] = useState(Object.fromEntries(DETAIL_KEYS.map((k) => [k, 0])))
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
     if (dashboard) {
@@ -67,18 +70,23 @@ export default function FinaleForm({ token, chainNumber }) {
 
   return (
     <form onSubmit={submit} className="space-y-4">
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
+
       <GlowCard title="Finale">
         <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">En cours Finale</span>
           <span className="mb-1.5 block text-xs text-slate-500">عدد القطع الموجودة حالياً بمرحلة Finale</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            value={enCours}
-            onChange={(e) => setEnCours(e.target.value)}
-            className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              value={enCours}
+              onChange={(e) => setEnCours(e.target.value)}
+              className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
+            />
+            {voiceMode && <VoiceMicButton label="En cours Finale" onConfirm={setEnCours} />}
+          </div>
         </label>
       </GlowCard>
 
@@ -88,14 +96,19 @@ export default function FinaleForm({ token, chainNumber }) {
             {group.fields.map(([key, label]) => (
               <label key={key} className="block">
                 <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min="0"
-                  value={details[key] ?? 0}
-                  onChange={(e) => setDetails({ ...details, [key]: e.target.value })}
-                  className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    value={details[key] ?? 0}
+                    onChange={(e) => setDetails({ ...details, [key]: e.target.value })}
+                    className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+                  />
+                  {voiceMode && (
+                    <VoiceMicButton label={label} onConfirm={(n) => setDetails({ ...details, [key]: n })} />
+                  )}
+                </div>
               </label>
             ))}
           </div>

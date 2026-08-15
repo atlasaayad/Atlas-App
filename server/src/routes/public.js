@@ -55,7 +55,7 @@ publicRouter.get('/models/:id', async (req, res) => {
   res.json({ ...model, gamme, effectif })
 })
 
-async function fullDashboard(model) {
+export async function fullDashboard(model) {
   const effectifRows = await all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id])
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of effectifRows) effectifRequis[r.specialty] = r.required

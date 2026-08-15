@@ -2,6 +2,8 @@ import { useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
 import ExportTable from '../../components/ExportTable'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -9,6 +11,7 @@ export default function LogisticsForm({ token, chainNumber }) {
   const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
   const [form, setForm] = useState({ description: '', quantite: '', date: '' })
   const [saving, setSaving] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
   if (!modelId) return <NoModel chainNumber={chainNumber} />
@@ -34,6 +37,7 @@ export default function LogisticsForm({ token, chainNumber }) {
     <div className="space-y-4">
       <GlowCard title="Nouvelle expédition">
         <p className="mb-3 text-sm text-slate-400">Client وModèle يُضافون تلقائياً من بيانات الموديل الحالي.</p>
+        <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
         <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <input
             value={form.description}
@@ -42,15 +46,20 @@ export default function LogisticsForm({ token, chainNumber }) {
             required
             className="h-12 rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
           />
-          <input
-            type="number"
-            inputMode="numeric"
-            value={form.quantite}
-            onChange={(e) => setForm({ ...form, quantite: e.target.value })}
-            placeholder="Quantité"
-            required
-            className="h-12 rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              inputMode="numeric"
+              value={form.quantite}
+              onChange={(e) => setForm({ ...form, quantite: e.target.value })}
+              placeholder="Quantité"
+              required
+              className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+            />
+            {voiceMode && (
+              <VoiceMicButton label="Quantité" onConfirm={(n) => setForm({ ...form, quantite: n })} />
+            )}
+          </div>
           <input
             type="date"
             value={form.date}
