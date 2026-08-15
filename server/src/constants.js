@@ -16,7 +16,10 @@ export const DEPARTMENTS = [
 // Departments whose only input is a generic "État du poste %" slider + note.
 export const GENERIC_POSTE_DEPARTMENTS = ['coupe', 'magasin', 'mecanicien', 'echantillon']
 
-export const SPECIALTIES = ['301', '502', '504', '516', 'Main', 'Sp', 'M/sp', 'Finition', 'Control', 'Stg', 'Fer']
+export const SPECIALTIES = [
+  '301', '502', '504', '516', 'Main', 'Sp', 'M/sp', 'Finition', 'Control', 'Stg', 'Fer',
+  'Mach retouche', 'Trns', 'Chef', 'Robot',
+]
 
 export const MACHINES = ['301', '502', '504', '516', 'robot', 'fer', 'main', 'sp', 'rz/stg']
 

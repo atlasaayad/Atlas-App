@@ -76,7 +76,10 @@ async function seedDemoModel() {
     )
   }
 
-  const effectifs = { '301': 2, '502': 2, '504': 1, '516': 2, Main: 4, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 2 }
+  const effectifs = {
+    '301': 2, '502': 2, '504': 1, '516': 2, Main: 4, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 2,
+    'Mach retouche': 1, Trns: 1, Chef: 1, Robot: 1,
+  }
   let nd = 0
   for (const spec of SPECIALTIES) {
     const req = effectifs[spec] || 0
@@ -104,7 +107,10 @@ async function seedDemoModel() {
     [modelId, 3420, 2980, now]
   )
 
-  const presentDemo = { '301': 2, '502': 1, '504': 1, '516': 2, Main: 3, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 1 }
+  const presentDemo = {
+    '301': 2, '502': 1, '504': 1, '516': 2, Main: 3, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 1,
+    'Mach retouche': 1, Trns: 0, Chef: 1, Robot: 1,
+  }
   for (const spec of SPECIALTIES) {
     await run('INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)', [
       modelId,
