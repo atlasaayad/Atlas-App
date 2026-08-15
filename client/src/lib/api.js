@@ -72,7 +72,7 @@ export const api = {
   },
   production: {
     updateHourly: (token, id, slotIndex, qty) => request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty }, token }),
-    updateTotals: (token, id, totalEntree, totalSortie) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree, totalSortie }, token }),
+    updateTotals: (token, id, totalEntree) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree }, token }),
   },
   rh: {
     updateAttendance: (token, id, attendance) => request(`/rh/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),

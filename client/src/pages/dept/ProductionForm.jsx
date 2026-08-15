@@ -7,14 +7,14 @@ import { api } from '../../lib/api'
 export default function ProductionForm({ token, chainNumber }) {
   const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
   const [hourly, setHourly] = useState({})
-  const [totals, setTotals] = useState({ totalEntree: '', totalSortie: '' })
+  const [totalEntree, setTotalEntree] = useState('')
   const [savingSlot, setSavingSlot] = useState(null)
   const [savingTotals, setSavingTotals] = useState(false)
 
   useEffect(() => {
     if (dashboard) {
       setHourly(Object.fromEntries(dashboard.hourly.map((h) => [h.index, h.qty])))
-      setTotals({ totalEntree: dashboard.bilan.totalEntree, totalSortie: dashboard.bilan.totalSortie })
+      setTotalEntree(dashboard.bilan.totalEntree)
     }
   }, [dashboard])
 
@@ -35,7 +35,7 @@ export default function ProductionForm({ token, chainNumber }) {
     e.preventDefault()
     setSavingTotals(true)
     try {
-      await api.production.updateTotals(token, modelId, Number(totals.totalEntree) || 0, Number(totals.totalSortie) || 0)
+      await api.production.updateTotals(token, modelId, Number(totalEntree) || 0)
       refresh()
     } finally {
       setSavingTotals(false)
@@ -69,34 +69,27 @@ export default function ProductionForm({ token, chainNumber }) {
         </div>
       </GlowCard>
 
-      <GlowCard title="Totaux de la chaîne">
-        <form onSubmit={saveTotals} className="grid grid-cols-2 gap-4">
-          <label className="block">
+      <GlowCard title="Total entré">
+        <p className="mb-3 text-sm text-slate-400">
+          أدخل مرة واحدة، بآخر ساعة من اليوم: مجموع القطع اللي دخلت السلسلة كامل اليوم.
+        </p>
+        <form onSubmit={saveTotals} className="flex items-end gap-3">
+          <label className="block flex-1">
             <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total entré</span>
             <input
               type="number"
               inputMode="numeric"
-              value={totals.totalEntree}
-              onChange={(e) => setTotals({ ...totals, totalEntree: e.target.value })}
-              className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total sortie</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={totals.totalSortie}
-              onChange={(e) => setTotals({ ...totals, totalSortie: e.target.value })}
+              value={totalEntree}
+              onChange={(e) => setTotalEntree(e.target.value)}
               className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
             />
           </label>
           <button
             type="submit"
             disabled={savingTotals}
-            className="col-span-2 rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
+            className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-6 text-sm font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
-            {savingTotals ? 'Enregistrement…' : 'Enregistrer'}
+            {savingTotals ? '…' : 'Enregistrer'}
           </button>
         </form>
       </GlowCard>

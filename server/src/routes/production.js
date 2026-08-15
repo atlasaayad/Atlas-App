@@ -39,16 +39,18 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   res.json({ ok: true })
 })
 
+// Total sortie is never written here — it is auto-computed on read from
+// hourly_production (same running-sum logic as "Prod à maintenant"). Only
+// Total entré is a manual figure, entered once per day by Agent Production.
 productionRouter.put('/models/:id/totals', async (req, res) => {
   const { id } = req.params
   const totalEntree = Number(req.body?.totalEntree) || 0
-  const totalSortie = Number(req.body?.totalSortie) || 0
   const now = new Date().toISOString()
   await run(
-    `INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (model_id) DO UPDATE SET total_entree = excluded.total_entree, total_sortie = excluded.total_sortie, updated_at = excluded.updated_at`,
-    [id, totalEntree, totalSortie, now]
+    `INSERT INTO production_totals (model_id, total_entree, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (model_id) DO UPDATE SET total_entree = excluded.total_entree, updated_at = excluded.updated_at`,
+    [id, totalEntree, now]
   )
-  await logAudit({ deptKey: 'production', modelId: id, action: 'update_totals', details: { totalEntree, totalSortie } })
+  await logAudit({ deptKey: 'production', modelId: id, action: 'update_totals', details: { totalEntree } })
   res.json({ ok: true })
 })

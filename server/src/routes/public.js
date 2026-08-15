@@ -70,12 +70,16 @@ async function fullDashboard(model) {
 
   const totals = (await get('SELECT * FROM production_totals WHERE model_id = $1', [model.id])) || {
     total_entree: 0,
-    total_sortie: 0,
   }
   const demande = Math.round(computeObjectifJour(model.dt))
   const produit = prodAMaintenant(hourlyMap)
   const restant = Math.max(demande - produit, 0)
-  const enCours = totals.total_entree - totals.total_sortie
+  // Total sortie is auto-computed with the same running-sum logic as
+  // "Prod à maintenant" (produit) — it is never a manual entry. Total entré
+  // stays a single manual daily figure from Agent Production, so En cours
+  // and Le reste recompute live off of those two automatically.
+  const totalSortie = produit
+  const enCours = totals.total_entree - totalSortie
 
   const rhRows = await all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id])
   const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -122,7 +126,7 @@ async function fullDashboard(model) {
     restant,
     bilan: {
       totalEntree: totals.total_entree,
-      totalSortie: totals.total_sortie,
+      totalSortie,
       leReste: restant,
       enCours,
     },
