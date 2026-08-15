@@ -53,3 +53,18 @@ export function prodAMaintenant(hourlyMap, now = new Date()) {
   for (let i = 0; i <= idx; i++) total += Number(hourlyMap[i] || 0)
   return total
 }
+
+// Today's date (YYYY-MM-DD) in the factory's timezone — used to key
+// permanent history records, independent of the server's own local TZ.
+export function todayInFactoryTZ(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Casablanca',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now)
+  const y = parts.find((p) => p.type === 'year').value
+  const m = parts.find((p) => p.type === 'month').value
+  const d = parts.find((p) => p.type === 'day').value
+  return `${y}-${m}-${d}`
+}

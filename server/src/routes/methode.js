@@ -47,7 +47,9 @@ methodeRouter.post('/models', async (req, res) => {
     await run('INSERT INTO hourly_production (model_id, slot_index, qty, updated_at) VALUES ($1, $2, 0, $3)', [id, i, now])
   }
   await run('INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, 0, 0, $2)', [id, now])
-  await run('INSERT INTO quality (model_id, percentage, reprises, updated_at) VALUES ($1, 100, 0, $2)', [id, now])
+  // No quality row seeded here on purpose: a fake "100%" would look like a
+  // real confirmation from Quality before they've ever reported anything.
+  // The dashboard shows "not reported yet" until their first real PUT.
   await run('INSERT INTO finale (model_id, en_cours, updated_at) VALUES ($1, 0, $2)', [id, now])
   await run('INSERT INTO depot (model_id, total_pieces, updated_at) VALUES ($1, 0, $2)', [id, now])
 

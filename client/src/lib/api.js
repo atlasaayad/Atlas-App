@@ -57,6 +57,12 @@ export const api = {
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
+  history: {
+    day: (chainNumber, date) => request(`/chains/${chainNumber}/history/day?date=${date}`),
+    range: (chainNumber, from, to) => request(`/chains/${chainNumber}/history/range?from=${from}&to=${to}`),
+    months: (chainNumber, fromYear, fromMonth, toYear, toMonth) =>
+      request(`/chains/${chainNumber}/history/months?fromYear=${fromYear}&fromMonth=${fromMonth}&toYear=${toYear}&toMonth=${toMonth}`),
+  },
 
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),
@@ -66,7 +72,7 @@ export const api = {
   },
   production: {
     updateHourly: (token, id, slotIndex, qty) => request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty }, token }),
-    updateTotals: (token, id, totalEntree, totalSortie) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree, totalSortie }, token }),
+    updateTotals: (token, id, totalEntree) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree }, token }),
   },
   rh: {
     updateAttendance: (token, id, attendance) => request(`/rh/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
@@ -75,7 +81,7 @@ export const api = {
     update: (token, id, percentage, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { percentage, reprises }, token }),
   },
   finale: {
-    update: (token, id, enCours) => request(`/finale/models/${id}`, { method: 'PUT', body: { enCours }, token }),
+    update: (token, id, payload) => request(`/finale/models/${id}`, { method: 'PUT', body: payload, token }),
   },
   depot: {
     update: (token, id, totalPieces) => request(`/depot/models/${id}`, { method: 'PUT', body: { totalPieces }, token }),

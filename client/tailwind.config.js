@@ -30,6 +30,7 @@ export default {
       boxShadow: {
         glow: '0 0 24px rgba(43,240,217,0.25)',
         'glow-sm': '0 0 10px rgba(43,240,217,0.35)',
+        'glow-bar': '0 0 4px rgba(43,240,217,0.35)',
       },
       backgroundImage: {
         'app-gradient': 'linear-gradient(180deg, #0C1A2E 0%, #05090F 100%)',

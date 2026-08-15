@@ -5,6 +5,9 @@ import HourlyBarChart from '../components/HourlyBarChart'
 import ExportTable from '../components/ExportTable'
 import PosteStatusGrid from '../components/PosteStatusGrid'
 import EffectifsGrid from '../components/EffectifsGrid'
+import LiveIndicator from '../components/LiveIndicator'
+import HistoriqueModal from '../components/HistoriqueModal'
+import DetailsFinaleModal from '../components/DetailsFinaleModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS } from '../lib/constants'
@@ -12,6 +15,7 @@ import { CHAIN_NUMBERS } from '../lib/constants'
 export default function Home() {
   const [chains, setChains] = useState([])
   const [chainNumber, setChainNumber] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
     api.getChains().then((data) => {
@@ -28,12 +32,21 @@ export default function Home() {
     [chainNumber]
   )
 
+  useEffect(() => {
+    if (data) setLastUpdated(Date.now())
+  }, [data])
+
   const moduleOptions = useMemo(() => chains.filter((c) => c.model), [chains])
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-xl font-semibold text-slate-100">Tableau de bord</h1>
+        <div>
+          <h1 className="font-display text-xl font-semibold text-slate-100">Tableau de bord</h1>
+          <div className="mt-1">
+            <LiveIndicator lastUpdated={lastUpdated} />
+          </div>
+        </div>
         <div className="flex gap-2">
           <select
             value={chainNumber || ''}
@@ -89,9 +102,18 @@ export default function Home() {
 }
 
 function DashboardBody({ data }) {
+  const [showHistorique, setShowHistorique] = useState(false)
+  const [showDetailsFinale, setShowDetailsFinale] = useState(false)
+  const today = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Africa/Casablanca',
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+  }).format(new Date())
+
   return (
     <div className="space-y-4">
-      {/* Identity card */}
+      {/* 1. Identity card */}
       <GlowCard>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -104,15 +126,32 @@ function DashboardBody({ data }) {
             <Field label="Qté totale" value={data.identity.qteTotale?.toLocaleString('fr-FR')} />
             <Field label="Début" value={data.identity.debut} />
             <Field label="Fin prévue" value={data.identity.finPrevue} />
-            <Field label="Objectif atteint" value={`${data.objectifAtteintPct}%`} accent />
           </div>
         </div>
       </GlowCard>
 
-      {/* Hourly chart + side stats */}
+      {/* 2. Hourly chart + side stats — Objectif/heure and Objectif atteint live in the header, modest size */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_220px]">
-        <GlowCard title="Production horaire">
+        <GlowCard>
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+            <div className="font-display text-xs font-medium uppercase tracking-widest text-turquoise/80">
+              Production horaire — aujourd'hui <span className="text-slate-500 normal-case">({today})</span>
+            </div>
+            <div className="flex items-baseline gap-5">
+              <HeaderMetric label="Objectif/heure" value={Math.round(data.dt)} />
+              <HeaderMetric label="Objectif atteint" value={`${data.objectifAtteintPct}%`} />
+              <button
+                onClick={() => setShowHistorique(true)}
+                className="self-center rounded-md border border-turquoise/40 px-2.5 py-1.5 text-xs text-turquoise active:bg-turquoise/10"
+              >
+                📅 Historique
+              </button>
+            </div>
+          </div>
           <HourlyBarChart hourly={data.hourly} />
+          {showHistorique && (
+            <HistoriqueModal chainNumber={data.chainNumber} onClose={() => setShowHistorique(false)} />
+          )}
           <div className="mt-4 grid grid-cols-3 gap-3 border-t border-slate-800 pt-3 text-center">
             <Field label="Demandé" value={data.demande.toLocaleString('fr-FR')} block />
             <Field label="Produit" value={data.produit.toLocaleString('fr-FR')} accent block />
@@ -136,7 +175,7 @@ function DashboardBody({ data }) {
         </div>
       </div>
 
-      {/* Bilan de la chaîne */}
+      {/* 3. Bilan de la chaîne */}
       <GlowCard title="Bilan de la chaîne">
         <div className="flex flex-wrap justify-around gap-4">
           <StatCircle label="Total entré" value={data.bilan.totalEntree} size="lg" />
@@ -146,15 +185,42 @@ function DashboardBody({ data }) {
         </div>
       </GlowCard>
 
-      {/* Post-chain stages */}
+      {/* Quality indicators */}
+      <div className="grid grid-cols-2 gap-4">
+        <GlowCard className="text-center">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Qualité</div>
+          <div className={`mt-1 font-display font-semibold ${data.quality.percentage === null ? 'text-sm text-slate-500' : 'text-xl text-turquoise glow-number'}`}>
+            {data.quality.percentage === null ? 'Non renseigné' : `${data.quality.percentage}%`}
+          </div>
+        </GlowCard>
+        <GlowCard className="text-center">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Reprises</div>
+          <div className={`mt-1 font-display font-semibold ${data.quality.reprises === null ? 'text-sm text-slate-500' : 'text-xl text-slate-200'}`}>
+            {data.quality.reprises === null ? 'Non renseigné' : data.quality.reprises}
+          </div>
+        </GlowCard>
+      </div>
+
+      {/* 4. Post-chain stages */}
       <GlowCard title="Post-chaîne">
         <div className="flex flex-wrap justify-around gap-4">
-          <StatCircle label="↓ En cours Finale" value={data.finaleEnCours} />
+          <div className="flex flex-col items-center gap-2">
+            <StatCircle label="↓ En cours Finale" value={data.finaleEnCours} />
+            <button
+              onClick={() => setShowDetailsFinale(true)}
+              className="rounded-md border border-turquoise/40 px-2.5 py-1.5 text-xs text-turquoise active:bg-turquoise/10"
+            >
+              🔍 Détails Finale
+            </button>
+          </div>
           <StatCircle label="↓ Total pièces sur dépôt" value={data.depotTotal} />
         </div>
       </GlowCard>
+      {showDetailsFinale && (
+        <DetailsFinaleModal details={data.finaleDetails} onClose={() => setShowDetailsFinale(false)} />
+      )}
 
-      {/* Export program */}
+      {/* 5. Export program */}
       <GlowCard>
         <div className="mb-3 font-display text-base font-semibold text-turquoise glow-number">
           Programme d'export
@@ -162,35 +228,24 @@ function DashboardBody({ data }) {
         <ExportTable exports={data.exports} />
       </GlowCard>
 
-      {/* Quality indicators */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Objectif atteint</div>
-          <div className="mt-1 font-display text-xl font-semibold text-turquoise glow-number">{data.objectifAtteintPct}%</div>
-        </GlowCard>
-        <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Qualité</div>
-          <div className="mt-1 font-display text-xl font-semibold text-turquoise glow-number">{data.quality.percentage}%</div>
-        </GlowCard>
-        <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Reprises</div>
-          <div className="mt-1 font-display text-xl font-semibold text-slate-200">{data.quality.reprises}</div>
-        </GlowCard>
-        <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Objectif/heure (DT)</div>
-          <div className="mt-1 font-display text-xl font-semibold text-slate-200">{Math.round(data.dt)}</div>
-        </GlowCard>
-      </div>
-
-      {/* État des postes */}
+      {/* 6. État des postes */}
       <GlowCard title="État des postes">
         <PosteStatusGrid postes={data.etatDesPostes} />
       </GlowCard>
 
-      {/* État des effectifs */}
+      {/* 7. État des effectifs — last, least urgent */}
       <GlowCard title="État des effectifs">
         <EffectifsGrid effectifs={data.effectifs} />
       </GlowCard>
+    </div>
+  )
+}
+
+function HeaderMetric({ label, value }) {
+  return (
+    <div className="text-right">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="font-mono text-base font-semibold text-turquoise">{value}</div>
     </div>
   )
 }

@@ -36,9 +36,12 @@ async function seedDepartments() {
 }
 
 async function seedConfig() {
+  // Re-synced on every boot, like department PINs — so changing COMPANY_NAME
+  // (or the default below) and redeploying takes effect on an already-seeded
+  // database too, not just a fresh one.
   await run(
-    `INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
-    ['company_name', process.env.COMPANY_NAME || 'ATLAS']
+    `INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    ['company_name', process.env.COMPANY_NAME || 'Casual']
   )
 }
 
@@ -73,7 +76,10 @@ async function seedDemoModel() {
     )
   }
 
-  const effectifs = { '301': 2, '502': 2, '504': 1, '516': 2, Main: 4, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 2 }
+  const effectifs = {
+    '301': 2, '502': 2, '504': 1, '516': 2, Main: 4, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 2,
+    'Mach retouche': 1, Trns: 1, Chef: 1, Robot: 1,
+  }
   let nd = 0
   for (const spec of SPECIALTIES) {
     const req = effectifs[spec] || 0
@@ -101,7 +107,10 @@ async function seedDemoModel() {
     [modelId, 3420, 2980, now]
   )
 
-  const presentDemo = { '301': 2, '502': 1, '504': 1, '516': 2, Main: 3, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 1 }
+  const presentDemo = {
+    '301': 2, '502': 1, '504': 1, '516': 2, Main: 3, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 1,
+    'Mach retouche': 1, Trns: 0, Chef: 1, Robot: 1,
+  }
   for (const spec of SPECIALTIES) {
     await run('INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)', [
       modelId,
@@ -112,7 +121,15 @@ async function seedDemoModel() {
   }
 
   await run(`INSERT INTO quality (model_id, percentage, reprises, updated_at) VALUES ($1, $2, $3, $4)`, [modelId, 96.5, 14, now])
-  await run(`INSERT INTO finale (model_id, en_cours, updated_at) VALUES ($1, $2, $3)`, [modelId, 96, now])
+  await run(
+    `INSERT INTO finale (
+       model_id, en_cours, piece_retouche, piece_terminee, piece_2eme,
+       encours_special, encours_repassage, encours_controle,
+       moyenne_prod_special, moyenne_prod_repassage_final, moyenne_prod_controle_final,
+       updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [modelId, 96, 8, 210, 3, 22, 15, 12, 45, 38, 40, now]
+  )
   await run(`INSERT INTO depot (model_id, total_pieces, updated_at) VALUES ($1, $2, $3)`, [modelId, 780, now])
 
   await run(

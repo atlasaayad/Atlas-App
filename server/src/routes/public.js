@@ -8,7 +8,7 @@ export const publicRouter = Router()
 
 publicRouter.get('/config', async (req, res) => {
   const row = await get('SELECT value FROM config WHERE key = $1', ['company_name'])
-  res.json({ companyName: row?.value || 'ATLAS' })
+  res.json({ companyName: row?.value || 'Casual' })
 })
 
 publicRouter.get('/departments', (req, res) => {
@@ -70,12 +70,16 @@ async function fullDashboard(model) {
 
   const totals = (await get('SELECT * FROM production_totals WHERE model_id = $1', [model.id])) || {
     total_entree: 0,
-    total_sortie: 0,
   }
   const demande = Math.round(computeObjectifJour(model.dt))
   const produit = prodAMaintenant(hourlyMap)
   const restant = Math.max(demande - produit, 0)
-  const enCours = totals.total_entree - totals.total_sortie
+  // Total sortie is auto-computed with the same running-sum logic as
+  // "Prod à maintenant" (produit) — it is never a manual entry. Total entré
+  // stays a single manual daily figure from Agent Production, so En cours
+  // and Le reste recompute live off of those two automatically.
+  const totalSortie = produit
+  const enCours = totals.total_entree - totalSortie
 
   const rhRows = await all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id])
   const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -83,19 +87,37 @@ async function fullDashboard(model) {
   const effectifs = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
   const ouvriersPresents = effectifs.reduce((s, e) => s + e.present, 0)
 
-  const quality = (await get('SELECT * FROM quality WHERE model_id = $1', [model.id])) || { percentage: 0, reprises: 0 }
-  const finale = (await get('SELECT * FROM finale WHERE model_id = $1', [model.id])) || { en_cours: 0 }
+  // No row yet means Quality hasn't reported anything for this model — that
+  // must never look like a real "100% quality" confirmation, so it's null
+  // (rendered as "not reported yet"), not a number nobody actually entered.
+  const quality = (await get('SELECT * FROM quality WHERE model_id = $1', [model.id])) || { percentage: null, reprises: null }
+  const finale = (await get('SELECT * FROM finale WHERE model_id = $1', [model.id])) || {
+    en_cours: 0,
+    piece_retouche: 0,
+    piece_terminee: 0,
+    piece_2eme: 0,
+    encours_special: 0,
+    encours_repassage: 0,
+    encours_controle: 0,
+    moyenne_prod_special: 0,
+    moyenne_prod_repassage_final: 0,
+    moyenne_prod_controle_final: 0,
+  }
   const depot = (await get('SELECT * FROM depot WHERE model_id = $1', [model.id])) || { total_pieces: 0 }
   const exportRows = await all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id])
   const exports = exportRows.map((e) => ({ ...e, client: model.client, mod: model.dessin }))
 
   const postes = await all('SELECT * FROM poste_status WHERE model_id = $1', [model.id])
   const posteMap = Object.fromEntries(postes.map((p) => [p.dept_key, p]))
+  // No status row yet means that department has never reported anything for
+  // this model — that must never be shown as a fake "100% good", so it gets
+  // its own "unreported" state instead of a real percentage/status.
   const etatDesPostes = GENERIC_POSTE_DEPARTMENTS.map((key) => {
     const p = posteMap[key]
-    const pct = p?.percentage ?? 100
+    if (!p) return { deptKey: key, percentage: null, note: '', status: 'unreported' }
+    const pct = p.percentage
     const status = pct >= 90 ? 'good' : pct >= 70 ? 'warn' : 'bad'
-    return { deptKey: key, percentage: pct, note: p?.note || '', status }
+    return { deptKey: key, percentage: pct, note: p.note || '', status }
   })
 
   const objectifAtteintPct = demande > 0 ? Math.round((produit / demande) * 100) : 0
@@ -122,11 +144,22 @@ async function fullDashboard(model) {
     restant,
     bilan: {
       totalEntree: totals.total_entree,
-      totalSortie: totals.total_sortie,
+      totalSortie,
       leReste: restant,
       enCours,
     },
     finaleEnCours: finale.en_cours,
+    finaleDetails: {
+      pieceRetouche: finale.piece_retouche,
+      pieceTerminee: finale.piece_terminee,
+      piece2eme: finale.piece_2eme,
+      encoursSpecial: finale.encours_special,
+      encoursRepassage: finale.encours_repassage,
+      encoursControle: finale.encours_controle,
+      moyenneProdSpecial: finale.moyenne_prod_special,
+      moyenneProdRepassageFinal: finale.moyenne_prod_repassage_final,
+      moyenneProdControleFinal: finale.moyenne_prod_controle_final,
+    },
     depotTotal: depot.total_pieces,
     exports,
     objectifAtteintPct,
@@ -146,4 +179,54 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
   const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1', [Number(req.params.chainNumber)])
   if (!model) return res.status(404).json({ error: 'no_active_model' })
   res.json(await fullDashboard(model))
+})
+
+// Historique — everything computed live from production_history, nothing
+// assumed or hardcoded. recordsCount is the number of hourly records
+// actually stored for the window (not an assumed 9/day), so the average is
+// always total ÷ real records logged. total/average are null (not 0) when
+// there's no data at all for the window, so the client can show "no data"
+// instead of a fake zero.
+async function historyAggregate(chainNumber, fromDate, toDate) {
+  const row = await get(
+    `SELECT COALESCE(SUM(qty), 0) AS total, COUNT(*) AS records
+     FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3`,
+    [chainNumber, fromDate, toDate]
+  )
+  const records = Number(row.records)
+  const total = Number(row.total)
+  return {
+    from: fromDate,
+    to: toDate,
+    total: records > 0 ? total : null,
+    recordsCount: records,
+    average: records > 0 ? total / records : null,
+  }
+}
+
+publicRouter.get('/chains/:chainNumber/history/day', async (req, res) => {
+  const { date } = req.query
+  if (!date) return res.status(400).json({ error: 'date_required' })
+  const result = await historyAggregate(Number(req.params.chainNumber), date, date)
+  res.json({ date, total: result.total, recordsCount: result.recordsCount })
+})
+
+publicRouter.get('/chains/:chainNumber/history/range', async (req, res) => {
+  const { from, to } = req.query
+  if (!from || !to) return res.status(400).json({ error: 'from_and_to_required' })
+  res.json(await historyAggregate(Number(req.params.chainNumber), from, to))
+})
+
+publicRouter.get('/chains/:chainNumber/history/months', async (req, res) => {
+  const fromYear = Number(req.query.fromYear)
+  const fromMonth = Number(req.query.fromMonth)
+  const toYear = Number(req.query.toYear)
+  const toMonth = Number(req.query.toMonth)
+  if (!fromYear || !fromMonth || !toYear || !toMonth) {
+    return res.status(400).json({ error: 'from_and_to_year_month_required' })
+  }
+  const fromDate = `${fromYear}-${String(fromMonth).padStart(2, '0')}-01`
+  const lastDay = new Date(Date.UTC(toYear, toMonth, 0)).getUTCDate()
+  const toDate = `${toYear}-${String(toMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  res.json(await historyAggregate(Number(req.params.chainNumber), fromDate, toDate))
 })
