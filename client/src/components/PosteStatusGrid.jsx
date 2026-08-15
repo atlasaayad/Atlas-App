@@ -1,9 +1,10 @@
 import { DEPARTMENT_META } from '../lib/constants'
 
 const STATUS_STYLE = {
-  good: { dot: 'bg-status-good', text: 'text-status-good', ring: 'border-status-good/40' },
-  warn: { dot: 'bg-status-warn', text: 'text-status-warn', ring: 'border-status-warn/40' },
-  bad: { dot: 'bg-status-bad', text: 'text-status-bad', ring: 'border-status-bad/40' },
+  good: { dot: 'bg-status-good', text: 'text-status-good', ring: 'border-status-good/40', pulse: true },
+  warn: { dot: 'bg-status-warn', text: 'text-status-warn', ring: 'border-status-warn/40', pulse: true },
+  bad: { dot: 'bg-status-bad', text: 'text-status-bad', ring: 'border-status-bad/40', pulse: true },
+  unreported: { dot: 'bg-slate-600', text: 'text-slate-500', ring: 'border-slate-700', pulse: false },
 }
 
 export default function PosteStatusGrid({ postes }) {
@@ -18,9 +19,11 @@ export default function PosteStatusGrid({ postes }) {
               <span className="text-sm text-slate-300">
                 {meta?.icon} {meta?.label}
               </span>
-              <span className={`h-2.5 w-2.5 rounded-full ${style.dot} animate-pulse-soft`} />
+              <span className={`h-2.5 w-2.5 rounded-full ${style.dot} ${style.pulse ? 'animate-pulse-soft' : ''}`} />
             </div>
-            <div className={`mt-1 font-display text-xl font-semibold ${style.text}`}>{Math.round(p.percentage)}%</div>
+            <div className={`mt-1 font-display font-semibold ${style.text} ${p.percentage === null ? 'text-sm' : 'text-xl'}`}>
+              {p.percentage === null ? 'Non renseigné' : `${Math.round(p.percentage)}%`}
+            </div>
             {p.note && <div className="mt-1 truncate text-xs text-slate-500">{p.note}</div>}
           </div>
         )

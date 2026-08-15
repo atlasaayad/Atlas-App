@@ -189,11 +189,15 @@ function DashboardBody({ data }) {
       <div className="grid grid-cols-2 gap-4">
         <GlowCard className="text-center">
           <div className="text-xs uppercase tracking-wide text-slate-500">Qualité</div>
-          <div className="mt-1 font-display text-xl font-semibold text-turquoise glow-number">{data.quality.percentage}%</div>
+          <div className={`mt-1 font-display font-semibold ${data.quality.percentage === null ? 'text-sm text-slate-500' : 'text-xl text-turquoise glow-number'}`}>
+            {data.quality.percentage === null ? 'Non renseigné' : `${data.quality.percentage}%`}
+          </div>
         </GlowCard>
         <GlowCard className="text-center">
           <div className="text-xs uppercase tracking-wide text-slate-500">Reprises</div>
-          <div className="mt-1 font-display text-xl font-semibold text-slate-200">{data.quality.reprises}</div>
+          <div className={`mt-1 font-display font-semibold ${data.quality.reprises === null ? 'text-sm text-slate-500' : 'text-xl text-slate-200'}`}>
+            {data.quality.reprises === null ? 'Non renseigné' : data.quality.reprises}
+          </div>
         </GlowCard>
       </div>
 

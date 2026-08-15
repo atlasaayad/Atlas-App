@@ -87,7 +87,10 @@ async function fullDashboard(model) {
   const effectifs = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
   const ouvriersPresents = effectifs.reduce((s, e) => s + e.present, 0)
 
-  const quality = (await get('SELECT * FROM quality WHERE model_id = $1', [model.id])) || { percentage: 0, reprises: 0 }
+  // No row yet means Quality hasn't reported anything for this model — that
+  // must never look like a real "100% quality" confirmation, so it's null
+  // (rendered as "not reported yet"), not a number nobody actually entered.
+  const quality = (await get('SELECT * FROM quality WHERE model_id = $1', [model.id])) || { percentage: null, reprises: null }
   const finale = (await get('SELECT * FROM finale WHERE model_id = $1', [model.id])) || {
     en_cours: 0,
     piece_retouche: 0,
@@ -106,11 +109,15 @@ async function fullDashboard(model) {
 
   const postes = await all('SELECT * FROM poste_status WHERE model_id = $1', [model.id])
   const posteMap = Object.fromEntries(postes.map((p) => [p.dept_key, p]))
+  // No status row yet means that department has never reported anything for
+  // this model — that must never be shown as a fake "100% good", so it gets
+  // its own "unreported" state instead of a real percentage/status.
   const etatDesPostes = GENERIC_POSTE_DEPARTMENTS.map((key) => {
     const p = posteMap[key]
-    const pct = p?.percentage ?? 100
+    if (!p) return { deptKey: key, percentage: null, note: '', status: 'unreported' }
+    const pct = p.percentage
     const status = pct >= 90 ? 'good' : pct >= 70 ? 'warn' : 'bad'
-    return { deptKey: key, percentage: pct, note: p?.note || '', status }
+    return { deptKey: key, percentage: pct, note: p.note || '', status }
   })
 
   const objectifAtteintPct = demande > 0 ? Math.round((produit / demande) * 100) : 0
