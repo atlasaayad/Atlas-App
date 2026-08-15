@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
+import AuditReportCard from '../../components/AuditReportCard'
 import { api } from '../../lib/api'
 import { DEPARTMENT_META } from '../../lib/constants'
 
@@ -39,6 +40,7 @@ export default function PatronForm({ token }) {
       {tab === 'finances' && (
         <div className="space-y-3">
           <ExportCard token={token} />
+          <AuditReportCard token={token} />
           {!models ? (
             <div className="py-10 text-center text-slate-400">Chargement…</div>
           ) : models.length === 0 ? (

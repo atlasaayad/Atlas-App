@@ -105,4 +105,13 @@ export const api = {
       return res.blob()
     },
   },
+  audit: {
+    exportReport: async (token, chainNumber, from, to) => {
+      const res = await fetch(`${BASE}/audit/report?chainNumber=${chainNumber}&from=${from}&to=${to}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error(`export_failed_${res.status}`)
+      return res.blob()
+    },
+  },
 }

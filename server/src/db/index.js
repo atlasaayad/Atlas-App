@@ -136,6 +136,24 @@ CREATE TABLE IF NOT EXISTS rh_attendance (
   PRIMARY KEY (model_id, specialty)
 );
 
+-- Permanent daily attendance record, separate from rh_attendance above
+-- (which is just "today's" live snapshot and gets overwritten in place).
+-- Keyed by chain (not model) for the same reason as production_history:
+-- an audit report for "Chaîne X" must stay correct even across a model
+-- change mid-period. This is what the BSCI/SMETA audit report reads from.
+CREATE TABLE IF NOT EXISTS rh_attendance_history (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  chain_number INTEGER NOT NULL,
+  specialty TEXT NOT NULL,
+  date TEXT NOT NULL,
+  present INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE (chain_number, specialty, date)
+);
+CREATE INDEX IF NOT EXISTS idx_rh_attendance_history_chain_date ON rh_attendance_history (chain_number, date);
+
 CREATE TABLE IF NOT EXISTS quality (
   model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
   percentage DOUBLE PRECISION DEFAULT 100,
