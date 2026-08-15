@@ -88,7 +88,18 @@ async function fullDashboard(model) {
   const ouvriersPresents = effectifs.reduce((s, e) => s + e.present, 0)
 
   const quality = (await get('SELECT * FROM quality WHERE model_id = $1', [model.id])) || { percentage: 0, reprises: 0 }
-  const finale = (await get('SELECT * FROM finale WHERE model_id = $1', [model.id])) || { en_cours: 0 }
+  const finale = (await get('SELECT * FROM finale WHERE model_id = $1', [model.id])) || {
+    en_cours: 0,
+    piece_retouche: 0,
+    piece_terminee: 0,
+    piece_2eme: 0,
+    encours_special: 0,
+    encours_repassage: 0,
+    encours_controle: 0,
+    moyenne_prod_special: 0,
+    moyenne_prod_repassage_final: 0,
+    moyenne_prod_controle_final: 0,
+  }
   const depot = (await get('SELECT * FROM depot WHERE model_id = $1', [model.id])) || { total_pieces: 0 }
   const exportRows = await all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id])
   const exports = exportRows.map((e) => ({ ...e, client: model.client, mod: model.dessin }))
@@ -131,6 +142,17 @@ async function fullDashboard(model) {
       enCours,
     },
     finaleEnCours: finale.en_cours,
+    finaleDetails: {
+      pieceRetouche: finale.piece_retouche,
+      pieceTerminee: finale.piece_terminee,
+      piece2eme: finale.piece_2eme,
+      encoursSpecial: finale.encours_special,
+      encoursRepassage: finale.encours_repassage,
+      encoursControle: finale.encours_controle,
+      moyenneProdSpecial: finale.moyenne_prod_special,
+      moyenneProdRepassageFinal: finale.moyenne_prod_repassage_final,
+      moyenneProdControleFinal: finale.moyenne_prod_controle_final,
+    },
     depotTotal: depot.total_pieces,
     exports,
     objectifAtteintPct,

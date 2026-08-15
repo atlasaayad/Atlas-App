@@ -148,6 +148,18 @@ CREATE TABLE IF NOT EXISTS finale (
   en_cours INTEGER DEFAULT 0,
   updated_at TEXT
 );
+-- CREATE TABLE IF NOT EXISTS is a no-op on an already-seeded database, so
+-- the 9 Détails Finale fields (added after the table already existed in
+-- production) need explicit ALTER TABLE statements to actually land there.
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS piece_retouche INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS piece_terminee INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS piece_2eme INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS encours_special INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS encours_repassage INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS encours_controle INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS moyenne_prod_special INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS moyenne_prod_repassage_final INTEGER DEFAULT 0;
+ALTER TABLE finale ADD COLUMN IF NOT EXISTS moyenne_prod_controle_final INTEGER DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS depot (
   model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,

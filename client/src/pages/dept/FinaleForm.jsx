@@ -4,14 +4,47 @@ import NoModel from '../../components/NoModel'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
+const GROUPS = [
+  {
+    title: 'Pièces',
+    fields: [
+      ['pieceRetouche', 'Pièce retouche'],
+      ['pieceTerminee', 'Pièce terminée'],
+      ['piece2eme', 'Pièce 2ème'],
+    ],
+  },
+  {
+    title: 'En cours par poste',
+    fields: [
+      ['encoursSpecial', 'Encours spécial'],
+      ['encoursRepassage', 'Encours repassage'],
+      ['encoursControle', 'Encours contrôle'],
+    ],
+  },
+  {
+    title: 'Moyenne production / heure',
+    fields: [
+      ['moyenneProdSpecial', 'Moyenne prod/h spécial'],
+      ['moyenneProdRepassageFinal', 'Moyenne prod/h repassage final'],
+      ['moyenneProdControleFinal', 'Moyenne prod/h contrôle final'],
+    ],
+  },
+]
+
+const DETAIL_KEYS = GROUPS.flatMap((g) => g.fields.map(([key]) => key))
+
 export default function FinaleForm({ token, chainNumber }) {
   const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
   const [enCours, setEnCours] = useState(0)
+  const [details, setDetails] = useState(Object.fromEntries(DETAIL_KEYS.map((k) => [k, 0])))
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    if (dashboard) setEnCours(dashboard.finaleEnCours)
+    if (dashboard) {
+      setEnCours(dashboard.finaleEnCours)
+      setDetails(dashboard.finaleDetails)
+    }
   }, [dashboard])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
@@ -21,7 +54,9 @@ export default function FinaleForm({ token, chainNumber }) {
     e.preventDefault()
     setSaving(true)
     try {
-      await api.finale.update(token, modelId, Number(enCours))
+      const payload = { enCours: Number(enCours) || 0 }
+      for (const key of DETAIL_KEYS) payload[key] = Number(details[key]) || 0
+      await api.finale.update(token, modelId, payload)
       setSaved(true)
       refresh()
       setTimeout(() => setSaved(false), 2000)
@@ -31,8 +66,8 @@ export default function FinaleForm({ token, chainNumber }) {
   }
 
   return (
-    <GlowCard title="Finale">
-      <form onSubmit={submit} className="space-y-4">
+    <form onSubmit={submit} className="space-y-4">
+      <GlowCard title="Finale">
         <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">En cours Finale</span>
           <span className="mb-1.5 block text-xs text-slate-500">عدد القطع الموجودة حالياً بمرحلة Finale</span>
@@ -45,14 +80,35 @@ export default function FinaleForm({ token, chainNumber }) {
             className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
           />
         </label>
-        <button
-          type="submit"
-          disabled={saving}
-          className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
-        >
-          {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
-        </button>
-      </form>
-    </GlowCard>
+      </GlowCard>
+
+      {GROUPS.map((group) => (
+        <GlowCard key={group.title} title={group.title}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {group.fields.map(([key, label]) => (
+              <label key={key} className="block">
+                <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  value={details[key] ?? 0}
+                  onChange={(e) => setDetails({ ...details, [key]: e.target.value })}
+                  className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+                />
+              </label>
+            ))}
+          </div>
+        </GlowCard>
+      ))}
+
+      <button
+        type="submit"
+        disabled={saving}
+        className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
+      >
+        {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+      </button>
+    </form>
   )
 }

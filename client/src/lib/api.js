@@ -81,7 +81,7 @@ export const api = {
     update: (token, id, percentage, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { percentage, reprises }, token }),
   },
   finale: {
-    update: (token, id, enCours) => request(`/finale/models/${id}`, { method: 'PUT', body: { enCours }, token }),
+    update: (token, id, payload) => request(`/finale/models/${id}`, { method: 'PUT', body: payload, token }),
   },
   depot: {
     update: (token, id, totalPieces) => request(`/depot/models/${id}`, { method: 'PUT', body: { totalPieces }, token }),

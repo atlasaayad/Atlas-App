@@ -115,7 +115,15 @@ async function seedDemoModel() {
   }
 
   await run(`INSERT INTO quality (model_id, percentage, reprises, updated_at) VALUES ($1, $2, $3, $4)`, [modelId, 96.5, 14, now])
-  await run(`INSERT INTO finale (model_id, en_cours, updated_at) VALUES ($1, $2, $3)`, [modelId, 96, now])
+  await run(
+    `INSERT INTO finale (
+       model_id, en_cours, piece_retouche, piece_terminee, piece_2eme,
+       encours_special, encours_repassage, encours_controle,
+       moyenne_prod_special, moyenne_prod_repassage_final, moyenne_prod_controle_final,
+       updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [modelId, 96, 8, 210, 3, 22, 15, 12, 45, 38, 40, now]
+  )
   await run(`INSERT INTO depot (model_id, total_pieces, updated_at) VALUES ($1, $2, $3)`, [modelId, 780, now])
 
   await run(

@@ -7,6 +7,7 @@ import PosteStatusGrid from '../components/PosteStatusGrid'
 import EffectifsGrid from '../components/EffectifsGrid'
 import LiveIndicator from '../components/LiveIndicator'
 import HistoriqueModal from '../components/HistoriqueModal'
+import DetailsFinaleModal from '../components/DetailsFinaleModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS } from '../lib/constants'
@@ -102,6 +103,7 @@ export default function Home() {
 
 function DashboardBody({ data }) {
   const [showHistorique, setShowHistorique] = useState(false)
+  const [showDetailsFinale, setShowDetailsFinale] = useState(false)
   const today = new Intl.DateTimeFormat('fr-FR', {
     timeZone: 'Africa/Casablanca',
     weekday: 'short',
@@ -198,10 +200,21 @@ function DashboardBody({ data }) {
       {/* 4. Post-chain stages */}
       <GlowCard title="Post-chaîne">
         <div className="flex flex-wrap justify-around gap-4">
-          <StatCircle label="↓ En cours Finale" value={data.finaleEnCours} />
+          <div className="flex flex-col items-center gap-2">
+            <StatCircle label="↓ En cours Finale" value={data.finaleEnCours} />
+            <button
+              onClick={() => setShowDetailsFinale(true)}
+              className="rounded-md border border-turquoise/40 px-2.5 py-1.5 text-xs text-turquoise active:bg-turquoise/10"
+            >
+              🔍 Détails Finale
+            </button>
+          </div>
           <StatCircle label="↓ Total pièces sur dépôt" value={data.depotTotal} />
         </div>
       </GlowCard>
+      {showDetailsFinale && (
+        <DetailsFinaleModal details={data.finaleDetails} onClose={() => setShowDetailsFinale(false)} />
+      )}
 
       {/* 5. Export program */}
       <GlowCard>
