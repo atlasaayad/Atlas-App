@@ -3,6 +3,7 @@ import GlowCard from '../../components/GlowCard'
 import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
 import { SPECIALTIES, MACHINES } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour } from '../../lib/calc'
@@ -144,6 +145,7 @@ function EditModel({ token, model, onSaved }) {
           VT وDT وObjectif/jour تُحسب تلقائياً من الگامة (تبويب "Gamme de montage") والإفكتيف (تبويب "Effectif") — ما
           تحتاج تدخلها يدوياً.
         </div>
+        <DevisCard token={token} modelId={model.id} />
       </GlowCard>
 
       {tab === 'identite' && <IdentiteTab token={token} model={model} onSaved={onSaved} />}

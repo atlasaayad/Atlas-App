@@ -5,9 +5,6 @@ import { requireDept } from '../auth.js'
 import { SPECIALTIES, HOURLY_SLOTS } from '../constants.js'
 
 export const auditRouter = Router()
-// Both Patron and RH can pull this — RH because they're the ones who
-// actually enter the daily attendance the report is built from.
-auditRouter.use(requireDept(['patron', 'rh']))
 
 function dateRange(from, to) {
   const dates = []
@@ -20,7 +17,9 @@ function dateRange(from, to) {
   return dates
 }
 
-auditRouter.get('/audit/report', async (req, res) => {
+// Both Patron and RH can pull this — RH because they're the ones who
+// actually enter the daily attendance the report is built from.
+auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res) => {
   const chainNumber = Number(req.query.chainNumber)
   const from = String(req.query.from || '')
   const to = String(req.query.to || '')
