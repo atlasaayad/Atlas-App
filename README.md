@@ -1,10 +1,13 @@
 # ATLAS — Production Tracking Platform
 
-Real-time production tracking for a garment/textile factory floor. A public
-home dashboard shows live status per Module/Chaîne (no login), and each
-department (Agent Méthode, Agent Production, RH, Quality, Finale, Dépôt,
-Logistics, La Coupe, Magasin, Mécanicien, Échantillon, Patron) enters its own
-data behind a 4-digit PIN.
+Real-time production tracking for a garment/textile factory floor (tenant:
+**Casual**). A public home dashboard shows live status per Module/Chaîne (no
+login), an "Ask Atlas" AI assistant answers questions about that same live
+data (no login either), and each department (Agent Méthode, Agent
+Production, RH, Quality, Finale, Dépôt, Logistics, La Coupe, Magasin,
+Mécanicien, Échantillon, Patron) enters its own data behind a 4-digit PIN.
+Bottom nav: **Accueil** (dashboard) · **Départements** (PIN-gated forms) ·
+**Ask Atlas** (AI Q&A, public).
 
 Visual identity: dark navy background with glowing turquoise corner
 brackets, inspired by JACK Smart Factory Kanban displays. Space Grotesk for
@@ -51,6 +54,9 @@ npm run dev
 Open http://localhost:5173 — the home dashboard, Départements grid, and PIN
 entry all work against the demo data seeded above.
 
+Run the automated tests with `npm test` (repo root) — see Automated Tests
+below.
+
 ### Default department PINs
 
 Printed on every boot. Override per-department via env vars
@@ -84,9 +90,9 @@ redeploying is enough to rotate it, even on an already-seeded database.
 - **Agent Production** enters actual output for each of the 9 fixed hourly
   slots (6:30-16:00, including the 11:30-13:00 slot that spans the lunch
   break) plus running Total entré / Total sortie for the chain.
-- **RH** enters daily headcount present for the 11 specialties (301, 502,
-  504, 516, Main, Sp, M/sp, Finition, Control, Stg, Fer); required headcount
-  comes from Agent Méthode.
+- **RH** enters daily headcount present for the 15 specialties (301, 502,
+  504, 516, Main, Sp, M/sp, Finition, Control, Stg, Fer, Mach retouche,
+  Trns, Chef, Robot); required headcount comes from Agent Méthode.
 - **Quality, Finale, Dépôt** each own one metric (quality % + reprises,
   en-cours finale, pièces sur dépôt).
 - **Logistics** appends rows to the export program (description, quantité,
@@ -94,14 +100,113 @@ redeploying is enough to rotate it, even on an already-seeded database.
 - **La Coupe, Magasin, Mécanicien, Échantillon** each report a single daily
   "État du poste %" + optional note; these drive the three-color (green /
   yellow / red) status grid on the home dashboard.
-- **Patron** (built last, per the brief) enters cost/price inputs per model
-  and gets computed cost total, revenue and profit % — kept separate from
-  the public dashboard.
+- **Patron** enters per-model cost/price inputs (see the Patron Finance
+  Screen feature below) and gets computed cost total, revenue and profit %
+  — visible to Patron only, never on the public dashboard or to Ask Atlas.
 
 All writes are journaled to `audit_log` (who / what / when) via the
 department's PIN-derived identity. The public home dashboard polls
 `/api/chains/:n/dashboard` every ~12s for near-real-time updates across
 devices.
+
+## Features
+
+Documented here as they're added — see each subsection for what it does,
+who uses it, and which fields/tables it touches. Keep this current: every
+new major feature gets its own entry.
+
+### Ask Atlas (`💬 Ask Atlas` tab, public, no PIN)
+
+Chat UI (`client/src/pages/Ask.jsx`) backed by `POST /api/ask`
+(`server/src/routes/ask.js`), calling the Claude API
+(`claude-haiku-4-5-20251001` — cheap enough for simple data lookups, no
+deep reasoning needed). Answers
+questions in Arabic/Darija/French using only real current DB data
+(production, RH, quality — the same fields the public dashboard shows); if
+the data isn't there, it says so instead of guessing.
+
+- **Financial exclusion is structural, not prompt-based**: `buildContext()`
+  in `ask.js` never queries `patron_finance` or the `config.cpm` key — there
+  is no code path that could put a cost/profit/CPM number into what gets
+  sent to the model, so no phrasing of a question can leak one.
+- **Daily rate limit**: `ask_usage` table caps calls to `ASK_DAILY_LIMIT`
+  (default 100) per factory-local day, checked before the Anthropic call so
+  a capped day costs nothing further. Resets at local midnight
+  (`todayInFactoryTZ`, Africa/Casablanca).
+- **Voice input**: every department's numeric fields get an optional
+  "🎙️ Parler" mode (`client/src/hooks/useSpeechToNumber.js`,
+  `VoiceModeToggle`/`VoiceMicButton` components) via the Web Speech API.
+  Speaking a number always shows an explicit confirmation ("فهمت: 130 …
+  صح؟") before it's saved — never auto-commits. Hidden automatically on
+  browsers without SpeechRecognition support.
+- Needs `ANTHROPIC_API_KEY` set (see Environment variables below); without
+  it the route returns `503 ai_not_configured` and the UI says so instead
+  of erroring.
+
+### BSCI/SMETA Audit-Readiness Report (Patron + RH)
+
+"تصدير تقرير جاهزية التدقيق" button (`AuditReportCard` component,
+`GET /api/audit/report`) generates an `.xlsx` for a chosen date range: daily
+attendance per specialty, hours of production actually documented, gaps vs.
+required headcount, and a real timestamp per record. Any day with no data
+recorded shows an explicit "AUCUNE DONNÉE ENREGISTRÉE" row instead of being
+silently skipped. Backed by `rh_attendance_history` (permanent, one row per
+chain/specialty/day — the live `rh_attendance` table only holds today).
+
+### Instant Quote — CPM + Devis (Agent Méthode + Patron only)
+
+Patron sets a factory-wide **CPM** (cost per minute, `config.cpm` key,
+Patron-only screen). Agent Méthode's model summary and Patron's own model
+finance card both get a "💰 Générer un devis" button
+(`client/src/components/DevisCard.jsx`, `GET /api/devis/:modelId`) that
+computes **CMT (cost per piece) = VT × CPM** — raw production cost, no
+margin added. Shows a clear message instead of a number if Patron hasn't
+set CPM yet. No other department, and not Ask Atlas, can reach this route.
+
+### Patron Finance Screen (Patron only)
+
+Per-model finance card (`ModelFinanceCard` in `PatronForm.jsx`,
+`PUT/GET /api/patron/models/:id`, `patron_finance` table):
+
+- **Coût modèle** — manual number (matières/tissu).
+- **Coût ouvriers** — toggle between a manual number or *nombre d'ouvriers ×
+  salaire moyen*; both value pairs are kept in storage so switching modes
+  never loses data.
+- **Autres dépenses** — itemized list (libellé + montant), add/remove any
+  number of lines; the total is the sum, computed automatically.
+- **Revenu prévisionnel** — `prix de vente unitaire × quantité`, where the
+  quantity is the **real exported quantity** (`SUM(logistics_exports.quantite)`)
+  when any exists, falling back to the ordered quantity (`qte_totale`) as an
+  estimate otherwise — the UI states explicitly which basis is in use.
+- **Coût total / Revenu / Profit / Profit %** — all computed server-side,
+  never entered by hand.
+
+Entirely Patron-only: no other department's route, and no field Ask Atlas's
+`buildContext()` touches, ever reads `patron_finance`.
+
+### Automated Tests
+
+`server/src/calc.test.js` — unit tests for the VT/DT/Objectif-jour chain
+(known numbers + a regression check against the real seeded demo model).
+`server/tests/integration.test.js` — spins up the real Express app on an
+ephemeral port against a real Postgres DB and exercises it over HTTP: PIN
+login (success/failure/lockout), gamme/effectif → ND/VT/DT, a department
+save reflecting on the public dashboard, Patron's profit calc, and the Ask
+Atlas daily limit. Every test cleans up its own data and restores any
+shared state (an active chain slot, a day's usage counter) it touched.
+
+Run with **`npm test`** from the repo root (loads `.env` automatically if
+present). Not exhaustive — covers the critical paths above; extend it as
+new critical logic is added.
+
+### PR + Preview Workflow
+
+Any change that touches app behavior or sensitive data goes through a pull
+request with a Vercel preview deployment link, reviewed and explicitly
+approved before merging to `main` — not merged straight from a local
+branch. Purely additive, zero-runtime-impact changes (like the test suite
+itself) may be merged directly, with the reasoning stated in the PR. GitHub
+branch protection on `main` enforces this at the repo level.
 
 ## Deploying (Vercel + Neon, both free, no credit card)
 
@@ -139,8 +244,10 @@ factory data:
 |---|---|---|
 | `DATABASE_URL` | Yes | Auto-set by the Neon integration; a `POSTGRES_URL` from Vercel's own Postgres integration works too |
 | `JWT_SECRET` | **Yes, hard requirement** | The app refuses to start without it (no insecure fallback). Generate one with `openssl rand -hex 32` |
-| `COMPANY_NAME` | No | Defaults to `ATLAS` |
+| `COMPANY_NAME` | No | Defaults to `Casual` |
 | `PIN_<DEPT>` | No | Override a department's PIN — re-synced on every boot, so it can be rotated later too |
+| `ANTHROPIC_API_KEY` | No | Enables Ask Atlas. Without it, `/api/ask` returns `503 ai_not_configured` and the UI degrades gracefully |
+| `ASK_DAILY_LIMIT` | No | Ask Atlas questions allowed per factory-local day, system-wide. Defaults to `100` |
 
 ## Customizing for another factory
 
