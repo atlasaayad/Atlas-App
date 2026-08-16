@@ -6,7 +6,8 @@
   "description": "ATLAS — production tracking platform. This root package.json holds the API's dependencies so Vercel can build the serverless functions under /api (which import server/src/app.js); client/ is the separate Vite frontend with its own package.json.",
   "scripts": {
     "dev:server": "node --watch server/src/index.js",
-    "seed": "node server/src/db/seed.js"
+    "seed": "node server/src/db/seed.js",
+    "test": "node --env-file-if-exists=.env --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
