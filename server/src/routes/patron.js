@@ -6,6 +6,24 @@ import { requireDept } from '../auth.js'
 export const patronRouter = Router()
 patronRouter.use(requireDept('patron'))
 
+// CPM (coût par minute) — a single factory-wide value, Patron-only. Stored
+// in the generic config table; never exposed to any other route (Ask Atlas,
+// the Home dashboard, etc. never query this key).
+patronRouter.get('/cpm', async (req, res) => {
+  const row = await get('SELECT value FROM config WHERE key = $1', ['cpm'])
+  res.json({ cpm: row?.value ? Number(row.value) : null })
+})
+
+patronRouter.put('/cpm', async (req, res) => {
+  const cpm = Math.max(0, Number(req.body?.cpm) || 0)
+  await run(
+    `INSERT INTO config (key, value) VALUES ('cpm', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    [String(cpm)]
+  )
+  await logAudit({ deptKey: 'patron', action: 'update_cpm', details: { cpm } })
+  res.json({ cpm })
+})
+
 // One sheet per table. `departments` intentionally excludes pin_hash and the
 // lockout columns — those are operational/security state, not factory data,
 // and have no reason to ever leave the server even in an export the Patron

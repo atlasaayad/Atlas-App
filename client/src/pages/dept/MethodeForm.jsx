@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import Stepper from '../../components/Stepper'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
+import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
 import { SPECIALTIES, MACHINES } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour } from '../../lib/calc'
@@ -52,6 +55,7 @@ export default function MethodeForm({ token, chainNumber }) {
 function CreateModelForm({ token, chainNumber, onCreated }) {
   const [form, setForm] = useState({ client: '', qteTotale: '', debut: '', finPrevue: '', dessin: '', commande: '' })
   const [saving, setSaving] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   async function submit(e) {
     e.preventDefault()
@@ -69,6 +73,7 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
       <div className="mb-3 font-display text-base font-semibold text-slate-100">
         Nouveau modèle — Chaîne {chainNumber}
       </div>
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <TextField label="Client" value={form.client} onChange={(v) => setForm({ ...form, client: v })} required />
         <TextField
@@ -83,6 +88,7 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
           value={form.qteTotale}
           onChange={(v) => setForm({ ...form, qteTotale: v })}
           hint="إجمالي كمية الطلبية الكاملة من العميل"
+          voiceMode={voiceMode}
         />
         <TextField
           label="Commande"
@@ -90,6 +96,7 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
           value={form.commande}
           onChange={(v) => setForm({ ...form, commande: v })}
           hint="الكمية المؤكدة بأمر الشغل الحالي"
+          voiceMode={voiceMode}
         />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
@@ -138,6 +145,7 @@ function EditModel({ token, model, onSaved }) {
           VT وDT وObjectif/jour تُحسب تلقائياً من الگامة (تبويب "Gamme de montage") والإفكتيف (تبويب "Effectif") — ما
           تحتاج تدخلها يدوياً.
         </div>
+        <DevisCard token={token} modelId={model.id} />
       </GlowCard>
 
       {tab === 'identite' && <IdentiteTab token={token} model={model} onSaved={onSaved} />}
@@ -158,6 +166,7 @@ function IdentiteTab({ token, model, onSaved }) {
   })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   async function submit(e) {
     e.preventDefault()
@@ -174,6 +183,7 @@ function IdentiteTab({ token, model, onSaved }) {
 
   return (
     <GlowCard>
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <TextField label="Client" value={form.client} onChange={(v) => setForm({ ...form, client: v })} required />
         <TextField
@@ -188,6 +198,7 @@ function IdentiteTab({ token, model, onSaved }) {
           value={form.qteTotale}
           onChange={(v) => setForm({ ...form, qteTotale: v })}
           hint="إجمالي كمية الطلبية الكاملة من العميل"
+          voiceMode={voiceMode}
         />
         <TextField
           label="Commande"
@@ -195,6 +206,7 @@ function IdentiteTab({ token, model, onSaved }) {
           value={form.commande}
           onChange={(v) => setForm({ ...form, commande: v })}
           hint="الكمية المؤكدة بأمر الشغل الحالي"
+          voiceMode={voiceMode}
         />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
@@ -208,6 +220,7 @@ function GammeTab({ token, model, onSaved }) {
   const [lines, setLines] = useState(model.gamme.map((g) => ({ operation: g.operation, machine: g.machine, tps: g.tps })))
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   const preview = useMemo(() => {
     const vt = computeVTMinutes(lines)
@@ -244,6 +257,7 @@ function GammeTab({ token, model, onSaved }) {
         لكل عملية بالگامة: اسمها، الآلة اللي تُستعمل، والوقت بالثواني. الوقت يُستخدم تلقائياً لحساب VT وDT فوق —
         اكتب الاسم أو اختر من الاقتراحات.
       </p>
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <datalist id="operation-suggestions">
         {OPERATION_SUGGESTIONS.map((op) => (
           <option key={op} value={op} />
@@ -257,16 +271,23 @@ function GammeTab({ token, model, onSaved }) {
           Aperçu DT: <span className="font-mono text-turquoise">{Math.round(preview.dt)}</span>
         </span>
       </div>
-      <div className="space-y-2.5">
+      <div className="space-y-2.5 overflow-x-auto pb-1">
         {lines.map((line, i) => (
-          <div key={i} className="grid grid-cols-[1.5rem_1fr_5.5rem_4.5rem_2.75rem] items-center gap-2">
+          <div
+            key={i}
+            className={`grid min-w-max items-center gap-2 ${
+              voiceMode
+                ? 'grid-cols-[1.5rem_11rem_5.5rem_4.5rem_2.25rem_2.75rem]'
+                : 'grid-cols-[1.5rem_11rem_5.5rem_4.5rem_2.75rem]'
+            }`}
+          >
             <span className="text-center font-mono text-xs text-slate-500">{i + 1}</span>
             <input
               value={line.operation}
               onChange={(e) => updateLine(i, { operation: e.target.value })}
               placeholder="Opération"
               list="operation-suggestions"
-              className="rounded border border-slate-700 bg-navy-900 px-2.5 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+              className="w-full rounded border border-slate-700 bg-navy-900 px-2.5 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
             />
             <select
               value={line.machine}
@@ -287,6 +308,9 @@ function GammeTab({ token, model, onSaved }) {
               placeholder="TPS (s)"
               className="rounded border border-slate-700 bg-navy-900 px-2.5 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
             />
+            {voiceMode && (
+              <VoiceMicButton label={`TPS ${line.operation || i + 1}`} onConfirm={(n) => updateLine(i, { tps: n })} />
+            )}
             <button
               type="button"
               onClick={() => removeLine(i)}
@@ -316,6 +340,7 @@ function EffectifTab({ token, model, onSaved }) {
   const [effectif, setEffectif] = useState({ ...model.effectif })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   const nd = useMemo(() => SPECIALTIES.reduce((s, sp) => s + (Number(effectif[sp]) || 0), 0), [effectif])
 
@@ -340,10 +365,14 @@ function EffectifTab({ token, model, onSaved }) {
       <div className="mb-3 text-sm text-slate-400">
         ND total: <span className="font-mono text-turquoise">{nd}</span>
       </div>
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
         {SPECIALTIES.map((sp) => (
-          <div key={sp} className="flex flex-col items-center gap-1 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+          <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
             <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={30} />
+            {voiceMode && (
+              <VoiceMicButton label={sp} onConfirm={(n) => setEffectif({ ...effectif, [sp]: n })} />
+            )}
           </div>
         ))}
       </div>
@@ -354,18 +383,21 @@ function EffectifTab({ token, model, onSaved }) {
   )
 }
 
-function TextField({ label, value, onChange, type = 'text', required, hint }) {
+function TextField({ label, value, onChange, type = 'text', required, hint, voiceMode }) {
   return (
     <label className="block">
       <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
-      <input
-        type={type}
-        inputMode={type === 'number' ? 'numeric' : undefined}
-        value={value}
-        required={required}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          type={type}
+          inputMode={type === 'number' ? 'numeric' : undefined}
+          value={value}
+          required={required}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+        />
+        {type === 'number' && voiceMode && <VoiceMicButton label={label} onConfirm={(n) => onChange(String(n))} />}
+      </div>
       {hint && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
     </label>
   )

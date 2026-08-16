@@ -64,6 +64,8 @@ export const api = {
       request(`/chains/${chainNumber}/history/months?fromYear=${fromYear}&fromMonth=${fromMonth}&toYear=${toYear}&toMonth=${toMonth}`),
   },
 
+  ask: (question, chainNumber) => request('/ask', { method: 'POST', body: { question, chainNumber } }),
+
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),
     updateModel: (token, id, payload) => request(`/methode/models/${id}`, { method: 'PUT', body: payload, token }),
@@ -97,8 +99,22 @@ export const api = {
     getModels: (token) => request('/patron/models', { token }),
     update: (token, id, payload) => request(`/patron/models/${id}`, { method: 'PUT', body: payload, token }),
     getAuditLog: (token) => request('/patron/audit-log', { token }),
+    getCpm: (token) => request('/patron/cpm', { token }),
+    updateCpm: (token, cpm) => request('/patron/cpm', { method: 'PUT', body: { cpm }, token }),
     exportData: async (token) => {
       const res = await fetch(`${BASE}/patron/export`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error(`export_failed_${res.status}`)
+      return res.blob()
+    },
+  },
+  devis: {
+    get: (token, modelId) => request(`/devis/${modelId}`, { token }),
+  },
+  audit: {
+    exportReport: async (token, chainNumber, from, to) => {
+      const res = await fetch(`${BASE}/audit/report?chainNumber=${chainNumber}&from=${from}&to=${to}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (!res.ok) throw new Error(`export_failed_${res.status}`)
       return res.blob()
     },

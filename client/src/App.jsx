@@ -4,6 +4,7 @@ import { CompanyProvider, useCompany } from './lib/CompanyContext'
 import Home from './pages/Home'
 import Departments from './pages/Departments'
 import DeptGate from './pages/DeptGate'
+import Ask from './pages/Ask'
 
 function Header() {
   const { companyName } = useCompany()
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/departements" element={<Departments />} />
             <Route path="/departements/:deptKey" element={<DeptGate />} />
+            <Route path="/ask" element={<Ask />} />
           </Routes>
         </main>
         <BottomNav />

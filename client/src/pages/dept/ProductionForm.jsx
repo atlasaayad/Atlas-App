@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import VoiceModeToggle from '../../components/VoiceModeToggle'
+import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -10,6 +12,7 @@ export default function ProductionForm({ token, chainNumber }) {
   const [totalEntree, setTotalEntree] = useState('')
   const [savingSlot, setSavingSlot] = useState(null)
   const [savingTotals, setSavingTotals] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
     if (dashboard) {
@@ -44,6 +47,8 @@ export default function ProductionForm({ token, chainNumber }) {
 
   return (
     <div className="space-y-4">
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
+
       <GlowCard title="Production par heure">
         <p className="mb-3 text-sm text-slate-400">أدخل عدد القطع المنتجة بكل ساعة، واضغط OK لحفظها.</p>
         <div className="space-y-2.5">
@@ -57,6 +62,12 @@ export default function ProductionForm({ token, chainNumber }) {
                 onChange={(e) => setHourly({ ...hourly, [slot.index]: e.target.value })}
                 className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
               />
+              {voiceMode && (
+                <VoiceMicButton
+                  label={slot.label}
+                  onConfirm={(n) => setHourly({ ...hourly, [slot.index]: n })}
+                />
+              )}
               <button
                 onClick={() => saveSlot(slot.index)}
                 disabled={savingSlot === slot.index}
@@ -84,6 +95,7 @@ export default function ProductionForm({ token, chainNumber }) {
               className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
             />
           </label>
+          {voiceMode && <VoiceMicButton label="Total entré" onConfirm={(n) => setTotalEntree(n)} />}
           <button
             type="submit"
             disabled={savingTotals}

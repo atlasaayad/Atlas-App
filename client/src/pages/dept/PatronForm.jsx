@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
+import AuditReportCard from '../../components/AuditReportCard'
+import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
 import { DEPARTMENT_META } from '../../lib/constants'
 
@@ -38,7 +40,9 @@ export default function PatronForm({ token }) {
 
       {tab === 'finances' && (
         <div className="space-y-3">
+          <CpmCard token={token} />
           <ExportCard token={token} />
+          <AuditReportCard token={token} />
           {!models ? (
             <div className="py-10 text-center text-slate-400">Chargement…</div>
           ) : models.length === 0 ? (
@@ -78,6 +82,7 @@ const ACTION_LABELS = {
   delete_export: 'Expédition supprimée',
   update_poste_status: "État du poste mis à jour",
   update_finance: 'Finances du modèle modifiées',
+  update_cpm: 'Coût par minute (CPM) modifié',
   export_data: 'Export des données téléchargé',
   seed_demo_model: 'Modèle de démonstration créé',
 }
@@ -128,6 +133,67 @@ function formatDateTime(iso) {
   } catch {
     return iso
   }
+}
+
+function CpmCard({ token }) {
+  const [cpm, setCpm] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    api.patron.getCpm(token).then((r) => {
+      setCpm(r.cpm === null ? '' : String(r.cpm))
+      setLoading(false)
+    })
+  }, [token])
+
+  async function submit(e) {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      await api.patron.updateCpm(token, Number(cpm) || 0)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <GlowCard>
+      <div className="font-display text-sm font-semibold text-slate-100">Coût par minute (CPM)</div>
+      <p className="mt-1 text-xs text-slate-500">
+        رقم واحد خاص بيك — تكلفة دقيقة الإنتاج الواحدة بمصنعك. يُستخدم بس لحساب "عرض السعر الفوري" اللي يشوفه Agent
+        Méthode (تكلفة القطعة بس، بدون هامش ربح). ما يظهر لأي قسم ثاني ولا لـ"اسأل أطلس".
+      </p>
+      {loading ? (
+        <div className="mt-3 text-sm text-slate-500">Chargement…</div>
+      ) : (
+        <form onSubmit={submit} className="mt-3 flex items-end gap-3">
+          <label className="block flex-1">
+            <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">CPM (Dh / min)</span>
+            <input
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              value={cpm}
+              onChange={(e) => setCpm(e.target.value)}
+              placeholder="مثال: 0.85"
+              className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={saving}
+            className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-6 text-sm font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
+          >
+            {saving ? '…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+          </button>
+        </form>
+      )}
+    </GlowCard>
+  )
 }
 
 function ExportCard({ token }) {
@@ -216,30 +282,33 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
       </button>
 
       {open && (
-        <form onSubmit={submit} className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-800 pt-4 sm:grid-cols-2">
-          <NumField label="Coût modèle" value={form.coutModele} onChange={(v) => setForm({ ...form, coutModele: v })} />
-          <NumField label="Coût ouvriers" value={form.coutOuvriers} onChange={(v) => setForm({ ...form, coutOuvriers: v })} />
-          <NumField label="Autres dépenses" value={form.autresDepenses} onChange={(v) => setForm({ ...form, autresDepenses: v })} />
-          <NumField
-            label="Prix de vente unitaire"
-            value={form.prixVenteUnitaire}
-            onChange={(v) => setForm({ ...form, prixVenteUnitaire: v })}
-          />
+        <>
+          <form onSubmit={submit} className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-800 pt-4 sm:grid-cols-2">
+            <NumField label="Coût modèle" value={form.coutModele} onChange={(v) => setForm({ ...form, coutModele: v })} />
+            <NumField label="Coût ouvriers" value={form.coutOuvriers} onChange={(v) => setForm({ ...form, coutOuvriers: v })} />
+            <NumField label="Autres dépenses" value={form.autresDepenses} onChange={(v) => setForm({ ...form, autresDepenses: v })} />
+            <NumField
+              label="Prix de vente unitaire"
+              value={form.prixVenteUnitaire}
+              onChange={(v) => setForm({ ...form, prixVenteUnitaire: v })}
+            />
 
-          <div className="col-span-full grid grid-cols-3 gap-3 rounded-md bg-navy-900/60 p-3 text-sm">
-            <Stat label="Coût total" value={model.coutTotal} />
-            <Stat label="Revenu" value={model.revenu} />
-            <Stat label="Profit" value={model.profit} accent={profitPositive} />
-          </div>
+            <div className="col-span-full grid grid-cols-3 gap-3 rounded-md bg-navy-900/60 p-3 text-sm">
+              <Stat label="Coût total" value={model.coutTotal} />
+              <Stat label="Revenu" value={model.revenu} />
+              <Stat label="Profit" value={model.profit} accent={profitPositive} />
+            </div>
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="col-span-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
-          >
-            {saving ? 'Enregistrement…' : 'Enregistrer'}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={saving}
+              className="col-span-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
+            >
+              {saving ? 'Enregistrement…' : 'Enregistrer'}
+            </button>
+          </form>
+          <DevisCard token={token} modelId={model.id} />
+        </>
       )}
     </GlowCard>
   )
