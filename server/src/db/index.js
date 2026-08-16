@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS departments (
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS locked_until TEXT;
 
+-- One row per factory-local day, counting "اسأل أطلس" calls system-wide —
+-- caps the daily Anthropic API spend. Keyed by date (Africa/Casablanca, see
+-- todayInFactoryTZ) rather than a rolling window, so the cap always resets
+-- cleanly at local midnight.
+CREATE TABLE IF NOT EXISTS ask_usage (
+  date TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS models (
   id TEXT PRIMARY KEY,
   client TEXT,

@@ -10,6 +10,8 @@ import bcrypt from 'bcryptjs'
 import { app } from '../src/app.js'
 import { runSeed } from '../src/db/seed.js'
 import { get, run, pool } from '../src/db/index.js'
+import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
+import { todayInFactoryTZ } from '../src/calc.js'
 
 let server
 let base
@@ -156,4 +158,35 @@ test('gamme/effectif → ND/VT/DT, sauvegarde production → reflet sur le dashb
     assert.equal(put.data.profit, 7000) // 30000 - 23000
     assert.equal(put.data.profitPct, 23.3) // round(7000/30000 * 1000) / 10
   })
+})
+
+// The full /api/ask route can't be driven past the daily-limit check in this
+// environment (no real ANTHROPIC_API_KEY means it 503s before ever reaching
+// it), so this exercises the counting/limiting logic directly — it's the
+// same function and the same DAILY_LIMIT the route enforces.
+test('اسأل أطلس: الحد اليومي يوقف الطلبات بعد تجاوزه', async (t) => {
+  const date = todayInFactoryTZ()
+  const before = await get('SELECT count FROM ask_usage WHERE date = $1', [date])
+
+  t.after(async () => {
+    if (before) await run('UPDATE ask_usage SET count = $1 WHERE date = $2', [before.count, date])
+    else await run('DELETE FROM ask_usage WHERE date = $1', [date])
+  })
+
+  // Reset to a known baseline so the assertions below are exact regardless
+  // of how many real questions were already asked today.
+  await run(
+    `INSERT INTO ask_usage (date, count) VALUES ($1, 0) ON CONFLICT (date) DO UPDATE SET count = 0`,
+    [date]
+  )
+
+  let last
+  for (let i = 1; i <= DAILY_LIMIT; i++) {
+    last = await incrementDailyUsage()
+    assert.equal(last, i)
+  }
+  assert.equal(last, DAILY_LIMIT) // pile au plafond — encore autorisé (route: usedToday > DAILY_LIMIT)
+
+  const overLimit = await incrementDailyUsage()
+  assert.equal(overLimit, DAILY_LIMIT + 1) // dépasse le plafond — la route renverrait 429 ici
 })

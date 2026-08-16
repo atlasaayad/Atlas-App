@@ -43,7 +43,9 @@ export default function Ask() {
       const text =
         err?.data?.error === 'ai_not_configured'
           ? 'ميزة "اسأل أطلس" غير مفعّلة حالياً بهذا السيرفر.'
-          : 'صار خطأ، حاول مرة ثانية.'
+          : err?.data?.error === 'daily_limit_reached'
+            ? 'تم الوصول للحد اليومي، جرب بكرة 🙏'
+            : 'صار خطأ، حاول مرة ثانية.'
       setMessages((m) => [...m, { role: 'assistant', text }])
     } finally {
       setLoading(false)
