@@ -103,16 +103,43 @@ patronRouter.get('/export', async (req, res) => {
   res.end()
 })
 
-function withProfit(model, finance) {
-  const coutTotal = finance.cout_modele + finance.cout_ouvriers + finance.autres_depenses
-  const revenu = finance.prix_vente_unitaire * (model.qte_totale || 0)
+async function getExportedQty(modelId) {
+  const row = await get('SELECT COALESCE(SUM(quantite), 0) AS total FROM logistics_exports WHERE model_id = $1', [modelId])
+  return Number(row?.total || 0)
+}
+
+function withProfit(model, finance, exportedQty) {
+  const coutOuvriers =
+    finance.cout_ouvriers_mode === 'calculated' ? finance.nombre_ouvriers * finance.salaire_moyen : finance.cout_ouvriers
+  const autresDepensesItems = finance.autres_depenses_items
+  const autresDepenses = autresDepensesItems.reduce((sum, item) => sum + (Number(item.montant) || 0), 0)
+  const coutTotal = finance.cout_modele + coutOuvriers + autresDepenses
+
+  // Le revenu prévisionnel se base sur la quantité réellement expédiée
+  // (logistics_exports) quand elle existe — c'est la donnée la plus proche
+  // de la réalité. Tant qu'aucune expédition n'a eu lieu, on retombe sur la
+  // quantité commandée (qte_totale) comme estimation.
+  const revenuBasis = exportedQty > 0 ? 'exportee' : 'commandee'
+  const qteUtilisee = exportedQty > 0 ? exportedQty : model.qte_totale || 0
+  const revenu = finance.prix_vente_unitaire * qteUtilisee
+
   const profit = revenu - coutTotal
   const profitPct = revenu > 0 ? Math.round((profit / revenu) * 1000) / 10 : 0
+
   return {
     coutModele: finance.cout_modele,
-    coutOuvriers: finance.cout_ouvriers,
-    autresDepenses: finance.autres_depenses,
+    coutOuvriersMode: finance.cout_ouvriers_mode,
+    coutOuvriersManuel: finance.cout_ouvriers,
+    nombreOuvriers: finance.nombre_ouvriers,
+    salaireMoyen: finance.salaire_moyen,
+    coutOuvriers,
+    autresDepensesItems,
+    autresDepenses,
     prixVenteUnitaire: finance.prix_vente_unitaire,
+    qteCommandee: model.qte_totale || 0,
+    qteExportee: exportedQty,
+    qteUtiliseePourRevenu: qteUtilisee,
+    revenuBasis,
     coutTotal,
     revenu,
     profit,
@@ -120,23 +147,43 @@ function withProfit(model, finance) {
   }
 }
 
+function parseItems(json) {
+  try {
+    const parsed = JSON.parse(json || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function loadFinance(row) {
+  if (!row) {
+    return {
+      cout_modele: 0,
+      cout_ouvriers: 0,
+      cout_ouvriers_mode: 'manual',
+      nombre_ouvriers: 0,
+      salaire_moyen: 0,
+      autres_depenses_items: [],
+      prix_vente_unitaire: 0,
+    }
+  }
+  return { ...row, autres_depenses_items: parseItems(row.autres_depenses_items) }
+}
+
 patronRouter.get('/models', async (req, res) => {
   const models = await all('SELECT * FROM models ORDER BY active DESC, chain_number')
   const result = []
   for (const model of models) {
-    const finance = (await get('SELECT * FROM patron_finance WHERE model_id = $1', [model.id])) || {
-      cout_modele: 0,
-      cout_ouvriers: 0,
-      autres_depenses: 0,
-      prix_vente_unitaire: 0,
-    }
+    const finance = loadFinance(await get('SELECT * FROM patron_finance WHERE model_id = $1', [model.id]))
+    const exportedQty = await getExportedQty(model.id)
     result.push({
       id: model.id,
       client: model.client,
       dessin: model.dessin,
       chainNumber: model.chain_number,
       active: !!model.active,
-      ...withProfit(model, finance),
+      ...withProfit(model, finance, exportedQty),
     })
   }
   res.json(result)
@@ -146,25 +193,66 @@ patronRouter.put('/models/:id', async (req, res) => {
   const { id } = req.params
   const model = await get('SELECT * FROM models WHERE id = $1', [id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+
   const coutModele = Math.max(0, Number(req.body?.coutModele) || 0)
-  const coutOuvriers = Math.max(0, Number(req.body?.coutOuvriers) || 0)
-  const autresDepenses = Math.max(0, Number(req.body?.autresDepenses) || 0)
+  const coutOuvriersMode = req.body?.coutOuvriersMode === 'calculated' ? 'calculated' : 'manual'
+  const coutOuvriersManuel = Math.max(0, Number(req.body?.coutOuvriersManuel) || 0)
+  const nombreOuvriers = Math.max(0, Number(req.body?.nombreOuvriers) || 0)
+  const salaireMoyen = Math.max(0, Number(req.body?.salaireMoyen) || 0)
+  const autresDepensesItems = Array.isArray(req.body?.autresDepensesItems)
+    ? req.body.autresDepensesItems
+        .filter((item) => item && (item.libelle || item.montant))
+        .map((item) => ({ libelle: String(item.libelle || '').slice(0, 200), montant: Math.max(0, Number(item.montant) || 0) }))
+    : []
   const prixVenteUnitaire = Math.max(0, Number(req.body?.prixVenteUnitaire) || 0)
+  const autresDepenses = autresDepensesItems.reduce((sum, item) => sum + item.montant, 0)
   const now = new Date().toISOString()
+
   await run(
-    `INSERT INTO patron_finance (model_id, cout_modele, cout_ouvriers, autres_depenses, prix_vente_unitaire, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (model_id) DO UPDATE SET cout_modele = excluded.cout_modele, cout_ouvriers = excluded.cout_ouvriers,
-       autres_depenses = excluded.autres_depenses, prix_vente_unitaire = excluded.prix_vente_unitaire, updated_at = excluded.updated_at`,
-    [id, coutModele, coutOuvriers, autresDepenses, prixVenteUnitaire, now]
+    `INSERT INTO patron_finance
+       (model_id, cout_modele, cout_ouvriers, cout_ouvriers_mode, nombre_ouvriers, salaire_moyen,
+        autres_depenses, autres_depenses_items, prix_vente_unitaire, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (model_id) DO UPDATE SET
+       cout_modele = excluded.cout_modele, cout_ouvriers = excluded.cout_ouvriers,
+       cout_ouvriers_mode = excluded.cout_ouvriers_mode, nombre_ouvriers = excluded.nombre_ouvriers,
+       salaire_moyen = excluded.salaire_moyen, autres_depenses = excluded.autres_depenses,
+       autres_depenses_items = excluded.autres_depenses_items, prix_vente_unitaire = excluded.prix_vente_unitaire,
+       updated_at = excluded.updated_at`,
+    [
+      id,
+      coutModele,
+      coutOuvriersManuel,
+      coutOuvriersMode,
+      nombreOuvriers,
+      salaireMoyen,
+      autresDepenses,
+      JSON.stringify(autresDepensesItems),
+      prixVenteUnitaire,
+      now,
+    ]
   )
-  await logAudit({ deptKey: 'patron', modelId: id, action: 'update_finance', details: { coutModele, coutOuvriers, autresDepenses, prixVenteUnitaire } })
+  await logAudit({
+    deptKey: 'patron',
+    modelId: id,
+    action: 'update_finance',
+    details: { coutModele, coutOuvriersMode, coutOuvriersManuel, nombreOuvriers, salaireMoyen, autresDepensesItems, prixVenteUnitaire },
+  })
+
+  const exportedQty = await getExportedQty(id)
   res.json(
-    withProfit(model, {
-      cout_modele: coutModele,
-      cout_ouvriers: coutOuvriers,
-      autres_depenses: autresDepenses,
-      prix_vente_unitaire: prixVenteUnitaire,
-    })
+    withProfit(
+      model,
+      {
+        cout_modele: coutModele,
+        cout_ouvriers: coutOuvriersManuel,
+        cout_ouvriers_mode: coutOuvriersMode,
+        nombre_ouvriers: nombreOuvriers,
+        salaire_moyen: salaireMoyen,
+        autres_depenses_items: autresDepensesItems,
+        prix_vente_unitaire: prixVenteUnitaire,
+      },
+      exportedQty
+    )
   )
 })
