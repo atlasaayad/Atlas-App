@@ -212,6 +212,17 @@ CREATE TABLE IF NOT EXISTS patron_finance (
   updated_at TEXT
 );
 
+-- Coût ouvriers can be entered directly, or derived from (nombre d'ouvriers
+-- × salaire moyen) — cout_ouvriers_mode picks which one is authoritative;
+-- the other pair of columns is kept so the form can be re-opened in the
+-- right mode. autres_depenses_items holds the itemized (libellé, montant)
+-- lines as JSON; autres_depenses itself stays as their pre-computed sum so
+-- withProfit() doesn't need to parse JSON to total the cost.
+ALTER TABLE patron_finance ADD COLUMN IF NOT EXISTS cout_ouvriers_mode TEXT DEFAULT 'manual';
+ALTER TABLE patron_finance ADD COLUMN IF NOT EXISTS nombre_ouvriers DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE patron_finance ADD COLUMN IF NOT EXISTS salaire_moyen DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE patron_finance ADD COLUMN IF NOT EXISTS autres_depenses_items TEXT DEFAULT '[]';
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   dept_key TEXT,

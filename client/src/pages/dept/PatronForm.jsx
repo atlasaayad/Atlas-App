@@ -244,24 +244,45 @@ function ExportCard({ token }) {
 }
 
 function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
-  const [form, setForm] = useState({
-    coutModele: model.coutModele,
-    coutOuvriers: model.coutOuvriers,
-    autresDepenses: model.autresDepenses,
-    prixVenteUnitaire: model.prixVenteUnitaire,
-  })
+  const [form, setForm] = useState(() => formFromModel(model))
   const [saving, setSaving] = useState(false)
+
+  // Re-sync the form whenever a fresh save comes back from the server (e.g.
+  // after another tab/session edited the same model) — but only while this
+  // card is closed, so we never clobber what the user is actively typing.
+  useEffect(() => {
+    if (!open) setForm(formFromModel(model))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, open])
 
   async function submit(e) {
     e.preventDefault()
     setSaving(true)
     try {
-      await api.patron.update(token, model.id, form)
+      const saved = await api.patron.update(token, model.id, form)
+      setForm(formFromModel({ ...model, ...saved }))
       onSaved()
     } finally {
       setSaving(false)
     }
   }
+
+  function addDepenseItem() {
+    setForm({ ...form, autresDepensesItems: [...form.autresDepensesItems, { libelle: '', montant: '' }] })
+  }
+  function updateDepenseItem(i, patch) {
+    const items = form.autresDepensesItems.map((it, idx) => (idx === i ? { ...it, ...patch } : it))
+    setForm({ ...form, autresDepensesItems: items })
+  }
+  function removeDepenseItem(i) {
+    setForm({ ...form, autresDepensesItems: form.autresDepensesItems.filter((_, idx) => idx !== i) })
+  }
+
+  const autresDepensesTotal = form.autresDepensesItems.reduce((sum, it) => sum + (Number(it.montant) || 0), 0)
+  const coutOuvriersPreview =
+    form.coutOuvriersMode === 'calculated'
+      ? (Number(form.nombreOuvriers) || 0) * (Number(form.salaireMoyen) || 0)
+      : Number(form.coutOuvriersManuel) || 0
 
   const profitPositive = model.profit >= 0
 
@@ -283,17 +304,109 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
 
       {open && (
         <>
-          <form onSubmit={submit} className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-800 pt-4 sm:grid-cols-2">
-            <NumField label="Coût modèle" value={form.coutModele} onChange={(v) => setForm({ ...form, coutModele: v })} />
-            <NumField label="Coût ouvriers" value={form.coutOuvriers} onChange={(v) => setForm({ ...form, coutOuvriers: v })} />
-            <NumField label="Autres dépenses" value={form.autresDepenses} onChange={(v) => setForm({ ...form, autresDepenses: v })} />
+          <form onSubmit={submit} className="mt-4 space-y-4 border-t border-slate-800 pt-4">
+            <NumField label="Coût modèle (matières/tissu)" value={form.coutModele} onChange={(v) => setForm({ ...form, coutModele: v })} />
+
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs uppercase tracking-wide text-slate-500">Coût ouvriers</span>
+                <div className="flex gap-1.5">
+                  {[
+                    ['manual', 'Manuel'],
+                    ['calculated', 'Nb ouvriers × salaire'],
+                  ].map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setForm({ ...form, coutOuvriersMode: mode })}
+                      className={`rounded border px-2 py-1 text-[11px] ${
+                        form.coutOuvriersMode === mode
+                          ? 'border-turquoise bg-turquoise/10 text-turquoise'
+                          : 'border-slate-700 text-slate-500'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {form.coutOuvriersMode === 'manual' ? (
+                <NumField value={form.coutOuvriersManuel} onChange={(v) => setForm({ ...form, coutOuvriersManuel: v })} />
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <NumField label="Nombre d'ouvriers" value={form.nombreOuvriers} onChange={(v) => setForm({ ...form, nombreOuvriers: v })} />
+                  <NumField label="Salaire moyen" value={form.salaireMoyen} onChange={(v) => setForm({ ...form, salaireMoyen: v })} />
+                </div>
+              )}
+              <div className="mt-1 text-xs text-slate-500">
+                Total coût ouvriers : <span className="font-mono text-slate-300">{Math.round(coutOuvriersPreview).toLocaleString('fr-FR')}</span>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs uppercase tracking-wide text-slate-500">Autres dépenses</span>
+                <button
+                  type="button"
+                  onClick={addDepenseItem}
+                  className="rounded border border-turquoise/50 px-2 py-1 text-[11px] text-turquoise"
+                >
+                  + Ajouter un poste
+                </button>
+              </div>
+              {form.autresDepensesItems.length === 0 ? (
+                <div className="text-xs text-slate-600">Aucun poste de dépense ajouté.</div>
+              ) : (
+                <div className="space-y-2">
+                  {form.autresDepensesItems.map((item, i) => (
+                    <div key={i} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={item.libelle}
+                        onChange={(e) => updateDepenseItem(i, { libelle: e.target.value })}
+                        placeholder="Libellé (ex: transport)"
+                        className="h-10 min-w-0 flex-1 rounded-md border border-slate-700 bg-navy-900 px-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                      />
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        value={item.montant}
+                        onChange={(e) => updateDepenseItem(i, { montant: e.target.value })}
+                        placeholder="Montant"
+                        className="h-10 w-28 shrink-0 rounded-md border border-slate-700 bg-navy-900 px-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeDepenseItem(i)}
+                        className="h-10 w-10 shrink-0 rounded-md border border-slate-700 text-slate-500 active:bg-navy-800"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="mt-1.5 text-xs text-slate-500">
+                Total autres dépenses : <span className="font-mono text-slate-300">{Math.round(autresDepensesTotal).toLocaleString('fr-FR')}</span>
+              </div>
+            </div>
+
             <NumField
               label="Prix de vente unitaire"
               value={form.prixVenteUnitaire}
               onChange={(v) => setForm({ ...form, prixVenteUnitaire: v })}
             />
+            <div className="text-xs text-slate-500">
+              Revenu prévisionnel basé sur{' '}
+              {model.revenuBasis === 'exportee' ? (
+                <>la quantité <span className="text-slate-300">réellement expédiée</span> ({model.qteExportee.toLocaleString('fr-FR')} pièces, Logistics)</>
+              ) : (
+                <>la quantité <span className="text-slate-300">commandée</span> ({model.qteCommandee.toLocaleString('fr-FR')} pièces — estimation, aucune expédition enregistrée pour le moment)</>
+              )}
+              .
+            </div>
 
-            <div className="col-span-full grid grid-cols-3 gap-3 rounded-md bg-navy-900/60 p-3 text-sm">
+            <div className="grid grid-cols-3 gap-3 rounded-md bg-navy-900/60 p-3 text-sm">
               <Stat label="Coût total" value={model.coutTotal} />
               <Stat label="Revenu" value={model.revenu} />
               <Stat label="Profit" value={model.profit} accent={profitPositive} />
@@ -302,7 +415,7 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
             <button
               type="submit"
               disabled={saving}
-              className="col-span-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
+              className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
             >
               {saving ? 'Enregistrement…' : 'Enregistrer'}
             </button>
@@ -314,10 +427,22 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
   )
 }
 
+function formFromModel(model) {
+  return {
+    coutModele: model.coutModele,
+    coutOuvriersMode: model.coutOuvriersMode || 'manual',
+    coutOuvriersManuel: model.coutOuvriersManuel,
+    nombreOuvriers: model.nombreOuvriers,
+    salaireMoyen: model.salaireMoyen,
+    autresDepensesItems: (model.autresDepensesItems || []).map((it) => ({ libelle: it.libelle, montant: it.montant })),
+    prixVenteUnitaire: model.prixVenteUnitaire,
+  }
+}
+
 function NumField({ label, value, onChange }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
+      {label && <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>}
       <input
         type="number"
         inputMode="numeric"
