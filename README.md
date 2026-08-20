@@ -115,6 +115,31 @@ Documented here as they're added — see each subsection for what it does,
 who uses it, and which fields/tables it touches. Keep this current: every
 new major feature gets its own entry.
 
+### Early Warning Agent (Home dashboard, public)
+
+Proactive alert banner (`EarlyWarningBanner` component, `GET
+/api/early-warnings`) that watches the *trend* of hourly production per
+active chain, not just the current snapshot — the existing red/yellow/green
+system stays exactly as it was, this is an earlier, additional signal.
+
+- **Detection**: `detectDeclineTrend()` in `server/src/calc.js` walks
+  backward from the most recently recorded hour and flags a chain once it
+  has **3 or more consecutive hours** (genuinely consecutive slot indices,
+  no gaps) of strictly decreasing output. A single bad hour, a dip that
+  recovers, or a gap in reporting never triggers it.
+- **Real data only**: reads `production_history` (permanent, dated rows —
+  see the note on `hourly_production` vs. `production_history` in the
+  schema) filtered to today, never the live `hourly_production` grid, which
+  can hold a stale value left over from a previous day. Fewer than 3 hours
+  actually recorded today means no alert, never a guess.
+- **Auto-clears**: nothing is persisted as "an active alert" — it's
+  recomputed from live data on every poll (every 20s), so a chain that
+  posts a better hour next simply stops appearing, no manual dismissal.
+- Shown at the top of Home, above the dashboard body, in a distinct amber
+  card (`amber` Tailwind color, separate from `status.warn`) with multiple
+  concurrent chains listed if more than one is affected. In-app only for
+  now — no external notifications.
+
 ### Ask Atlas (`💬 Ask Atlas` tab, public, no PIN)
 
 Chat UI (`client/src/pages/Ask.jsx`) backed by `POST /api/ask`

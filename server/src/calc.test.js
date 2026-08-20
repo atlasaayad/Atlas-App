@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeVTMinutes, computeDT, computeObjectifJour } from './calc.js'
+import { computeVTMinutes, computeDT, computeObjectifJour, detectDeclineTrend } from './calc.js'
 import { WORK_HOURS_PER_DAY } from './constants.js'
 
 function approx(actual, expected, epsilon = 1e-9) {
@@ -40,4 +40,64 @@ test('régression: chaîne de calcul VT → DT → Objectif/jour sur le modèle 
 
   const objectifJour = computeObjectifJour(dt)
   approx(objectifJour, 4393.220338983051, 1e-4)
+})
+
+test('detectDeclineTrend: 3 heures consécutives en baisse stricte → alerte', () => {
+  const entries = [
+    { slotIndex: 3, qty: 140 },
+    { slotIndex: 4, qty: 120 },
+    { slotIndex: 5, qty: 90 },
+  ]
+  const result = detectDeclineTrend(entries)
+  assert.ok(result)
+  assert.equal(result.hoursDeclining, 3)
+  assert.equal(result.startQty, 140)
+  assert.equal(result.currentQty, 90)
+})
+
+test('detectDeclineTrend: données stables ou en hausse → pas d\'alerte', () => {
+  assert.equal(detectDeclineTrend([{ slotIndex: 0, qty: 100 }, { slotIndex: 1, qty: 100 }, { slotIndex: 2, qty: 100 }]), null)
+  assert.equal(detectDeclineTrend([{ slotIndex: 0, qty: 100 }, { slotIndex: 1, qty: 110 }, { slotIndex: 2, qty: 120 }]), null)
+})
+
+test("detectDeclineTrend: moins de 3 heures enregistrées aujourd'hui → jamais d'alerte (pas de conjecture)", () => {
+  assert.equal(detectDeclineTrend([]), null)
+  assert.equal(detectDeclineTrend([{ slotIndex: 0, qty: 140 }]), null)
+  assert.equal(detectDeclineTrend([{ slotIndex: 0, qty: 140 }, { slotIndex: 1, qty: 90 }]), null)
+})
+
+test('detectDeclineTrend: une baisse ponctuelle qui remonte ensuite ne compte pas (auto-effacement)', () => {
+  // baisse à l'heure 1, puis remontée à l'heure 2 — plus de baisse soutenue
+  const entries = [
+    { slotIndex: 0, qty: 100 },
+    { slotIndex: 1, qty: 80 },
+    { slotIndex: 2, qty: 95 },
+  ]
+  assert.equal(detectDeclineTrend(entries), null)
+})
+
+test('detectDeclineTrend: heures non consécutives (lacune) → pas de comparaison fallacieuse', () => {
+  // heure 5 manquante — comparer l'heure 4 à l'heure 6 comme si elles se
+  // suivaient serait trompeur, donc aucune alerte tant que le trio le plus
+  // récent n'est pas vraiment consécutif.
+  const entries = [
+    { slotIndex: 3, qty: 140 },
+    { slotIndex: 4, qty: 120 },
+    { slotIndex: 6, qty: 90 },
+  ]
+  assert.equal(detectDeclineTrend(entries), null)
+})
+
+test('detectDeclineTrend: la série se prolonge au-delà de 3 heures si la baisse continue', () => {
+  const entries = [
+    { slotIndex: 0, qty: 200 },
+    { slotIndex: 1, qty: 170 },
+    { slotIndex: 2, qty: 140 },
+    { slotIndex: 3, qty: 120 },
+    { slotIndex: 4, qty: 90 },
+  ]
+  const result = detectDeclineTrend(entries)
+  assert.equal(result.hoursDeclining, 5)
+  assert.equal(result.startQty, 200)
+  assert.equal(result.currentQty, 90)
 })

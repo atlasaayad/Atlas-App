@@ -57,6 +57,7 @@ export const api = {
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
+  getEarlyWarnings: () => request('/early-warnings'),
   history: {
     day: (chainNumber, date) => request(`/chains/${chainNumber}/history/day?date=${date}`),
     range: (chainNumber, from, to) => request(`/chains/${chainNumber}/history/range?from=${from}&to=${to}`),
