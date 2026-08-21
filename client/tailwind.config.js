@@ -21,6 +21,13 @@ export default {
           warn: '#FBBF24',
           bad: '#F87171',
         },
+        // Distinct from status.warn on purpose — the early-warning banner is
+        // a different signal (a trend, ahead of the normal red/yellow/green
+        // snapshot state), so it needs its own visual identity.
+        amber: {
+          DEFAULT: '#F59E0B',
+          soft: 'rgba(245,158,11,0.12)',
+        },
       },
       fontFamily: {
         display: ['"Space Grotesk"', 'sans-serif'],

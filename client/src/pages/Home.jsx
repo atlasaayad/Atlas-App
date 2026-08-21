@@ -6,6 +6,7 @@ import ExportTable from '../components/ExportTable'
 import PosteStatusGrid from '../components/PosteStatusGrid'
 import EffectifsGrid from '../components/EffectifsGrid'
 import LiveIndicator from '../components/LiveIndicator'
+import EarlyWarningBanner from '../components/EarlyWarningBanner'
 import HistoriqueModal from '../components/HistoriqueModal'
 import DetailsFinaleModal from '../components/DetailsFinaleModal'
 import { usePolling } from '../hooks/usePolling'
@@ -81,6 +82,8 @@ export default function Home() {
           </select>
         </div>
       </div>
+
+      <EarlyWarningBanner />
 
       {!chainNumber && (
         <GlowCard>

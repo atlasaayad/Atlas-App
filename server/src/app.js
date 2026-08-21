@@ -4,6 +4,7 @@ import { publicRouter } from './routes/public.js'
 import { askRouter } from './routes/ask.js'
 import { auditRouter } from './routes/audit.js'
 import { devisRouter } from './routes/devis.js'
+import { earlyWarningRouter } from './routes/earlyWarning.js'
 import { methodeRouter } from './routes/methode.js'
 import { productionRouter } from './routes/production.js'
 import { rhRouter } from './routes/rh.js'
@@ -22,6 +23,7 @@ app.use('/api', publicRouter)
 app.use('/api', askRouter)
 app.use('/api', auditRouter)
 app.use('/api', devisRouter)
+app.use('/api', earlyWarningRouter)
 app.use('/api/methode', methodeRouter)
 app.use('/api/production', productionRouter)
 app.use('/api/rh', rhRouter)

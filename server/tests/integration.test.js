@@ -158,6 +158,42 @@ test('gamme/effectif → ND/VT/DT, sauvegarde production → reflet sur le dashb
     assert.equal(put.data.profit, 7000) // 30000 - 23000
     assert.equal(put.data.profitPct, 23.3) // round(7000/30000 * 1000) / 10
   })
+
+  await t.test('وكيل الإنذار المبكر: لا إنذار مع بيانات جزئية، يظهر مع تراجع حقيقي، ويختفي تلقائياً عند التحسّن', async () => {
+    async function putHourly(slotIndex, qty) {
+      const res = await call(`/production/models/${modelId}/hourly/${slotIndex}`, {
+        method: 'PUT',
+        token: productionToken,
+        body: { qty },
+      })
+      assert.equal(res.status, 200)
+    }
+    async function warningForTestChain() {
+      const res = await call('/early-warnings')
+      assert.equal(res.status, 200)
+      return res.data.warnings.find((w) => w.chainNumber === TEST_CHAIN)
+    }
+
+    // ساعة واحدة فقط مسجلة — بيانات ناقصة، ما يظهر أي إنذار.
+    await putHourly(0, 140)
+    assert.equal(await warningForTestChain(), undefined)
+
+    // ساعتان — لسه ناقصة (يحتاج 3 على الأقل).
+    await putHourly(1, 120)
+    assert.equal(await warningForTestChain(), undefined)
+
+    // 3 ساعات متتالية بتراجع حقيقي وصريح (140 → 120 → 90).
+    await putHourly(2, 90)
+    const warning = await warningForTestChain()
+    assert.ok(warning)
+    assert.equal(warning.hoursDeclining, 3)
+    assert.equal(warning.startQty, 140)
+    assert.equal(warning.currentQty, 90)
+
+    // الإنتاج يتحسّن بالساعة التالية — الإنذار يختفي تلقائياً بدون أي إلغاء يدوي.
+    await putHourly(3, 200)
+    assert.equal(await warningForTestChain(), undefined)
+  })
 })
 
 // The full /api/ask route can't be driven past the daily-limit check in this

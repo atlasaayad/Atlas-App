@@ -54,6 +54,41 @@ export function prodAMaintenant(hourlyMap, now = new Date()) {
   return total
 }
 
+// Minimum length of a strictly-declining, hour-by-hour streak (recorded
+// data only — never inferred) before it counts as an early-warning trend:
+// 3 hours = 2 consecutive hour-over-hour drops. Below that, a single bad
+// hour would trigger false alarms; this is deliberately conservative.
+const MIN_DECLINE_STREAK = 3
+
+// entries: [{ slotIndex, qty }, ...] sorted ascending by slotIndex — only
+// hours actually recorded today (production_history), gaps and all. Walks
+// backward from the most recent entry, extending the streak only while
+// each earlier hour is both the immediately preceding slot (no gap) and
+// strictly greater than the hour after it. Returns null if there's no
+// sustained decline (including when there simply isn't enough data yet —
+// callers must never guess from an incomplete day).
+export function detectDeclineTrend(entries) {
+  if (entries.length < MIN_DECLINE_STREAK) return null
+
+  let streak = 1
+  for (let i = entries.length - 1; i > 0; i--) {
+    const curr = entries[i]
+    const prev = entries[i - 1]
+    if (prev.slotIndex !== curr.slotIndex - 1) break
+    if (prev.qty <= curr.qty) break
+    streak++
+  }
+
+  if (streak < MIN_DECLINE_STREAK) return null
+
+  const streakEntries = entries.slice(entries.length - streak)
+  return {
+    hoursDeclining: streak,
+    startQty: streakEntries[0].qty,
+    currentQty: streakEntries[streak - 1].qty,
+  }
+}
+
 // Today's date (YYYY-MM-DD) in the factory's timezone — used to key
 // permanent history records, independent of the server's own local TZ.
 export function todayInFactoryTZ(now = new Date()) {
