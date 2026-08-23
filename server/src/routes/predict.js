@@ -214,6 +214,24 @@ function extractStandingsRows(data, teamIds) {
     }))
 }
 
+// Report generation is split into two smaller Claude calls (narrative +
+// markets, below) so each stays comfortably under Vercel's function
+// duration limit instead of one long call risking a timeout. Both calls
+// need the same football-data.org grounding, so it's fetched once and
+// reused via this short-lived cache — the second call (fired right after
+// the first by the client) normally hits it and skips 4+ redundant
+// football-data.org requests entirely.
+const groundingCache = new Map() // matchId -> { data, at }
+const GROUNDING_CACHE_TTL_MS = 10 * 60 * 1000
+
+async function getGrounding(matchId) {
+  const cached = groundingCache.get(matchId)
+  if (cached && Date.now() - cached.at < GROUNDING_CACHE_TTL_MS) return cached.data
+  const data = await buildGrounding(matchId)
+  groundingCache.set(matchId, { data, at: Date.now() })
+  return data
+}
+
 async function buildGrounding(matchId) {
   const match = await footballDataFetch(`/matches/${matchId}`)
 
@@ -268,21 +286,36 @@ const METHODOLOGY = `
 8. لا تختلق معلومات دقيقة عن التشكيلة المتوقعة أو الإصابات الحالية — هذه ليست بيانات مؤكدة لحظيًا، فاكتبها كتحليل عام مبني على معرفتك بأسلوب الفريقين المعتاد، وذكّر القارئ صراحة أن هذا القسم "تحليل عام غير مؤكد لحظيًا" وليس خبرًا مؤكدًا.
 `.trim()
 
-const SYSTEM_PROMPT = `أنت محلل كرة قدم خبير في نظام "أطلس بريديكت". مهمتك توليد تقرير تحليل وتوقعات كامل باللغة العربية الفصحى لمباراة كرة قدم، بالاعتماد فقط على البيانات الحقيقية المُعطاة لك (نتائج، ترتيب، تاريخ مواجهات) — لا تختلق أرقامًا إحصائية لم تُعطَ لك.
+// Split into two focused prompts (narrative / markets) instead of one
+// long combined one — shorter output per call, faster per-call generation,
+// and each call independently fits well inside the function's time budget.
+// Every text field has an explicit sentence cap; that's most of what makes
+// the split fast, since the markets object itself is mostly numbers.
+const NARRATIVE_SYSTEM_PROMPT = `أنت محلل كرة قدم خبير في نظام "أطلس بريديكت". اكتب تحليلًا سرديًا موجزًا لمباراة كرة قدم باللغة العربية الفصحى، بالاعتماد فقط على البيانات الحقيقية المُعطاة لك (نتائج، ترتيب، تاريخ مواجهات) — لا تختلق أرقامًا لم تُعطَ لك.
+
+مهم: لا تملك معلومات مؤكدة لحظيًا عن التشكيلة أو الإصابات الحالية، فاكتب هذين القسمين كتحليل عام مبني على أسلوب الفريقين المعتاد فقط، وابدأ كل واحد منهما بعبارة "تحليل عام غير مؤكد لحظيًا:".
+
+كل فقرة يجب أن تكون من جملتين إلى ثلاث جمل فقط — مختصرة ومباشرة، بدون حشو.
+
+ردك يجب أن يكون JSON صالح فقط (بدون أي نص قبله أو بعده، وبدون علامات كود Markdown)، مطابق تمامًا لهذا الشكل:
+{
+  "matchContext": "جملتان-3 عن سياق المباراة وأهميتها",
+  "homeFormSummary": "جملتان-3 عن فورمة الفريق المضيف في آخر 5 مباريات",
+  "awayFormSummary": "جملتان-3 عن فورمة الفريق الزائر في آخر 5 مباريات",
+  "headToHead": "جملتان-3 عن تاريخ المواجهات المباشرة",
+  "expectedLineupsKeyPlayers": "تحليل عام غير مؤكد لحظيًا: جملتان-3 عن التشكيلة المتوقعة واللاعبين الأساسيين",
+  "injuriesSuspensions": "تحليل عام غير مؤكد لحظيًا: جملتان-3 عن الإصابات والإيقافات المحتملة",
+  "venueConditions": "جملة إلى جملتين عن الملعب والظروف",
+  "tacticalAnalysis": "جملتان-3 تحليل تكتيكي",
+  "likelyScorers": "جملة إلى جملتين عن اللاعبين الأقرب للتسجيل"
+}`
+
+const MARKETS_SYSTEM_PROMPT = `أنت محلل توقعات كرة قدم في نظام "أطلس بريديكت". احسب احتمالات الأسواق لمباراة كرة قدم بالاعتماد فقط على البيانات الحقيقية المُعطاة لك (نتائج، ترتيب، تاريخ مواجهات) — لا تختلق أرقامًا لم تُعطَ لك.
 
 ${METHODOLOGY}
 
-يجب أن يكون ردك JSON صالح فقط (بدون أي نص قبله أو بعده، وبدون علامات كود Markdown)، مطابق تمامًا لهذا الشكل:
+ردك يجب أن يكون JSON صالح فقط (بدون أي نص قبله أو بعده، وبدون علامات كود Markdown)، مطابق تمامًا لهذا الشكل:
 {
-  "matchContext": "فقرة عن سياق المباراة وأهميتها",
-  "homeFormSummary": "فقرة عن فورمة الفريق المضيف في آخر 5 مباريات",
-  "awayFormSummary": "فقرة عن فورمة الفريق الزائر في آخر 5 مباريات",
-  "headToHead": "فقرة عن تاريخ المواجهات المباشرة",
-  "expectedLineupsKeyPlayers": "فقرة (تحليل عام غير مؤكد لحظيًا) عن التشكيلة المتوقعة واللاعبين الأساسيين",
-  "injuriesSuspensions": "فقرة (تحليل عام غير مؤكد لحظيًا) عن الإصابات والإيقافات المحتملة",
-  "venueConditions": "فقرة عن الملعب والظروف",
-  "tacticalAnalysis": "فقرة تحليل تكتيكي",
-  "likelyScorers": "فقرة عن اللاعبين الأقرب للتسجيل",
   "markets": {
     "outcome1x2": { "home": 0.0, "draw": 0.0, "away": 0.0, "pick": "1", "confidence": 0 },
     "doubleChance": { "pick": "1X", "probability": 0.0 },
@@ -294,15 +327,15 @@ ${METHODOLOGY}
     },
     "btts": { "yes": 0.0, "no": 0.0, "pick": "yes" },
     "cleanSheet": { "home": 0.0, "away": 0.0 },
-    "bestBet": { "market": "نص قصير", "reasoning": "فقرة قصيرة", "confidence": 0 },
-    "smartCombo": { "legs": ["نص", "نص"], "combinedProbability": 0.0, "note": "فقرة قصيرة" }
+    "bestBet": { "market": "نص قصير", "reasoning": "جملة واحدة فقط", "confidence": 0 },
+    "smartCombo": { "legs": ["نص", "نص"], "combinedProbability": 0.0, "note": "جملة واحدة فقط" }
   },
-  "methodologyNotes": ["ملاحظة قصيرة عن قاعدة منهجية طُبقت", "..."],
+  "methodologyNotes": ["ملاحظة قصيرة (أقل من 12 كلمة) عن قاعدة منهجية طُبقت", "..."],
   "confidenceTier": "green",
-  "disclaimer": "جملة تذكير بأن هذا تحليل احتمالي وليس ضمانًا"
+  "disclaimer": "جملة واحدة تذكير بأن هذا تحليل احتمالي وليس ضمانًا"
 }
 
-كل الاحتمالات أرقام عشرية بين 0 و1 (وليست نسب مئوية). "confidence" و"confidenceTier" على مستوى المباراة ككل: green إذا 80% فأكثر، yellow إذا بين 60% و79%، red إذا أقل من 60%.`
+كل الاحتمالات أرقام عشرية بين 0 و1 (وليست نسب مئوية). "confidence" و"confidenceTier" على مستوى المباراة ككل: green إذا 80% فأكثر، yellow إذا بين 60% و79%، red إذا أقل من 60%. اذكر 2 إلى 4 ملاحظات منهجية فقط، الأكثر أهمية.`
 
 async function incrementAnalysisUsage() {
   const date = todayInFactoryTZ()
@@ -315,43 +348,57 @@ async function incrementAnalysisUsage() {
   return row.count
 }
 
-function parseReport(text) {
+function parseReport(text, requiredKey) {
   const cleaned = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
   const parsed = JSON.parse(cleaned)
-  if (!parsed || typeof parsed !== 'object' || !parsed.markets) {
-    throw new Error('missing_markets')
+  if (!parsed || typeof parsed !== 'object' || !parsed[requiredKey]) {
+    throw new Error(`missing_${requiredKey}`)
   }
   return parsed
 }
 
+const PART_CONFIG = {
+  narrative: { systemPrompt: NARRATIVE_SYSTEM_PROMPT, maxTokens: 1300, requiredKey: 'matchContext' },
+  markets: { systemPrompt: MARKETS_SYSTEM_PROMPT, maxTokens: 1000, requiredKey: 'markets' },
+}
+
 predictRouter.post('/predict/analyze', async (req, res) => {
   const matchId = req.body?.matchId
+  const part = req.body?.part === 'markets' ? 'markets' : 'narrative'
   if (!matchId) return res.status(400).json({ error: 'match_id_required' })
 
   if (!FOOTBALL_DATA_KEY) return res.status(503).json({ error: 'football_data_not_configured' })
   if (!anthropic) return res.status(503).json({ error: 'ai_not_configured' })
 
-  const usedToday = await incrementAnalysisUsage()
-  if (usedToday > ANALYSIS_DAILY_LIMIT) {
-    return res.status(429).json({ error: 'daily_limit_reached' })
+  // Counted once per analysis (on the narrative call, which the client
+  // always fires first) rather than once per HTTP call — two calls now
+  // make up one logical "report", so the daily cap should still mean
+  // ANALYSIS_DAILY_LIMIT reports/day, not half that in calls.
+  if (part === 'narrative') {
+    const usedToday = await incrementAnalysisUsage()
+    if (usedToday > ANALYSIS_DAILY_LIMIT) {
+      return res.status(429).json({ error: 'daily_limit_reached' })
+    }
   }
 
   let grounding
   try {
-    grounding = await buildGrounding(matchId)
+    grounding = await getGrounding(matchId)
   } catch (err) {
     return handleFootballDataError(res, err)
   }
 
+  const { systemPrompt, maxTokens, requiredKey } = PART_CONFIG[part]
+
   try {
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-5',
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      max_tokens: maxTokens,
+      system: systemPrompt,
       messages: [
         {
           role: 'user',
-          content: `بيانات حقيقية من football-data.org (JSON):\n${JSON.stringify(grounding)}\n\nولّد تقرير التحليل والتوقعات الكامل بصيغة JSON فقط حسب الشكل المطلوب.`,
+          content: `بيانات حقيقية من football-data.org (JSON):\n${JSON.stringify(grounding)}\n\nولّد الجزء المطلوب بصيغة JSON فقط حسب الشكل المطلوب.`,
         },
       ],
     })
@@ -361,10 +408,10 @@ predictRouter.post('/predict/analyze', async (req, res) => {
       return res.status(502).json({ error: 'empty_ai_response' })
     }
 
-    const report = parseReport(textBlock.text)
+    const report = parseReport(textBlock.text, requiredKey)
     res.json({ report, grounding })
   } catch (err) {
-    console.error('predict_analyze_error', err)
+    console.error('predict_analyze_error', part, err)
     res.status(502).json({ error: 'invalid_ai_response' })
   }
 })

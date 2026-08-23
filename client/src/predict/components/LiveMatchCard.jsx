@@ -8,9 +8,20 @@ function formatDateTime(utcDate) {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+const PHASE_KEY = { narrative: 'analyzingNarrative', markets: 'analyzingMarkets' }
+
+function Spinner() {
+  return (
+    <span
+      className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[#D4AF37]/25 border-t-[#D4AF37]"
+      aria-hidden="true"
+    />
+  )
+}
+
 export default function LiveMatchCard({ match, state, onAnalyze }) {
   const { t } = useLang()
-  const { analyzing, report, grounding, error, expanded } = state || {}
+  const { analyzing, phase, report, grounding, error, expanded } = state || {}
 
   return (
     <div className="rounded-xl border border-[#D4AF37]/10 bg-navy-900/60 p-4">
@@ -26,11 +37,19 @@ export default function LiveMatchCard({ match, state, onAnalyze }) {
         <button
           onClick={() => onAnalyze(match)}
           disabled={analyzing}
-          className="shrink-0 rounded-lg bg-[#D4AF37] px-3 py-1.5 text-sm font-semibold text-navy-950 transition hover:bg-[#F5D061] disabled:opacity-50"
+          className="flex shrink-0 items-center gap-2 rounded-lg bg-[#D4AF37] px-3 py-1.5 text-sm font-semibold text-navy-950 transition hover:bg-[#F5D061] disabled:opacity-70"
         >
+          {analyzing && <Spinner />}
           {analyzing ? t('analyzing') : t('analyzeButton')}
         </button>
       </div>
+
+      {analyzing && (
+        <div dir="rtl" className="mt-3 flex items-center gap-2 rounded-lg border border-[#D4AF37]/10 bg-navy-900/40 px-3 py-2 text-xs text-slate-400">
+          <Spinner />
+          <span>{t(PHASE_KEY[phase] || 'analyzingNarrative')}</span>
+        </div>
+      )}
 
       {error && <p className="mt-2 text-xs text-status-bad">{error}</p>}
 
