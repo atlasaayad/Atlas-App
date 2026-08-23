@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import { publicRouter } from './routes/public.js'
 import { askRouter } from './routes/ask.js'
+import { predictRouter } from './routes/predict.js'
 import { auditRouter } from './routes/audit.js'
 import { devisRouter } from './routes/devis.js'
 import { earlyWarningRouter } from './routes/earlyWarning.js'
@@ -21,6 +22,7 @@ app.use(express.json())
 
 app.use('/api', publicRouter)
 app.use('/api', askRouter)
+app.use('/api', predictRouter)
 app.use('/api', auditRouter)
 app.use('/api', devisRouter)
 app.use('/api', earlyWarningRouter)

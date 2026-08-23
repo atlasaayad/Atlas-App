@@ -7,14 +7,16 @@ import { REFERENCE_LESSONS, diagnoseMiss } from './lib/lessons'
 import MatchForm from './components/MatchForm'
 import MatchCard from './components/MatchCard'
 import Dashboard from './components/Dashboard'
+import LiveMatches from './components/LiveMatches'
 import ComboBuilder from './components/ComboBuilder'
 import Tracker from './components/Tracker'
 import Lessons from './components/Lessons'
 import ExportButtons from './components/ExportButtons'
 
-const TABS = ['dashboard', 'new', 'matches', 'combo', 'tracker', 'lessons']
+const TABS = ['dashboard', 'live', 'new', 'matches', 'combo', 'tracker', 'lessons']
 const TAB_LABEL_KEY = {
   dashboard: 'tabDashboard',
+  live: 'tabLive',
   new: 'tabNew',
   matches: 'tabMatches',
   combo: 'tabCombo',
@@ -152,6 +154,8 @@ function Shell() {
         {tab === 'dashboard' && (
           <Dashboard matches={matches} onEdit={handleEdit} onDelete={handleDelete} accuracy={accuracy} streak={streak} />
         )}
+
+        {tab === 'live' && <LiveMatches />}
 
         {tab === 'new' && (
           <div className="mx-auto max-w-2xl">

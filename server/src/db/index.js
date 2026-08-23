@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS ask_usage (
   count INTEGER NOT NULL DEFAULT 0
 );
 
+-- Same shape and purpose as ask_usage above, but for ATLAS PREDICT's
+-- "تحليل وتوقعات" report generation (client/src/predict, server/src/routes/
+-- predict.js) — a separate counter since it's a heavier claude-sonnet-5
+-- call and unrelated to the factory tracker's Ask Atlas feature.
+CREATE TABLE IF NOT EXISTS predict_analysis_usage (
+  date TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS models (
   id TEXT PRIMARY KEY,
   client TEXT,
