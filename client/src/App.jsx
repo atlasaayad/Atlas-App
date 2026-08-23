@@ -1,4 +1,4 @@
-import { Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import BottomNav from './components/BottomNav'
 import { CompanyProvider, useCompany } from './lib/CompanyContext'
 import Home from './pages/Home'
@@ -15,12 +15,7 @@ function Header() {
         <div className="font-display text-lg font-semibold tracking-wide text-turquoise glow-number">
           {companyName}
         </div>
-        <div className="flex items-center gap-3">
-          <Link to="/predict" className="font-mono text-[11px] text-gold hover:text-gold-bright">
-            ⚽ ATLAS PREDICT
-          </Link>
-          <div className="font-mono text-[11px] text-slate-500">Production Tracking</div>
-        </div>
+        <div className="font-mono text-[11px] text-slate-500">Production Tracking</div>
       </div>
     </header>
   )

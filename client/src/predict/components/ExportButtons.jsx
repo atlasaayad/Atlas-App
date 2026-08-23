@@ -10,14 +10,14 @@ export default function ExportButtons({ matches }) {
       <button
         disabled={disabled}
         onClick={() => exportMatchesCsv(matches)}
-        className="rounded-md border border-gold/25 px-2.5 py-1.5 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-30"
+        className="rounded-md border border-[#D4AF37]/25 px-2.5 py-1.5 text-xs font-medium text-[#D4AF37] hover:bg-[#D4AF37]/10 disabled:opacity-30"
       >
         {t('exportCsv')}
       </button>
       <button
         disabled={disabled}
         onClick={() => exportMatchesPdf(matches, lang)}
-        className="rounded-md border border-gold/25 px-2.5 py-1.5 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-30"
+        className="rounded-md border border-[#D4AF37]/25 px-2.5 py-1.5 text-xs font-medium text-[#D4AF37] hover:bg-[#D4AF37]/10 disabled:opacity-30"
       >
         {t('exportPdf')}
       </button>

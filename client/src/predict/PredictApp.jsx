@@ -114,17 +114,17 @@ function Shell() {
 
   return (
     <div dir={dir} className="min-h-screen bg-app-gradient text-slate-200">
-      <header className="sticky top-0 z-30 border-b border-gold/15 bg-navy-950/90 px-4 py-3 backdrop-blur">
+      <header className="sticky top-0 z-30 border-b border-[#D4AF37]/15 bg-navy-950/90 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
           <div>
-            <div className="font-display text-lg font-bold tracking-wide text-gold glow-number">⚽ {t('appName')}</div>
+            <div className="font-display text-lg font-bold tracking-wide text-[#D4AF37] glow-number">⚽ {t('appName')}</div>
             <div className="hidden text-[11px] text-slate-500 sm:block">{t('tagline')}</div>
           </div>
           <div className="flex items-center gap-2">
             <ExportButtons matches={allMatchesSorted} />
             <button
               onClick={() => setLang(lang === 'ar' ? 'fr' : 'ar')}
-              className="rounded-md border border-gold/25 px-2.5 py-1.5 text-xs font-medium text-gold hover:bg-gold/10"
+              className="rounded-md border border-[#D4AF37]/25 px-2.5 py-1.5 text-xs font-medium text-[#D4AF37] hover:bg-[#D4AF37]/10"
             >
               {t('langToggle')}
             </button>
@@ -139,7 +139,7 @@ function Shell() {
                 if (tabKey !== 'new') setEditing(null)
               }}
               className={`shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                tab === tabKey ? 'bg-gold text-navy-950 shadow-glow-sm' : 'text-slate-400 hover:text-gold'
+                tab === tabKey ? 'bg-[#D4AF37] text-navy-950 shadow-glow-sm' : 'text-slate-400 hover:text-[#D4AF37]'
               }`}
             >
               {t(TAB_LABEL_KEY[tabKey])}
@@ -155,7 +155,7 @@ function Shell() {
 
         {tab === 'new' && (
           <div className="mx-auto max-w-2xl">
-            <h2 className="mb-4 font-display text-lg font-semibold text-gold">{editing ? t('edit') : t('tabNew')}</h2>
+            <h2 className="mb-4 font-display text-lg font-semibold text-[#D4AF37]">{editing ? t('edit') : t('tabNew')}</h2>
             <MatchForm
               initial={editing}
               onSubmit={handleSubmitMatch}
@@ -173,7 +173,7 @@ function Shell() {
 
         {tab === 'matches' && (
           <div className="space-y-3">
-            <h2 className="font-display text-lg font-semibold text-gold">{t('allMatches')}</h2>
+            <h2 className="font-display text-lg font-semibold text-[#D4AF37]">{t('allMatches')}</h2>
             {allMatchesSorted.length === 0 ? (
               <p className="text-sm text-slate-500">{t('comboEmpty')}</p>
             ) : (
@@ -190,7 +190,7 @@ function Shell() {
       </main>
 
       <footer className="mx-auto max-w-5xl px-4 pb-8 pt-2 text-center">
-        <Link to="/" className="text-xs text-slate-500 hover:text-gold">
+        <Link to="/" className="text-xs text-slate-500 hover:text-[#D4AF37]">
           {t('backToFactory')}
         </Link>
       </footer>

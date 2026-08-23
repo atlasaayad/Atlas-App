@@ -47,7 +47,7 @@ export default function Dashboard({ matches, onEdit, onDelete, accuracy, streak 
       </div>
 
       <section>
-        <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-wide text-gold">{t('bestBetOfDay')}</h2>
+        <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-wide text-[#D4AF37]">{t('bestBetOfDay')}</h2>
         {bestBet ? (
           <MatchCard match={bestBet} onEdit={onEdit} onDelete={onDelete} defaultExpanded />
         ) : (
@@ -56,7 +56,7 @@ export default function Dashboard({ matches, onEdit, onDelete, accuracy, streak 
       </section>
 
       <section>
-        <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-wide text-gold">{t('todaysMatches')}</h2>
+        <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-wide text-[#D4AF37]">{t('todaysMatches')}</h2>
         {todaysMatches.length === 0 ? (
           <p className="text-sm text-slate-500">{t('noMatchesToday')}</p>
         ) : (
@@ -69,7 +69,7 @@ export default function Dashboard({ matches, onEdit, onDelete, accuracy, streak 
       </section>
 
       <section>
-        <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-wide text-gold">{t('confidenceRanking')}</h2>
+        <h2 className="mb-2 font-display text-sm font-semibold uppercase tracking-wide text-[#D4AF37]">{t('confidenceRanking')}</h2>
         {ranked.length === 0 ? (
           <p className="text-sm text-slate-500">{t('noBestBet')}</p>
         ) : (
@@ -86,8 +86,8 @@ export default function Dashboard({ matches, onEdit, onDelete, accuracy, streak 
 
 function StatTile({ label, value }) {
   return (
-    <div className="rounded-xl border border-gold/10 bg-navy-900/50 p-3 text-center">
-      <div className="font-display text-xl font-bold text-gold">{value}</div>
+    <div className="rounded-xl border border-[#D4AF37]/10 bg-navy-900/50 p-3 text-center">
+      <div className="font-display text-xl font-bold text-[#D4AF37]">{value}</div>
       <div className="mt-0.5 text-[11px] text-slate-400">{label}</div>
     </div>
   )

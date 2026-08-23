@@ -37,7 +37,7 @@ export default function PredictionDetail({ match }) {
   const ruleKeys = [...new Set([...p.confidenceNotes, ...p.appliedRules.map((r) => r.key)])]
 
   return (
-    <div className="space-y-4 border-t border-gold/10 pt-4">
+    <div className="space-y-4 border-t border-[#D4AF37]/10 pt-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="grid flex-1 min-w-[220px] gap-2">
           <Bar label={`${match.homeTeam} (1)`} value={p.pHome} color="#D4AF37" />
@@ -64,17 +64,17 @@ export default function PredictionDetail({ match }) {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-gold/15 bg-navy-900/60 p-3">
+        <div className="rounded-lg border border-[#D4AF37]/15 bg-navy-900/60 p-3">
           <div className="text-xs text-slate-400">{t('recommendedMarket')}</div>
-          <div className="mt-1 font-display text-lg font-bold text-gold">{outcomeLabel}</div>
+          <div className="mt-1 font-display text-lg font-bold text-[#D4AF37]">{outcomeLabel}</div>
           <div className="text-xs text-slate-500">
             {p.outcome.kind === 'double-chance' ? t('saferPick') : t('directPick')} — {(p.outcome.probability * 100).toFixed(1)}%
           </div>
         </div>
 
-        <div className="rounded-lg border border-gold/15 bg-navy-900/60 p-3">
+        <div className="rounded-lg border border-[#D4AF37]/15 bg-navy-900/60 p-3">
           <div className="text-xs text-slate-400">{t('overUnder')}</div>
-          <div className="mt-1 font-display text-lg font-bold text-gold">
+          <div className="mt-1 font-display text-lg font-bold text-[#D4AF37]">
             {p.overUnder.pick === 'over2.5' ? 'Over 2.5' : 'Under 2.5'}
           </div>
           <div className="text-xs text-slate-500">{(p.overUnder.probability * 100).toFixed(1)}%</div>
@@ -85,25 +85,25 @@ export default function PredictionDetail({ match }) {
           </div>
         </div>
 
-        <div className="rounded-lg border border-gold/15 bg-navy-900/60 p-3">
+        <div className="rounded-lg border border-[#D4AF37]/15 bg-navy-900/60 p-3">
           <div className="text-xs text-slate-400">{t('btts')}</div>
-          <div className="mt-1 font-display text-lg font-bold text-gold">
+          <div className="mt-1 font-display text-lg font-bold text-[#D4AF37]">
             {p.btts.pick === 'yes' ? t('yes') : p.btts.pick === 'no' ? t('no') : t('avoid')}
           </div>
           <div className="text-xs text-slate-500">{(p.btts.probability * 100).toFixed(1)}%</div>
         </div>
 
-        <div className="rounded-lg border border-gold/15 bg-navy-900/60 p-3">
+        <div className="rounded-lg border border-[#D4AF37]/15 bg-navy-900/60 p-3">
           <div className="text-xs text-slate-400">{t('cleanSheet')}</div>
-          <div className="mt-1 flex justify-between font-display text-sm font-bold text-gold">
+          <div className="mt-1 flex justify-between font-display text-sm font-bold text-[#D4AF37]">
             <span>{match.homeTeam}: {(p.cleanSheet.home * 100).toFixed(0)}%</span>
             <span>{match.awayTeam}: {(p.cleanSheet.away * 100).toFixed(0)}%</span>
           </div>
         </div>
 
-        <div className="rounded-lg border border-gold/15 bg-navy-900/60 p-3 sm:col-span-2">
+        <div className="rounded-lg border border-[#D4AF37]/15 bg-navy-900/60 p-3 sm:col-span-2">
           <div className="text-xs text-slate-400">{t('asianHandicap')}</div>
-          <div className="mt-1 font-display text-lg font-bold text-gold">
+          <div className="mt-1 font-display text-lg font-bold text-[#D4AF37]">
             {p.asianHandicap.side === 'even'
               ? `${t('draw')} (0)`
               : `${p.asianHandicap.side === 'home' ? match.homeTeam : match.awayTeam} -${p.asianHandicap.line}`}
@@ -112,7 +112,7 @@ export default function PredictionDetail({ match }) {
         </div>
       </div>
 
-      <div className="rounded-lg border border-gold/10 bg-navy-900/40 p-3 text-sm">
+      <div className="rounded-lg border border-[#D4AF37]/10 bg-navy-900/40 p-3 text-sm">
         <span className="text-slate-400">{t('alternativeScenario')}: </span>
         <span className="font-semibold text-slate-200">{altLabel} — {(alt.probability * 100).toFixed(1)}%</span>
       </div>
@@ -136,7 +136,7 @@ export default function PredictionDetail({ match }) {
           <ul className="space-y-1 text-[11px] text-slate-400">
             {ruleKeys.map((k) => (
               <li key={k} className="flex gap-1.5">
-                <span className="text-gold">•</span> {t(`rule_${k}`)}
+                <span className="text-[#D4AF37]">•</span> {t(`rule_${k}`)}
               </li>
             ))}
           </ul>

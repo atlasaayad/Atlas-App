@@ -28,13 +28,6 @@ export default {
           DEFAULT: '#F59E0B',
           soft: 'rgba(245,158,11,0.12)',
         },
-        // Gold accent family for the ATLAS PREDICT sub-app (client/src/predict).
-        gold: {
-          DEFAULT: '#D4AF37',
-          bright: '#F5D061',
-          dim: '#8A6E1E',
-          soft: 'rgba(212,175,55,0.12)',
-        },
       },
       fontFamily: {
         display: ['"Space Grotesk"', 'sans-serif'],

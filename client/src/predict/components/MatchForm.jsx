@@ -4,7 +4,7 @@ import { emptyMatch } from '../lib/defaults'
 import FormPicker from './FormPicker'
 
 const inputCls =
-  'w-full rounded-lg border border-gold/15 bg-navy-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30'
+  'w-full rounded-lg border border-[#D4AF37]/15 bg-navy-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-[#D4AF37]/50 focus:outline-none focus:ring-1 focus:ring-[#D4AF37]/30'
 const labelCls = 'mb-1 block text-xs text-slate-400'
 
 function Field({ label, children }) {
@@ -48,8 +48,8 @@ function StatPair({ label, homeKey, awayKey, value, onChange, min = 0, max, step
 
 function Section({ title, children }) {
   return (
-    <div className="space-y-3 rounded-xl border border-gold/10 bg-navy-900/40 p-4">
-      <h3 className="font-display text-sm font-semibold tracking-wide text-gold">{title}</h3>
+    <div className="space-y-3 rounded-xl border border-[#D4AF37]/10 bg-navy-900/40 p-4">
+      <h3 className="font-display text-sm font-semibold tracking-wide text-[#D4AF37]">{title}</h3>
       {children}
     </div>
   )
@@ -208,11 +208,11 @@ export default function MatchForm({ initial, onSubmit, onCancel }) {
       </Section>
 
       <div className="flex gap-3">
-        <button type="submit" className="flex-1 rounded-lg bg-gold py-2.5 font-semibold text-navy-950 shadow-glow transition hover:bg-gold-bright">
+        <button type="submit" className="flex-1 rounded-lg bg-[#D4AF37] py-2.5 font-semibold text-navy-950 shadow-glow transition hover:bg-[#F5D061]">
           {isEdit ? t('update') : t('save')}
         </button>
         {onCancel && (
-          <button type="button" onClick={onCancel} className="rounded-lg border border-gold/20 px-4 py-2.5 text-sm text-slate-300 hover:border-gold/40">
+          <button type="button" onClick={onCancel} className="rounded-lg border border-[#D4AF37]/20 px-4 py-2.5 text-sm text-slate-300 hover:border-[#D4AF37]/40">
             {t('cancel')}
           </button>
         )}

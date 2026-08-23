@@ -67,7 +67,7 @@ export default function ComboBuilder({ matches }) {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="font-display text-lg font-semibold text-gold">{t('comboTitle')}</h2>
+        <h2 className="font-display text-lg font-semibold text-[#D4AF37]">{t('comboTitle')}</h2>
         <p className="text-sm text-slate-400">{t('comboDesc')}</p>
       </div>
 
@@ -77,7 +77,7 @@ export default function ComboBuilder({ matches }) {
         <>
           <button
             onClick={suggestOptimal}
-            className="rounded-lg border border-gold/30 bg-gold-soft px-3 py-2 text-sm font-semibold text-gold hover:bg-gold/20"
+            className="rounded-lg border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-2 text-sm font-semibold text-[#D4AF37] hover:bg-[#D4AF37]/20"
           >
             {t('comboSuggest')}
           </button>
@@ -87,7 +87,7 @@ export default function ComboBuilder({ matches }) {
               <label
                 key={m.id}
                 className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 text-sm transition ${
-                  selected.includes(m.id) ? 'border-gold/50 bg-gold-soft' : 'border-gold/10 bg-navy-900/50'
+                  selected.includes(m.id) ? 'border-[#D4AF37]/50 bg-[#D4AF37]/10' : 'border-[#D4AF37]/10 bg-navy-900/50'
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -102,7 +102,7 @@ export default function ComboBuilder({ matches }) {
                   </div>
                 </div>
                 <div className="text-end">
-                  <div className="font-mono text-sm font-bold text-gold">{OUTCOME_LABEL[m.prediction.outcome.pick]}</div>
+                  <div className="font-mono text-sm font-bold text-[#D4AF37]">{OUTCOME_LABEL[m.prediction.outcome.pick]}</div>
                   <div className="text-xs text-slate-400">{(legProbability(m) * 100).toFixed(1)}%</div>
                 </div>
               </label>
@@ -110,7 +110,7 @@ export default function ComboBuilder({ matches }) {
           </div>
 
           {selectedMatches.length > 0 && (
-            <div className="rounded-xl border border-gold/20 bg-navy-900/60 p-4">
+            <div className="rounded-xl border border-[#D4AF37]/20 bg-navy-900/60 p-4">
               <div className="mb-2 text-xs text-slate-400">
                 {t('comboSelected')}: {selectedMatches.length} {t('comboLegOf')} 4
               </div>
@@ -123,7 +123,7 @@ export default function ComboBuilder({ matches }) {
                 </div>
                 <div className="text-end">
                   <div className="text-xs text-slate-400">{t('comboOdds')}</div>
-                  <div className="font-display text-2xl font-bold text-gold">{combinedOdds.toFixed(2)}x</div>
+                  <div className="font-display text-2xl font-bold text-[#D4AF37]">{combinedOdds.toFixed(2)}x</div>
                 </div>
               </div>
               {combinedProbability < 0.7 && (

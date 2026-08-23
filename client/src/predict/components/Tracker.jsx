@@ -9,13 +9,13 @@ function ResultForm({ match, onSettle }) {
   const [awayGoals, setAwayGoals] = useState(match.result?.awayGoals ?? '')
 
   return (
-    <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-gold/10 pt-3">
+    <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-[#D4AF37]/10 pt-3">
       <label className="text-xs text-slate-400">
         {t('homeGoals')}
         <input
           type="number"
           min="0"
-          className="mt-1 block w-16 rounded-md border border-gold/15 bg-navy-900/70 px-2 py-1 text-sm text-slate-100"
+          className="mt-1 block w-16 rounded-md border border-[#D4AF37]/15 bg-navy-900/70 px-2 py-1 text-sm text-slate-100"
           value={homeGoals}
           onChange={(e) => setHomeGoals(e.target.value)}
         />
@@ -25,7 +25,7 @@ function ResultForm({ match, onSettle }) {
         <input
           type="number"
           min="0"
-          className="mt-1 block w-16 rounded-md border border-gold/15 bg-navy-900/70 px-2 py-1 text-sm text-slate-100"
+          className="mt-1 block w-16 rounded-md border border-[#D4AF37]/15 bg-navy-900/70 px-2 py-1 text-sm text-slate-100"
           value={awayGoals}
           onChange={(e) => setAwayGoals(e.target.value)}
         />
@@ -33,7 +33,7 @@ function ResultForm({ match, onSettle }) {
       <button
         onClick={() => onSettle(match.id, homeGoals, awayGoals)}
         disabled={homeGoals === '' || awayGoals === ''}
-        className="rounded-md bg-gold px-3 py-1.5 text-xs font-semibold text-navy-950 disabled:opacity-40"
+        className="rounded-md bg-[#D4AF37] px-3 py-1.5 text-xs font-semibold text-navy-950 disabled:opacity-40"
       >
         {t('saveResult')}
       </button>
@@ -80,25 +80,25 @@ export default function Tracker({ matches, onSettle, accuracy, streak }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="font-display text-lg font-semibold text-gold">{t('trackerTitle')}</h2>
+        <h2 className="font-display text-lg font-semibold text-[#D4AF37]">{t('trackerTitle')}</h2>
         <p className="text-sm text-slate-400">{t('trackerDesc')}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <div className="rounded-xl border border-gold/10 bg-navy-900/50 p-3 text-center">
-          <div className="font-display text-xl font-bold text-gold">{accuracy != null ? `${accuracy.toFixed(0)}%` : '—'}</div>
+        <div className="rounded-xl border border-[#D4AF37]/10 bg-navy-900/50 p-3 text-center">
+          <div className="font-display text-xl font-bold text-[#D4AF37]">{accuracy != null ? `${accuracy.toFixed(0)}%` : '—'}</div>
           <div className="mt-0.5 text-[11px] text-slate-400">{t('accuracyOverall')}</div>
         </div>
-        <div className="rounded-xl border border-gold/10 bg-navy-900/50 p-3 text-center">
-          <div className={`font-display text-xl font-bold ${streak.type === 'win' ? 'text-status-good' : streak.type === 'loss' ? 'text-status-bad' : 'text-gold'}`}>
+        <div className="rounded-xl border border-[#D4AF37]/10 bg-navy-900/50 p-3 text-center">
+          <div className={`font-display text-xl font-bold ${streak.type === 'win' ? 'text-status-good' : streak.type === 'loss' ? 'text-status-bad' : 'text-[#D4AF37]'}`}>
             {streak.count || 0}
           </div>
           <div className="mt-0.5 text-[11px] text-slate-400">
             {streak.count > 0 ? (streak.type === 'win' ? t('streakWins') : t('streakLosses')) : t('noStreak')}
           </div>
         </div>
-        <div className="rounded-xl border border-gold/10 bg-navy-900/50 p-3 text-center">
-          <div className="font-display text-xl font-bold text-gold">{settled.length}</div>
+        <div className="rounded-xl border border-[#D4AF37]/10 bg-navy-900/50 p-3 text-center">
+          <div className="font-display text-xl font-bold text-[#D4AF37]">{settled.length}</div>
           <div className="mt-0.5 text-[11px] text-slate-400">{t('settledMatches')}</div>
         </div>
       </div>
@@ -111,7 +111,7 @@ export default function Tracker({ matches, onSettle, accuracy, streak }) {
               <button
                 key={g}
                 onClick={() => setGranularity(g)}
-                className={`rounded-md px-2 py-1 text-xs ${granularity === g ? 'bg-gold text-navy-950 font-semibold' : 'text-slate-400 hover:text-gold'}`}
+                className={`rounded-md px-2 py-1 text-xs ${granularity === g ? 'bg-[#D4AF37] text-navy-950 font-semibold' : 'text-slate-400 hover:text-[#D4AF37]'}`}
               >
                 {t(g)}
               </button>

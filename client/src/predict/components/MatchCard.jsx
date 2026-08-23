@@ -23,7 +23,7 @@ export default function MatchCard({
   const p = match.prediction
 
   return (
-    <div className={`rounded-xl border bg-navy-900/60 p-4 shadow-sm transition ${p ? TIER_RING[p.tier] : 'border-gold/10'}`}>
+    <div className={`rounded-xl border bg-navy-900/60 p-4 shadow-sm transition ${p ? TIER_RING[p.tier] : 'border-[#D4AF37]/10'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           {selectable && (
@@ -68,7 +68,7 @@ export default function MatchCard({
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="rounded-md border border-gold/20 px-2.5 py-1 text-xs text-gold hover:bg-gold/10"
+          className="rounded-md border border-[#D4AF37]/20 px-2.5 py-1 text-xs text-[#D4AF37] hover:bg-[#D4AF37]/10"
         >
           {expanded ? t('hideDetails') : t('viewDetails')}
         </button>
