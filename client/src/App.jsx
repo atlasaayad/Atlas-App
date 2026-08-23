@@ -1,10 +1,11 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Link } from 'react-router-dom'
 import BottomNav from './components/BottomNav'
 import { CompanyProvider, useCompany } from './lib/CompanyContext'
 import Home from './pages/Home'
 import Departments from './pages/Departments'
 import DeptGate from './pages/DeptGate'
 import Ask from './pages/Ask'
+import PredictApp from './predict/PredictApp'
 
 function Header() {
   const { companyName } = useCompany()
@@ -14,13 +15,18 @@ function Header() {
         <div className="font-display text-lg font-semibold tracking-wide text-turquoise glow-number">
           {companyName}
         </div>
-        <div className="font-mono text-[11px] text-slate-500">Production Tracking</div>
+        <div className="flex items-center gap-3">
+          <Link to="/predict" className="font-mono text-[11px] text-gold hover:text-gold-bright">
+            ⚽ ATLAS PREDICT
+          </Link>
+          <div className="font-mono text-[11px] text-slate-500">Production Tracking</div>
+        </div>
       </div>
     </header>
   )
 }
 
-export default function App() {
+function FactoryApp() {
   return (
     <CompanyProvider>
       <div className="flex min-h-screen flex-col pb-20">
@@ -36,5 +42,14 @@ export default function App() {
         <BottomNav />
       </div>
     </CompanyProvider>
+  )
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/predict/*" element={<PredictApp />} />
+      <Route path="/*" element={<FactoryApp />} />
+    </Routes>
   )
 }
