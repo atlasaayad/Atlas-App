@@ -20,11 +20,14 @@ export function fetchMatches(leagueId) {
   return apiGet(`/api/predict/matches?league=${encodeURIComponent(leagueId)}`)
 }
 
-export async function requestAnalysis(matchId) {
+// Report generation is split server-side into two smaller calls (narrative
+// text, then markets/predictions) so each stays well under the serverless
+// function's time limit instead of one long call risking a timeout.
+async function requestAnalysisPart(matchId, part) {
   const res = await fetch('/api/predict/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ matchId }),
+    body: JSON.stringify({ matchId, part }),
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -33,4 +36,17 @@ export async function requestAnalysis(matchId) {
     throw err
   }
   return res.json()
+}
+
+// onPhase(phase) fires right before each call starts, so the caller can
+// show phase-aware loading text ('narrative' then 'markets').
+export async function requestAnalysis(matchId, onPhase) {
+  onPhase?.('narrative')
+  const narrative = await requestAnalysisPart(matchId, 'narrative')
+  onPhase?.('markets')
+  const markets = await requestAnalysisPart(matchId, 'markets')
+  return {
+    report: { ...narrative.report, ...markets.report },
+    grounding: markets.grounding || narrative.grounding,
+  }
 }

@@ -48,9 +48,11 @@ export default function LiveMatches() {
   function handleAnalyze(match) {
     setAnalysisState((prev) => ({
       ...prev,
-      [match.id]: { ...prev[match.id], analyzing: true, error: null, expanded: true },
+      [match.id]: { ...prev[match.id], analyzing: true, phase: 'narrative', error: null, expanded: true },
     }))
-    requestAnalysis(match.id)
+    requestAnalysis(match.id, (phase) => {
+      setAnalysisState((prev) => ({ ...prev, [match.id]: { ...prev[match.id], phase } }))
+    })
       .then((data) => {
         setAnalysisState((prev) => ({
           ...prev,
