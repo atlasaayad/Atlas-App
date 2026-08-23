@@ -20,33 +20,58 @@ export function fetchMatches(leagueId) {
   return apiGet(`/api/predict/matches?league=${encodeURIComponent(leagueId)}`)
 }
 
-// Report generation is split server-side into two smaller calls (narrative
-// text, then markets/predictions) so each stays well under the serverless
-// function's time limit instead of one long call risking a timeout.
-async function requestAnalysisPart(matchId, part) {
-  const res = await fetch('/api/predict/analyze', {
+async function apiPost(path, body) {
+  const res = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ matchId, part }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    const err = new Error(body.error || `http_${res.status}`)
+    const errBody = await res.json().catch(() => ({}))
+    const err = new Error(errBody.error || `http_${res.status}`)
     err.status = res.status
     throw err
   }
   return res.json()
 }
 
-// onPhase(phase) fires right before each call starts, so the caller can
-// show phase-aware loading text ('narrative' then 'markets').
+// Report generation is split server-side into 4 small Claude calls (each
+// using the same fast claude-haiku-4-5-20251001 model Ask Atlas uses) so
+// every individual call stays well under the serverless function's hard
+// duration limit. Grounding is fetched once (no Claude call, fast) and this
+// client passes it forward to every part — the server holds no state
+// between calls. context/insights/markets-core only need grounding and run
+// in parallel; markets-picks needs markets-core's numbers first.
+//
+// onPhase(phase) fires right before each stage starts, so the caller can
+// show phase-aware loading text: 'gathering' -> 'analyzing' -> 'picks'.
 export async function requestAnalysis(matchId, onPhase) {
-  onPhase?.('narrative')
-  const narrative = await requestAnalysisPart(matchId, 'narrative')
-  onPhase?.('markets')
-  const markets = await requestAnalysisPart(matchId, 'markets')
-  return {
-    report: { ...narrative.report, ...markets.report },
-    grounding: markets.grounding || narrative.grounding,
+  onPhase?.('gathering')
+  const { grounding } = await apiPost('/api/predict/analyze/grounding', { matchId })
+
+  onPhase?.('analyzing')
+  const [context, insights, marketsCore] = await Promise.all([
+    apiPost('/api/predict/analyze', { matchId, part: 'context', grounding }),
+    apiPost('/api/predict/analyze', { matchId, part: 'insights', grounding }),
+    apiPost('/api/predict/analyze', { matchId, part: 'markets-core', grounding }),
+  ])
+
+  onPhase?.('picks')
+  const marketsPicks = await apiPost('/api/predict/analyze', {
+    matchId,
+    part: 'markets-picks',
+    grounding,
+    marketsCore: marketsCore.report.markets,
+  })
+
+  const report = {
+    ...context.report,
+    ...insights.report,
+    markets: { ...marketsCore.report.markets, ...marketsPicks.report.markets },
+    methodologyNotes: marketsPicks.report.methodologyNotes,
+    confidenceTier: marketsPicks.report.confidenceTier,
+    disclaimer: marketsPicks.report.disclaimer,
   }
+
+  return { report, grounding }
 }

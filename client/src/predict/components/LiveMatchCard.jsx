@@ -8,7 +8,7 @@ function formatDateTime(utcDate) {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-const PHASE_KEY = { narrative: 'analyzingNarrative', markets: 'analyzingMarkets' }
+const PHASE_KEY = { gathering: 'analyzingGathering', analyzing: 'analyzingNarrative', picks: 'analyzingMarkets' }
 
 function Spinner() {
   return (
