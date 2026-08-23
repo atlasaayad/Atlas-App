@@ -8,7 +8,7 @@ import { todayInFactoryTZ } from '../calc.js'
 // tracker — no shared state, no dependency on chains/models/departments.
 export const predictRouter = Router()
 
-const FOOTBALL_DATA_KEY = process.env.VITE_FOOTBALL_DATA_KEY
+const FOOTBALL_DATA_KEY = process.env.FOOTBALL_DATA_KEY
 const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null
