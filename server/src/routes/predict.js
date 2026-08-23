@@ -74,8 +74,10 @@ async function footballDataFetch(path, params = {}) {
   }
   const resp = await fetch(url, { headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY } })
   if (!resp.ok) {
+    const body = await resp.text().catch(() => '')
     const err = new Error(`football_data_${resp.status}`)
     err.code = resp.status
+    err.body = body.slice(0, 500)
     throw err
   }
   return resp.json()
@@ -92,8 +94,12 @@ async function fetchCompetitions() {
 }
 
 function handleFootballDataError(res, err) {
-  console.error('predict_football_data_error', err)
+  // err.body (football-data.org's own response text, when present) only goes
+  // to the server log — never returned to the client — since it could echo
+  // request details back; the UI gets a generic, code-mapped message instead.
+  console.error('predict_football_data_error', err.code, err.message, err.body || '')
   if (err.code === 429) return res.status(429).json({ error: 'football_data_rate_limited' })
+  if (err.code === 401 || err.code === 403) return res.status(502).json({ error: 'football_data_invalid_key' })
   return res.status(502).json({ error: 'football_data_unreachable' })
 }
 

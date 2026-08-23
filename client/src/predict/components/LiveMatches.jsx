@@ -7,6 +7,7 @@ import LiveMatchCard from './LiveMatchCard'
 const ERROR_KEY = {
   football_data_not_configured: 'footballDataNotConfigured',
   football_data_rate_limited: 'footballDataRateLimited',
+  football_data_invalid_key: 'footballDataInvalidKey',
   football_data_unreachable: 'footballDataUnreachable',
   league_unavailable: 'leagueUnavailableNote',
   ai_not_configured: 'aiNotConfigured',
