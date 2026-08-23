@@ -5,6 +5,7 @@ import Home from './pages/Home'
 import Departments from './pages/Departments'
 import DeptGate from './pages/DeptGate'
 import Ask from './pages/Ask'
+import PredictApp from './predict/PredictApp'
 
 function Header() {
   const { companyName } = useCompany()
@@ -20,7 +21,7 @@ function Header() {
   )
 }
 
-export default function App() {
+function FactoryApp() {
   return (
     <CompanyProvider>
       <div className="flex min-h-screen flex-col pb-20">
@@ -36,5 +37,14 @@ export default function App() {
         <BottomNav />
       </div>
     </CompanyProvider>
+  )
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/predict/*" element={<PredictApp />} />
+      <Route path="/*" element={<FactoryApp />} />
+    </Routes>
   )
 }
