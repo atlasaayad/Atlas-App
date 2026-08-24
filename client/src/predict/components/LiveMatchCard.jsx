@@ -8,8 +8,6 @@ function formatDateTime(utcDate) {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-const PHASE_KEY = { gathering: 'analyzingGathering', analyzing: 'analyzingNarrative', picks: 'analyzingMarkets' }
-
 function Spinner() {
   return (
     <span
@@ -21,7 +19,7 @@ function Spinner() {
 
 export default function LiveMatchCard({ match, state, onAnalyze }) {
   const { t } = useLang()
-  const { analyzing, phase, report, grounding, error, expanded } = state || {}
+  const { analyzing, report, grounding, error, expanded } = state || {}
 
   return (
     <div className="rounded-xl border border-[#D4AF37]/10 bg-navy-900/60 p-4">
@@ -47,7 +45,7 @@ export default function LiveMatchCard({ match, state, onAnalyze }) {
       {analyzing && (
         <div dir="rtl" className="mt-3 flex items-center gap-2 rounded-lg border border-[#D4AF37]/10 bg-navy-900/40 px-3 py-2 text-xs text-slate-400">
           <Spinner />
-          <span>{t(PHASE_KEY[phase] || 'analyzingNarrative')}</span>
+          <span>{t('analyzingQuick')}</span>
         </div>
       )}
 

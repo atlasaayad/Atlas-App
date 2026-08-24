@@ -73,11 +73,24 @@ CREATE TABLE IF NOT EXISTS ask_usage (
 
 -- Same shape and purpose as ask_usage above, but for ATLAS PREDICT's
 -- "تحليل وتوقعات" report generation (client/src/predict, server/src/routes/
--- predict.js) — a separate counter since it's a heavier claude-sonnet-5
--- call and unrelated to the factory tracker's Ask Atlas feature.
+-- predict.js) — a separate counter, unrelated to the factory tracker's
+-- Ask Atlas feature.
 CREATE TABLE IF NOT EXISTS predict_analysis_usage (
   date TEXT PRIMARY KEY,
   count INTEGER NOT NULL DEFAULT 0
+);
+
+-- Shared cache for football-data.org responses (free tier: 10 requests/
+-- minute, system-wide). A plain in-memory cache doesn't work here — Vercel
+-- doesn't guarantee the same warm instance handles the next request, so two
+-- requests seconds apart can land on different cold instances with no
+-- shared memory. Postgres is the one thing every instance actually shares.
+-- Keyed by a descriptive string (e.g. "match:12345", "standings:PL") built
+-- in predict.js; predict.js also owns the TTL check against fetched_at.
+CREATE TABLE IF NOT EXISTS predict_football_cache (
+  cache_key TEXT PRIMARY KEY,
+  data JSONB NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS models (
