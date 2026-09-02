@@ -15,20 +15,30 @@ import { CHAIN_NUMBERS } from '../lib/constants'
 
 export default function Home() {
   const [chains, setChains] = useState([])
+  const [chainsLoaded, setChainsLoaded] = useState(false)
   const [chainNumber, setChainNumber] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
     api.getChains().then((data) => {
       setChains(data)
-      const firstActive = data.find((c) => c.model)
-      if (firstActive) setChainNumber(firstActive.chainNumber)
+      // Default to whichever chain someone actually worked on most recently
+      // today — never a fixed/first one, which could easily be old demo
+      // data nobody touched. If nothing happened today, leave no chain
+      // selected: the empty state below asks the user to pick one rather
+      // than silently defaulting to a stale model.
+      const withActivityToday = data.filter((c) => c.model && c.lastActivityToday)
+      const mostRecent = withActivityToday.sort(
+        (a, b) => new Date(b.lastActivityToday) - new Date(a.lastActivityToday)
+      )[0]
+      if (mostRecent) setChainNumber(mostRecent.chainNumber)
+      setChainsLoaded(true)
     })
     const id = setInterval(() => api.getChains().then(setChains).catch(() => {}), 20000)
     return () => clearInterval(id)
   }, [])
 
-  const { data, error } = usePolling(
+  const { data, error, loading } = usePolling(
     () => (chainNumber ? api.getDashboardByChain(chainNumber) : Promise.resolve(null)),
     [chainNumber]
   )
@@ -85,21 +95,36 @@ export default function Home() {
 
       <EarlyWarningBanner />
 
-      {!chainNumber && (
+      {!chainsLoaded && <LoadingSpinner />}
+
+      {chainsLoaded && !chainNumber && (
         <GlowCard>
           <div className="py-10 text-center text-slate-400">
-            Aucune chaîne active pour le moment. Sélectionnez un module ou une chaîne.
+            {moduleOptions.length > 0
+              ? "لا يوجد نشاط مسجل اليوم على أي سلسلة بعد. اختر سلسلة أو موديل من القائمة فوق."
+              : 'Aucune chaîne active pour le moment. Sélectionnez un module ou une chaîne.'}
           </div>
         </GlowCard>
       )}
 
-      {chainNumber && error && (
+      {chainsLoaded && chainNumber && loading && !data && <LoadingSpinner />}
+
+      {chainsLoaded && chainNumber && !loading && error && (
         <GlowCard>
           <div className="py-10 text-center text-slate-400">Aucun modèle actif sur la Chaîne {chainNumber}.</div>
         </GlowCard>
       )}
 
       {chainNumber && data && <DashboardBody data={data} />}
+    </div>
+  )
+}
+
+function LoadingSpinner() {
+  return (
+    <div className="flex flex-col items-center gap-3 py-16 text-slate-400">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+      <div className="text-sm">Chargement…</div>
     </div>
   )
 }

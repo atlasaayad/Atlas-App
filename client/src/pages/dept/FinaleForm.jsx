@@ -81,7 +81,7 @@ export default function FinaleForm({ token, chainNumber }) {
               type="number"
               inputMode="numeric"
               min="0"
-              value={enCours}
+              value={enCours || ''}
               onChange={(e) => setEnCours(e.target.value)}
               className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
             />
@@ -101,7 +101,7 @@ export default function FinaleForm({ token, chainNumber }) {
                     type="number"
                     inputMode="numeric"
                     min="0"
-                    value={details[key] ?? 0}
+                    value={details[key] || ''}
                     onChange={(e) => setDetails({ ...details, [key]: e.target.value })}
                     className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
                   />

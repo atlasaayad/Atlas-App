@@ -446,7 +446,7 @@ function NumField({ label, value, onChange }) {
       <input
         type="number"
         inputMode="numeric"
-        value={value}
+        value={value || ''}
         onChange={(e) => onChange(e.target.value)}
         className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
       />

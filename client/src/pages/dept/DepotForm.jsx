@@ -45,7 +45,7 @@ export default function DepotForm({ token, chainNumber }) {
               type="number"
               inputMode="numeric"
               min="0"
-              value={totalPieces}
+              value={totalPieces || ''}
               onChange={(e) => setTotalPieces(e.target.value)}
               className="h-12 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-lg text-slate-200 focus:border-turquoise focus:outline-none"
             />

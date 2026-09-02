@@ -303,7 +303,7 @@ function GammeTab({ token, model, onSaved }) {
             <input
               type="number"
               inputMode="numeric"
-              value={line.tps}
+              value={line.tps || ''}
               onChange={(e) => updateLine(i, { tps: e.target.value })}
               placeholder="TPS (s)"
               className="rounded border border-slate-700 bg-navy-900 px-2.5 py-2.5 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
@@ -369,7 +369,7 @@ function EffectifTab({ token, model, onSaved }) {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
         {SPECIALTIES.map((sp) => (
           <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
-            <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={30} />
+            <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={999} />
             {voiceMode && (
               <VoiceMicButton label={sp} onConfirm={(n) => setEffectif({ ...effectif, [sp]: n })} />
             )}
