@@ -74,7 +74,9 @@ export const api = {
     updateEffectif: (token, id, effectif) => request(`/methode/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
   },
   production: {
-    updateHourly: (token, id, slotIndex, qty) => request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty }, token }),
+    getHourly: (token, id, date) => request(`/production/models/${id}/hourly?date=${date}`, { token }),
+    updateHourly: (token, id, slotIndex, qty, date) =>
+      request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty, date }, token }),
     updateTotals: (token, id, totalEntree) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree }, token }),
   },
   rh: {

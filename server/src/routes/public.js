@@ -94,7 +94,15 @@ export async function fullDashboard(model) {
   const [effectifRows, hourlyRows, totalsRow, rhRows, qualityRow, finaleRow, depotRow, exportRows, postes] =
     await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
-      all('SELECT * FROM hourly_production WHERE model_id = $1', [model.id]),
+      // Today's hourly data comes from production_history — the single
+      // source of truth for hourly production, today included (see the
+      // comment on that table). A correction Agent Production makes to
+      // today's hours, via the date picker or otherwise, lands here and is
+      // reflected on this dashboard on the very next read.
+      all('SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2', [
+        model.chain_number,
+        todayInFactoryTZ(),
+      ]),
       get('SELECT * FROM production_totals WHERE model_id = $1', [model.id]),
       all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id]),
       get('SELECT * FROM quality WHERE model_id = $1', [model.id]),

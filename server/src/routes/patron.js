@@ -32,7 +32,9 @@ const EXPORT_TABLES = [
   { sheet: 'Modeles', table: 'models', orderBy: 'chain_number' },
   { sheet: 'Gamme', table: 'gamme_lines', orderBy: 'model_id, seq_no' },
   { sheet: 'Effectif Requis', table: 'effectif_requis', orderBy: 'model_id, specialty' },
-  { sheet: 'Production Horaire', table: 'hourly_production', orderBy: 'model_id, slot_index' },
+  // production_history is the full permanent record (every date, not just
+  // today) — the single source of truth for hourly production.
+  { sheet: 'Production Horaire', table: 'production_history', orderBy: 'chain_number, date, slot_index' },
   { sheet: 'Totaux Production', table: 'production_totals', orderBy: 'model_id' },
   { sheet: 'Presence RH', table: 'rh_attendance', orderBy: 'model_id, specialty' },
   { sheet: 'Qualite', table: 'quality', orderBy: 'model_id' },

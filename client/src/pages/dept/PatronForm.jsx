@@ -115,6 +115,11 @@ function AuditLogTab({ token }) {
                     {e.modelClient} {e.modelDessin && `· ${e.modelDessin}`}
                   </div>
                 )}
+                {e.details?.isBackdated && (
+                  <div className="mt-1 inline-block rounded border border-amber bg-amber-soft px-1.5 py-0.5 text-xs text-amber">
+                    🕒 تعديل بأثر رجعي — بيانات يوم {e.details.date}
+                  </div>
+                )}
               </div>
               <div className="shrink-0 whitespace-nowrap font-mono text-xs text-slate-500">
                 {formatDateTime(e.createdAt)}

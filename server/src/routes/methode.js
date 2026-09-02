@@ -59,11 +59,12 @@ methodeRouter.post('/models', async (req, res) => {
     [id, client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, chainNumber, now]
   )
 
+  // No hourly_production seeding — production_history has no rows yet for
+  // this brand-new model, and an absent row already reads back as qty 0
+  // wherever hourly data is displayed, so there's nothing to pre-create.
   const effectifRows = buildBulkInsert(SPECIALTIES.map((spec) => [id, spec, 0]))
-  const hourlyRows = buildBulkInsert(Array.from({ length: 9 }, (_, i) => [id, i, 0, now]))
   await Promise.all([
     run(`INSERT INTO effectif_requis (model_id, specialty, required) VALUES ${effectifRows.valuesSql}`, effectifRows.params),
-    run(`INSERT INTO hourly_production (model_id, slot_index, qty, updated_at) VALUES ${hourlyRows.valuesSql}`, hourlyRows.params),
     run('INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, 0, 0, $2)', [id, now]),
     // No quality row seeded here on purpose: a fake "100%" would look like a
     // real confirmation from Quality before they've ever reported anything.

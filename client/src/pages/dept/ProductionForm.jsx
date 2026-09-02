@@ -5,10 +5,15 @@ import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { todayInFactoryTZ } from '../../lib/date'
 
 export default function ProductionForm({ token, chainNumber }) {
   const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
-  const [hourly, setHourly] = useState({})
+  const TODAY = todayInFactoryTZ()
+  const [selectedDate, setSelectedDate] = useState(TODAY)
+  const [dateError, setDateError] = useState('')
+  const [hourlySlots, setHourlySlots] = useState([])
+  const [hourlyLoading, setHourlyLoading] = useState(false)
   const [totalEntree, setTotalEntree] = useState('')
   const [savingSlot, setSavingSlot] = useState(null)
   const [savedSlots, setSavedSlots] = useState({})
@@ -18,26 +23,58 @@ export default function ProductionForm({ token, chainNumber }) {
   const [totalsError, setTotalsError] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
 
-  // Initialize local state from the dashboard exactly once per model (chain
-  // switch / initial load) — never again on a later background refresh.
-  // Re-running this on every `dashboard` change (the old behavior) meant
-  // saving ONE hourly slot re-synced ALL of them from the server, silently
-  // discarding whatever the user had typed but not yet confirmed in any
-  // other field.
+  // "Total entré" always refers to today, regardless of which date is
+  // selected above the hourly table — initialize it exactly once per model
+  // (chain switch / initial load), never again on a later background
+  // refresh, for the same reason as the hourly fix below: a background
+  // refresh must never silently discard an unsaved edit elsewhere on screen.
   const initializedForRef = useRef(null)
   useEffect(() => {
     if (dashboard && initializedForRef.current !== modelId) {
-      setHourly(Object.fromEntries(dashboard.hourly.map((h) => [h.index, h.qty])))
       setTotalEntree(dashboard.bilan.totalEntree)
       initializedForRef.current = modelId
     }
   }, [dashboard, modelId])
 
+  // Load the selected day's hourly slots — today's or any previous day's —
+  // straight from production_history via the dedicated endpoint, so this
+  // form always shows exactly what's really saved for that date.
+  useEffect(() => {
+    if (!modelId) return
+    let cancelled = false
+    setHourlyLoading(true)
+    api.production.getHourly(token, modelId, selectedDate).then((r) => {
+      if (cancelled) return
+      setHourlySlots(r.hourly)
+      setSavedSlots({})
+      setSlotErrors({})
+      setHourlyLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [modelId, selectedDate, token])
+
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
   if (!modelId) return <NoModel chainNumber={chainNumber} />
 
+  const minDate = dashboard.identity.debut || null
+
+  function handleDateChange(value) {
+    if (value > TODAY) {
+      setDateError('ما تقدر تدخل بيانات لتاريخ مستقبلي.')
+      return
+    }
+    if (minDate && value < minDate) {
+      setDateError(`ما تقدر تدخل بيانات قبل تاريخ بداية الموديل (${minDate}).`)
+      return
+    }
+    setDateError('')
+    setSelectedDate(value)
+  }
+
   function updateSlot(idx, value) {
-    setHourly({ ...hourly, [idx]: value })
+    setHourlySlots((prev) => prev.map((s) => (s.index === idx ? { ...s, qty: value } : s)))
     // The displayed value no longer matches what's saved — drop the
     // "Modifier ✓" confirmation until it's saved again.
     setSavedSlots((s) => ({ ...s, [idx]: false }))
@@ -45,12 +82,13 @@ export default function ProductionForm({ token, chainNumber }) {
   }
 
   async function saveSlot(idx) {
+    const slot = hourlySlots.find((s) => s.index === idx)
     setSavingSlot(idx)
     setSlotErrors((s) => ({ ...s, [idx]: false }))
     try {
-      await api.production.updateHourly(token, modelId, idx, Number(hourly[idx]) || 0)
+      await api.production.updateHourly(token, modelId, idx, Number(slot?.qty) || 0, selectedDate)
       setSavedSlots((s) => ({ ...s, [idx]: true }))
-      refresh() // silent — no longer flips `loading`, see useChainModel
+      refresh() // silent — no longer flips `loading`, see useChainModel; keeps today's live dashboard figures in sync
     } catch {
       setSlotErrors((s) => ({ ...s, [idx]: true }))
     } finally {
@@ -74,55 +112,74 @@ export default function ProductionForm({ token, chainNumber }) {
     }
   }
 
+  const isBackdated = selectedDate !== TODAY
+
   return (
     <div className="space-y-4">
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
 
       <GlowCard title="Production par heure">
+        <label className="mb-3 block max-w-xs">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">التاريخ</span>
+          <input
+            type="date"
+            value={selectedDate}
+            min={minDate || undefined}
+            max={TODAY}
+            onChange={(e) => handleDateChange(e.target.value)}
+            className="h-11 w-full rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+          />
+        </label>
+        {dateError && <div className="mb-3 text-sm text-status-bad">{dateError}</div>}
+        {!dateError && isBackdated && (
+          <div className="mb-3 rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
+            ⚠️ تعدّل بيانات يوم سابق ({selectedDate}) — أي حفظ هنا يُسجَّل بأثر رجعي بسجل التعديلات.
+          </div>
+        )}
         <p className="mb-3 text-sm text-slate-400">أدخل عدد القطع المنتجة بكل ساعة، واضغط OK لحفظها.</p>
-        <div className="space-y-2.5">
-          {dashboard.hourly.map((slot) => (
-            <div key={slot.index}>
-              <div className="flex items-center gap-2.5">
-                <span className="w-24 shrink-0 font-mono text-xs text-slate-400">{slot.label}</span>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  value={hourly[slot.index] || ''}
-                  onChange={(e) => updateSlot(slot.index, e.target.value)}
-                  className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
-                />
-                {voiceMode && (
-                  <VoiceMicButton
-                    label={slot.label}
-                    onConfirm={(n) => updateSlot(slot.index, n)}
+        {hourlyLoading ? (
+          <div className="py-6 text-center text-sm text-slate-500">Chargement…</div>
+        ) : (
+          <div className="space-y-2.5">
+            {hourlySlots.map((slot) => (
+              <div key={slot.index}>
+                <div className="flex items-center gap-2.5">
+                  <span className="w-24 shrink-0 font-mono text-xs text-slate-400">{slot.label}</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={slot.qty || ''}
+                    onChange={(e) => updateSlot(slot.index, e.target.value)}
+                    className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
                   />
-                )}
-                <button
-                  onClick={() => saveSlot(slot.index)}
-                  disabled={savingSlot === slot.index}
-                  className={`h-11 shrink-0 rounded border px-4 text-sm font-medium disabled:opacity-50 ${
-                    savedSlots[slot.index]
-                      ? 'border-turquoise bg-turquoise text-navy-950 active:bg-turquoise/80'
-                      : 'border-turquoise/50 text-turquoise active:bg-turquoise/10'
-                  }`}
-                >
-                  {savingSlot === slot.index ? '…' : savedSlots[slot.index] ? 'Modifier ✓' : 'OK'}
-                </button>
-              </div>
-              {slotErrors[slot.index] && (
-                <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
-                  فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.
+                  {voiceMode && <VoiceMicButton label={slot.label} onConfirm={(n) => updateSlot(slot.index, n)} />}
+                  <button
+                    onClick={() => saveSlot(slot.index)}
+                    disabled={savingSlot === slot.index}
+                    className={`h-11 shrink-0 rounded border px-4 text-sm font-medium disabled:opacity-50 ${
+                      savedSlots[slot.index]
+                        ? 'border-turquoise bg-turquoise text-navy-950 active:bg-turquoise/80'
+                        : 'border-turquoise/50 text-turquoise active:bg-turquoise/10'
+                    }`}
+                  >
+                    {savingSlot === slot.index ? '…' : savedSlots[slot.index] ? 'Modifier ✓' : 'OK'}
+                  </button>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+                {slotErrors[slot.index] && (
+                  <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
+                    فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </GlowCard>
 
       <GlowCard title="Total entré">
         <p className="mb-3 text-sm text-slate-400">
-          أدخل مرة واحدة، بآخر ساعة من اليوم: مجموع القطع اللي دخلت السلسلة كامل اليوم.
+          أدخل مرة واحدة، بآخر ساعة من اليوم: مجموع القطع اللي دخلت السلسلة كامل اليوم. (يبقى دائماً لليوم الحالي، بغض
+          النظر عن التاريخ المختار فوق.)
         </p>
         <form onSubmit={saveTotals} className="flex items-end gap-3">
           <label className="block flex-1">
