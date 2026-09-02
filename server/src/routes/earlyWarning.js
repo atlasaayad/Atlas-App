@@ -5,10 +5,10 @@ import { todayInFactoryTZ, detectDeclineTrend } from '../calc.js'
 export const earlyWarningRouter = Router()
 
 // Public, no auth — shown on the home dashboard the same way the rest of
-// it is. Reads only production_history (permanent, one row per chain/date/
-// slot actually saved by Agent Production) rather than the live
-// hourly_production table, which is overwritten in place day to day and so
-// can't reliably tell "recorded today" apart from a stale leftover value.
+// it is. Reads production_history (permanent, one row per chain/date/slot
+// actually saved by Agent Production — the single source of truth for
+// hourly data), so a correction made through the date picker is reflected
+// here on the very next check, same as everywhere else.
 earlyWarningRouter.get('/early-warnings', async (req, res) => {
   const today = todayInFactoryTZ()
   const activeModels = await all(

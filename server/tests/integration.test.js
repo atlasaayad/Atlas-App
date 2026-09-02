@@ -196,6 +196,125 @@ test('gamme/effectif → ND/VT/DT, sauvegarde production → reflet sur le dashb
   })
 })
 
+test('منتقي التاريخ لـAgent Production: تعديل يوم سابق، التحقق من النطاق، وانعكاس فوري على كل مكان', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  function daysAgo(n) {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - n)
+    return d.toISOString().slice(0, 10)
+  }
+  const today = todayInFactoryTZ()
+  const yesterday = daysAgo(1)
+  const debut = daysAgo(5)
+  const beforeDebut = daysAgo(6)
+  const tomorrow = daysAgo(-1)
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_DATEPICKER', qteTotale: 1000, dessin: 'TEST-DP', chainNumber: TEST_CHAIN, debut },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId]) // cascades, including production_history
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('لا بيانات ليوم سابق بعد → كل الساعات صفر', async () => {
+    const res = await call(`/production/models/${modelId}/hourly?date=${yesterday}`, { token: productionToken })
+    assert.equal(res.status, 200)
+    assert.equal(res.data.date, yesterday)
+    assert.ok(res.data.hourly.every((h) => h.qty === 0))
+  })
+
+  await t.test('حفظ ساعة ليوم سابق: يُقبل، يُعلَّم كتعديل بأثر رجعي، وينحفظ فعلياً', async () => {
+    const put = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 130, date: yesterday },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.date, yesterday)
+    assert.equal(put.data.isBackdated, true)
+
+    const reloaded = await call(`/production/models/${modelId}/hourly?date=${yesterday}`, { token: productionToken })
+    assert.equal(reloaded.data.hourly.find((h) => h.index === 0).qty, 130)
+
+    const log = await get(
+      `SELECT details FROM audit_log WHERE model_id = $1 AND action = 'update_hourly' ORDER BY created_at DESC LIMIT 1`,
+      [modelId]
+    )
+    const details = JSON.parse(log.details)
+    assert.equal(details.date, yesterday)
+    assert.equal(details.isBackdated, true)
+  })
+
+  await t.test('تعديل رقم موجود أصلاً بيوم سابق ينعكس فوراً', async () => {
+    await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 999, date: yesterday },
+    })
+    const reloaded = await call(`/production/models/${modelId}/hourly?date=${yesterday}`, { token: productionToken })
+    assert.equal(reloaded.data.hourly.find((h) => h.index === 0).qty, 999)
+  })
+
+  await t.test('أرشيف Historique ليوم الأمس يعكس القيمة الجديدة فوراً', async () => {
+    const hist = await call(`/chains/${TEST_CHAIN}/history/day?date=${yesterday}`)
+    assert.equal(hist.status, 200)
+    assert.equal(hist.data.total, 999)
+    assert.equal(hist.data.recordsCount, 1)
+  })
+
+  await t.test('تعديل يوم سابق ما يؤثر على لوحة اليوم الحالي', async () => {
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.status, 200)
+    assert.ok(dashboard.data.hourly.every((h) => h.qty === 0)) // اليوم لسه ما فيه أي إدخال
+  })
+
+  await t.test('حفظ ساعة لليوم الحالي فعلاً ينعكس على اللوحة الحية (production_history هو مصدر الحقيقة الوحيد)', async () => {
+    const put = await call(`/production/models/${modelId}/hourly/2`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 250, date: today },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.isBackdated, false)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.hourly.find((h) => h.index === 2).qty, 250)
+    assert.equal(dashboard.data.produit, 250) // prodAMaintenant تحسب من نفس المصدر
+  })
+
+  await t.test('رفض تاريخ مستقبلي', async () => {
+    const put = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 50, date: tomorrow },
+    })
+    assert.equal(put.status, 400)
+    assert.equal(put.data.error, 'date_in_future')
+  })
+
+  await t.test('رفض تاريخ قبل Début الموديل', async () => {
+    const put = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 50, date: beforeDebut },
+    })
+    assert.equal(put.status, 400)
+    assert.equal(put.data.error, 'date_before_debut')
+  })
+})
+
 // The full /api/ask route can't be driven past the daily-limit check in this
 // environment (no real ANTHROPIC_API_KEY means it 503s before ever reaching
 // it), so this exercises the counting/limiting logic directly — it's the

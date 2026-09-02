@@ -115,6 +115,31 @@ Documented here as they're added — see each subsection for what it does,
 who uses it, and which fields/tables it touches. Keep this current: every
 new major feature gets its own entry.
 
+### Backdated Production Entry (Agent Production)
+
+A date picker above "Production par heure" (`ProductionForm.jsx`,
+`GET/PUT /api/production/models/:id/hourly`) lets Agent Production go back
+and enter or correct any previous day's hourly output — not just today —
+bounded to `[model.debut, today]` and validated on both client and server.
+
+- **Single source of truth**: hourly production has no separate "today"
+  table — `production_history` (permanent, keyed by chain/date/slot) is
+  read for today exactly the same way it's read for any other date. This
+  is what guarantees a backdated correction shows up immediately and
+  everywhere: the live dashboard (when the edited date is today),
+  Historique's day/range/month aggregates, the early-warning agent, and
+  Patron's full-data export — none of them hold a second, potentially
+  stale copy. An earlier `hourly_production` table played that live-cache
+  role; it's retired.
+- **Audit trail**: every save is logged with the affected `date`; a save to
+  any date other than today is additionally flagged `isBackdated: true` and
+  shown with an explicit "🕒 تعديل بأثر رجعي" marker in Patron's Journal des
+  modifications — distinct from routine same-day entry, so a later review
+  (BSCI/SMETA or otherwise) can see exactly where a retroactive change was
+  made.
+- **"Total entré"** is unaffected by the date picker — it's a single daily
+  figure entered once by Agent Production and always refers to today.
+
 ### Early Warning Agent (Home dashboard, public)
 
 Proactive alert banner (`EarlyWarningBanner` component, `GET
@@ -127,11 +152,10 @@ system stays exactly as it was, this is an earlier, additional signal.
   has **3 or more consecutive hours** (genuinely consecutive slot indices,
   no gaps) of strictly decreasing output. A single bad hour, a dip that
   recovers, or a gap in reporting never triggers it.
-- **Real data only**: reads `production_history` (permanent, dated rows —
-  see the note on `hourly_production` vs. `production_history` in the
-  schema) filtered to today, never the live `hourly_production` grid, which
-  can hold a stale value left over from a previous day. Fewer than 3 hours
-  actually recorded today means no alert, never a guess.
+- **Real data only**: reads `production_history` (the single source of
+  truth for hourly data — see Backdated Production Entry above) filtered to
+  today. Fewer than 3 hours actually recorded today means no alert, never a
+  guess.
 - **Auto-clears**: nothing is persisted as "an active alert" — it's
   recomputed from live data on every poll (every 20s), so a chain that
   posts a better hour next simply stops appearing, no manual dismissal.

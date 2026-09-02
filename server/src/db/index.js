@@ -126,14 +126,6 @@ CREATE TABLE IF NOT EXISTS effectif_requis (
   PRIMARY KEY (model_id, specialty)
 );
 
-CREATE TABLE IF NOT EXISTS hourly_production (
-  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-  slot_index INTEGER NOT NULL,
-  qty INTEGER DEFAULT 0,
-  updated_at TEXT,
-  PRIMARY KEY (model_id, slot_index)
-);
-
 CREATE TABLE IF NOT EXISTS production_totals (
   model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
   total_entree INTEGER DEFAULT 0,
@@ -143,9 +135,13 @@ CREATE TABLE IF NOT EXISTS production_totals (
 
 -- Permanent record of every hourly entry, keyed by chain (not model) so a
 -- history query for "Chaîne 1" still spans correctly across a model change
--- mid-range. hourly_production above stays as the live "today" view that
--- gets overwritten in place; this table only ever grows, and is what
--- Historique's day/range/month aggregates are computed from.
+-- mid-range, and by date so Agent Production can go back and enter/correct
+-- any previous day — not just today. This is the ONLY source of truth for
+-- hourly production data: today's live dashboard reads it filtered to
+-- today's date, exactly the same way Historique reads any other date, so
+-- there is never a second "current" copy that could drift out of sync.
+-- (An earlier hourly_production table played that live-snapshot role;
+-- it's retired in favor of always reading this one.)
 CREATE TABLE IF NOT EXISTS production_history (
   id TEXT PRIMARY KEY,
   model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,

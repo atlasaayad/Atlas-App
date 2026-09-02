@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { get, run, ensureSchema, logAudit } from './index.js'
 import { DEPARTMENTS, SPECIALTIES } from '../constants.js'
-import { computeVTMinutes, computeDT } from '../calc.js'
+import { computeVTMinutes, computeDT, todayInFactoryTZ } from '../calc.js'
 
 // Default 4-digit PINs, one per department. Override per-deployment via env
 // vars (PIN_METHODE, PIN_PRODUCTION, ...). Unlike the rest of the seed data,
@@ -93,13 +93,13 @@ async function seedDemoModel() {
   await run('UPDATE models SET nd = $1, vt = $2, dt = $3, updated_at = $4 WHERE id = $5', [nd, vt, dt, now, modelId])
 
   const demoQty = [385, 402, 390, 360, 410, 520, 395, 388, 0]
+  const today = todayInFactoryTZ()
   for (let idx = 0; idx < demoQty.length; idx++) {
-    await run('INSERT INTO hourly_production (model_id, slot_index, qty, updated_at) VALUES ($1, $2, $3, $4)', [
-      modelId,
-      idx,
-      demoQty[idx],
-      now,
-    ])
+    await run(
+      `INSERT INTO production_history (id, model_id, chain_number, date, slot_index, qty, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+      [`ph_demo_${idx}`, modelId, 1, today, idx, demoQty[idx], now]
+    )
   }
 
   await run(
