@@ -15,13 +15,21 @@ earlyWarningRouter.get('/early-warnings', async (req, res) => {
     'SELECT client, dessin, chain_number FROM models WHERE active = 1 ORDER BY chain_number'
   )
 
-  const warnings = []
-  for (const model of activeModels) {
-    const rows = await all(
-      'SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2 ORDER BY slot_index ASC',
-      [model.chain_number, today]
+  // One query per active chain, all fired together — a sequential loop here
+  // would mean the whole banner (and the Home page load that includes it)
+  // gets slower every time a new chain becomes active.
+  const rowsByModel = await Promise.all(
+    activeModels.map((model) =>
+      all(
+        'SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2 ORDER BY slot_index ASC',
+        [model.chain_number, today]
+      )
     )
-    const trend = detectDeclineTrend(rows.map((r) => ({ slotIndex: r.slot_index, qty: r.qty })))
+  )
+
+  const warnings = []
+  activeModels.forEach((model, i) => {
+    const trend = detectDeclineTrend(rowsByModel[i].map((r) => ({ slotIndex: r.slot_index, qty: r.qty })))
     if (trend) {
       warnings.push({
         chainNumber: model.chain_number,
@@ -30,7 +38,7 @@ earlyWarningRouter.get('/early-warnings', async (req, res) => {
         ...trend,
       })
     }
-  }
+  })
 
   res.json({ warnings })
 })

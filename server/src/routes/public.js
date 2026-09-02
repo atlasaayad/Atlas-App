@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
 import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
-import { computeObjectifJour, prodAMaintenant } from '../calc.js'
+import { computeObjectifJour, prodAMaintenant, todayInFactoryTZ } from '../calc.js'
 
 export const publicRouter = Router()
 
@@ -42,7 +42,37 @@ publicRouter.get('/models', async (req, res) => {
 publicRouter.get('/chains', async (req, res) => {
   const active = await all('SELECT id, client, dessin, chain_number FROM models WHERE active = 1')
   const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
-  res.json(CHAIN_NUMBERS.map((n) => ({ chainNumber: n, model: byChain[n] || null })))
+
+  // "Most recent real activity today" per chain, so the client can default
+  // Home to whichever chain someone actually worked on today instead of a
+  // fixed/arbitrary one. Pulls a generous 48h window (comfortably covering
+  // any UTC/local skew) and filters to "today" in JS with todayInFactoryTZ
+  // — the same helper every other date-boundary decision in this app uses
+  // — rather than reproducing that logic in SQL against a UTC column.
+  const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+  const recentLogs = await all(
+    `SELECT a.created_at, m.chain_number FROM audit_log a
+     JOIN models m ON m.id = a.model_id
+     WHERE a.created_at >= $1 AND m.active = 1 AND a.dept_key <> 'system'
+     ORDER BY a.created_at DESC`,
+    [since]
+  )
+  const today = todayInFactoryTZ()
+  const lastActivityByChain = {}
+  for (const row of recentLogs) {
+    if (lastActivityByChain[row.chain_number]) continue // rows are DESC — first hit per chain is the most recent
+    if (todayInFactoryTZ(new Date(row.created_at)) === today) {
+      lastActivityByChain[row.chain_number] = row.created_at
+    }
+  }
+
+  res.json(
+    CHAIN_NUMBERS.map((n) => ({
+      chainNumber: n,
+      model: byChain[n] || null,
+      lastActivityToday: lastActivityByChain[n] || null,
+    }))
+  )
 })
 
 publicRouter.get('/models/:id', async (req, res) => {
@@ -56,11 +86,27 @@ publicRouter.get('/models/:id', async (req, res) => {
 })
 
 export async function fullDashboard(model) {
-  const effectifRows = await all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id])
+  // All 9 lookups below are independent (keyed only by model.id) and none
+  // depends on another's result, so they're fired together instead of
+  // awaited one at a time — on a real network hop to Postgres (Neon), 9
+  // sequential round trips vs. 1 parallel batch is the difference between a
+  // dashboard load that visibly hangs and one that doesn't.
+  const [effectifRows, hourlyRows, totalsRow, rhRows, qualityRow, finaleRow, depotRow, exportRows, postes] =
+    await Promise.all([
+      all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
+      all('SELECT * FROM hourly_production WHERE model_id = $1', [model.id]),
+      get('SELECT * FROM production_totals WHERE model_id = $1', [model.id]),
+      all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id]),
+      get('SELECT * FROM quality WHERE model_id = $1', [model.id]),
+      get('SELECT * FROM finale WHERE model_id = $1', [model.id]),
+      get('SELECT * FROM depot WHERE model_id = $1', [model.id]),
+      all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id]),
+      all('SELECT * FROM poste_status WHERE model_id = $1', [model.id]),
+    ])
+
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of effectifRows) effectifRequis[r.specialty] = r.required
 
-  const hourlyRows = await all('SELECT * FROM hourly_production WHERE model_id = $1', [model.id])
   const hourlyMap = Object.fromEntries(hourlyRows.map((r) => [r.slot_index, r.qty]))
   const hourly = HOURLY_SLOTS.map((s) => ({
     ...s,
@@ -68,9 +114,7 @@ export async function fullDashboard(model) {
     pct: model.dt > 0 ? Math.round(((hourlyMap[s.index] || 0) / model.dt) * 100) : 0,
   }))
 
-  const totals = (await get('SELECT * FROM production_totals WHERE model_id = $1', [model.id])) || {
-    total_entree: 0,
-  }
+  const totals = totalsRow || { total_entree: 0 }
   const demande = Math.round(computeObjectifJour(model.dt))
   const produit = prodAMaintenant(hourlyMap)
   const restant = Math.max(demande - produit, 0)
@@ -81,7 +125,6 @@ export async function fullDashboard(model) {
   const totalSortie = produit
   const enCours = totals.total_entree - totalSortie
 
-  const rhRows = await all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id])
   const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of rhRows) present[r.specialty] = r.present
   const effectifs = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
@@ -90,8 +133,8 @@ export async function fullDashboard(model) {
   // No row yet means Quality hasn't reported anything for this model — that
   // must never look like a real "100% quality" confirmation, so it's null
   // (rendered as "not reported yet"), not a number nobody actually entered.
-  const quality = (await get('SELECT * FROM quality WHERE model_id = $1', [model.id])) || { percentage: null, reprises: null }
-  const finale = (await get('SELECT * FROM finale WHERE model_id = $1', [model.id])) || {
+  const quality = qualityRow || { percentage: null, reprises: null }
+  const finale = finaleRow || {
     en_cours: 0,
     piece_retouche: 0,
     piece_terminee: 0,
@@ -103,11 +146,9 @@ export async function fullDashboard(model) {
     moyenne_prod_repassage_final: 0,
     moyenne_prod_controle_final: 0,
   }
-  const depot = (await get('SELECT * FROM depot WHERE model_id = $1', [model.id])) || { total_pieces: 0 }
-  const exportRows = await all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id])
+  const depot = depotRow || { total_pieces: 0 }
   const exports = exportRows.map((e) => ({ ...e, client: model.client, mod: model.dessin }))
 
-  const postes = await all('SELECT * FROM poste_status WHERE model_id = $1', [model.id])
   const posteMap = Object.fromEntries(postes.map((p) => [p.dept_key, p]))
   // No status row yet means that department has never reported anything for
   // this model — that must never be shown as a fake "100% good", so it gets
