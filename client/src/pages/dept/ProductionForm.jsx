@@ -89,8 +89,11 @@ export default function ProductionForm({ token, chainNumber }) {
       await api.production.updateHourly(token, modelId, idx, Number(slot?.qty) || 0, selectedDate)
       setSavedSlots((s) => ({ ...s, [idx]: true }))
       refresh() // silent — no longer flips `loading`, see useChainModel; keeps today's live dashboard figures in sync
-    } catch {
-      setSlotErrors((s) => ({ ...s, [idx]: true }))
+    } catch (err) {
+      // The request itself is bounded (see REQUEST_TIMEOUT_MS in api.js), so
+      // this always resolves within a few seconds either way — the user is
+      // never left staring at a spinner with no explanation.
+      setSlotErrors((s) => ({ ...s, [idx]: err.timedOut ? 'timeout' : true }))
     } finally {
       setSavingSlot(null)
     }
@@ -105,8 +108,8 @@ export default function ProductionForm({ token, chainNumber }) {
       setTotalsSaved(true)
       refresh()
       setTimeout(() => setTotalsSaved(false), 2000)
-    } catch {
-      setTotalsError(true)
+    } catch (err) {
+      setTotalsError(err.timedOut ? 'timeout' : true)
     } finally {
       setSavingTotals(false)
     }
@@ -138,7 +141,10 @@ export default function ProductionForm({ token, chainNumber }) {
         )}
         <p className="mb-3 text-sm text-slate-400">أدخل عدد القطع المنتجة بكل ساعة، واضغط OK لحفظها.</p>
         {hourlyLoading ? (
-          <div className="py-6 text-center text-sm text-slate-500">Chargement…</div>
+          <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+            Chargement…
+          </div>
         ) : (
           <div className="space-y-2.5">
             {hourlySlots.map((slot) => (
@@ -156,16 +162,27 @@ export default function ProductionForm({ token, chainNumber }) {
                   <button
                     onClick={() => saveSlot(slot.index)}
                     disabled={savingSlot === slot.index}
-                    className={`h-11 shrink-0 rounded border px-4 text-sm font-medium disabled:opacity-50 ${
+                    className={`flex h-11 shrink-0 items-center justify-center gap-1.5 rounded border px-4 text-sm font-medium disabled:opacity-50 ${
                       savedSlots[slot.index]
                         ? 'border-turquoise bg-turquoise text-navy-950 active:bg-turquoise/80'
                         : 'border-turquoise/50 text-turquoise active:bg-turquoise/10'
                     }`}
                   >
-                    {savingSlot === slot.index ? '…' : savedSlots[slot.index] ? 'Modifier ✓' : 'OK'}
+                    {savingSlot === slot.index ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+                    ) : savedSlots[slot.index] ? (
+                      'Modifier ✓'
+                    ) : (
+                      'OK'
+                    )}
                   </button>
                 </div>
-                {slotErrors[slot.index] && (
+                {slotErrors[slot.index] === 'timeout' && (
+                  <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
+                    انتهت مهلة الاتصال — الشبكة بطيئة جداً أو مقطوعة. تحقق من الاتصال وحاول مرة ثانية.
+                  </div>
+                )}
+                {slotErrors[slot.index] === true && (
                   <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
                     فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.
                   </div>
@@ -178,8 +195,8 @@ export default function ProductionForm({ token, chainNumber }) {
 
       <GlowCard title="Total entré">
         <p className="mb-3 text-sm text-slate-400">
-          أدخل مرة واحدة، بآخر ساعة من اليوم: مجموع القطع اللي دخلت السلسلة كامل اليوم. (يبقى دائماً لليوم الحالي، بغض
-          النظر عن التاريخ المختار فوق.)
+          أدخل المجموع الكلي للقطع اللي دخلت السلسلة من بداية الموديل لحد الآن (مش بس اليوم) — عدّله كل ما دخلت كمية
+          جديدة. (يبقى دائماً القيمة الحالية بغض النظر عن التاريخ المختار فوق.)
         </p>
         <form onSubmit={saveTotals} className="flex items-end gap-3">
           <label className="block flex-1">
@@ -199,12 +216,23 @@ export default function ProductionForm({ token, chainNumber }) {
           <button
             type="submit"
             disabled={savingTotals}
-            className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-6 text-sm font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
+            className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-turquoise bg-turquoise/10 px-6 text-sm font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
-            {savingTotals ? '…' : totalsSaved ? 'Enregistré ✓' : 'Enregistrer'}
+            {savingTotals ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+            ) : totalsSaved ? (
+              'Enregistré ✓'
+            ) : (
+              'Enregistrer'
+            )}
           </button>
         </form>
-        {totalsError && (
+        {totalsError === 'timeout' && (
+          <div className="mt-2 text-sm text-status-bad">
+            انتهت مهلة الاتصال — الشبكة بطيئة جداً أو مقطوعة. تحقق من الاتصال وحاول مرة ثانية.
+          </div>
+        )}
+        {totalsError === true && (
           <div className="mt-2 text-sm text-status-bad">فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.</div>
         )}
       </GlowCard>

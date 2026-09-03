@@ -50,37 +50,46 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   if (model.debut && date < model.debut) return res.status(400).json({ error: 'date_before_debut' })
 
   const now = new Date().toISOString()
-  await run(
-    `INSERT INTO production_history (id, model_id, chain_number, date, slot_index, qty, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-     ON CONFLICT (chain_number, date, slot_index)
-       DO UPDATE SET qty = excluded.qty, model_id = excluded.model_id, updated_at = excluded.updated_at`,
-    [`ph_${nanoid(10)}`, id, model.chain_number, date, idx, qty, now]
-  )
-
   // Backdated edits (any date other than today) get flagged explicitly in
   // the audit trail, distinct from ordinary same-day entry — an auditor
   // (BSCI/SMETA or otherwise) needs to see exactly where a retroactive
   // change was made, not just that "production was updated".
   const isBackdated = date !== today
-  await logAudit({ deptKey: 'production', modelId: id, action: 'update_hourly', details: { slotIndex: idx, qty, date, isBackdated } })
+  // The history write and the audit-log write are independent inserts (the
+  // audit entry doesn't need the history row to exist first) — firing them
+  // together instead of one after another halves this route's DB round
+  // trips, which matters on every keystroke-triggered save from the factory
+  // floor, often over a slow/cold connection.
+  await Promise.all([
+    run(
+      `INSERT INTO production_history (id, model_id, chain_number, date, slot_index, qty, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+       ON CONFLICT (chain_number, date, slot_index)
+         DO UPDATE SET qty = excluded.qty, model_id = excluded.model_id, updated_at = excluded.updated_at`,
+      [`ph_${nanoid(10)}`, id, model.chain_number, date, idx, qty, now]
+    ),
+    logAudit({ deptKey: 'production', modelId: id, action: 'update_hourly', details: { slotIndex: idx, qty, date, isBackdated } }),
+  ])
   res.json({ ok: true, date, isBackdated })
 })
 
 // Total sortie is never written here — it is auto-computed on read from
-// production_history (same running-sum logic as "Prod à maintenant"). Only
-// Total entré is a manual figure, entered once per day by Agent Production,
-// and always refers to today — the date picker above the hourly table does
-// not apply to it.
+// production_history (a whole-life sum from Début to today, see
+// fullDashboard() in routes/public.js — not the same scope as "Prod à
+// maintenant", which stays today-only). Total entré is the only manual
+// figure, and isn't reset per day either — the date picker above the hourly
+// table doesn't apply to it.
 productionRouter.put('/models/:id/totals', async (req, res) => {
   const { id } = req.params
   const totalEntree = Number(req.body?.totalEntree) || 0
   const now = new Date().toISOString()
-  await run(
-    `INSERT INTO production_totals (model_id, total_entree, updated_at) VALUES ($1, $2, $3)
-     ON CONFLICT (model_id) DO UPDATE SET total_entree = excluded.total_entree, updated_at = excluded.updated_at`,
-    [id, totalEntree, now]
-  )
-  await logAudit({ deptKey: 'production', modelId: id, action: 'update_totals', details: { totalEntree } })
+  await Promise.all([
+    run(
+      `INSERT INTO production_totals (model_id, total_entree, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (model_id) DO UPDATE SET total_entree = excluded.total_entree, updated_at = excluded.updated_at`,
+      [id, totalEntree, now]
+    ),
+    logAudit({ deptKey: 'production', modelId: id, action: 'update_totals', details: { totalEntree } }),
+  ])
   res.json({ ok: true })
 })

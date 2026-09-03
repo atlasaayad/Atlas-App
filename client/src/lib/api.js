@@ -22,16 +22,36 @@ export function clearDeptToken(deptKey) {
   sessionStorage.removeItem(tokenKey(deptKey))
 }
 
-async function request(path, { method = 'GET', body, token } = {}) {
+// A dropped/hanging connection (common on a factory floor's WiFi) would
+// otherwise leave `fetch` pending indefinitely — the caller's "…" saving
+// state never resolving into either a confirmation or an error, which reads
+// to the user as the app being frozen. Aborting after REQUEST_TIMEOUT_MS
+// guarantees every save settles one way or the other within a bounded time.
+const REQUEST_TIMEOUT_MS = 15000
+
+async function request(path, { method = 'GET', body, token, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  let res
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    })
+  } catch (err) {
+    const error = new Error(err.name === 'AbortError' ? 'request_timeout' : 'network_error')
+    error.timedOut = err.name === 'AbortError'
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
 
   let data = null
   try {
@@ -65,7 +85,9 @@ export const api = {
       request(`/chains/${chainNumber}/history/months?fromYear=${fromYear}&fromMonth=${fromMonth}&toYear=${toYear}&toMonth=${toMonth}`),
   },
 
-  ask: (question, chainNumber) => request('/ask', { method: 'POST', body: { question, chainNumber } }),
+  // Longer timeout: this hits Claude synchronously and a normal reply can
+  // take well past the default request timeout.
+  ask: (question, chainNumber) => request('/ask', { method: 'POST', body: { question, chainNumber }, timeoutMs: 45000 }),
 
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),

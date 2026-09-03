@@ -217,7 +217,7 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
   const created = await call('/methode/models', {
     method: 'POST',
     token: methodeToken,
-    body: { client: 'TEST_DATEPICKER', qteTotale: 1000, dessin: 'TEST-DP', chainNumber: TEST_CHAIN, debut },
+    body: { client: 'TEST_DATEPICKER', qteTotale: 5000, dessin: 'TEST-DP', chainNumber: TEST_CHAIN, debut },
   })
   assert.equal(created.status, 201)
   const modelId = created.data.id
@@ -292,6 +292,39 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
     const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
     assert.equal(dashboard.data.hourly.find((h) => h.index === 2).qty, 250)
     assert.equal(dashboard.data.produit, 250) // prodAMaintenant تحسب من نفس المصدر
+  })
+
+  await t.test('Total sortie/Le reste/En cours بـBilan de la chaîne يجمعون كل الأيام من Début — مو يوم واحد فقط', async () => {
+    // Yesterday already has slot 0 = 999 (from the earlier subtest); add one
+    // more hour so "yesterday" has real two-hour data, same as today below.
+    await call(`/production/models/${modelId}/hourly/1`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 50, date: yesterday },
+    })
+    // Today already has slot 2 = 250; add a second hour.
+    await call(`/production/models/${modelId}/hourly/3`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 75, date: today },
+    })
+    await call(`/production/models/${modelId}/totals`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { totalEntree: 2000 },
+    })
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.status, 200)
+    // Total sortie = all four recorded hours combined: yesterday's
+    // 999 + 50 plus today's 250 + 75 = 1374 — not just today's 325.
+    assert.equal(dashboard.data.bilan.totalSortie, 1374)
+    assert.equal(dashboard.data.bilan.totalEntree, 2000)
+    assert.equal(dashboard.data.bilan.enCours, 2000 - 1374) // 626
+    assert.equal(dashboard.data.bilan.leReste, 5000 - 1374) // 3626, based on qte_totale
+    // "Prod à maintenant" / "Produit" must stay today-only, unaffected by
+    // the whole-life Total sortie fix above.
+    assert.equal(dashboard.data.produit, 325)
   })
 
   await t.test('رفض تاريخ مستقبلي', async () => {

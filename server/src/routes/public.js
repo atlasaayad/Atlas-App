@@ -91,7 +91,8 @@ export async function fullDashboard(model) {
   // awaited one at a time — on a real network hop to Postgres (Neon), 9
   // sequential round trips vs. 1 parallel batch is the difference between a
   // dashboard load that visibly hangs and one that doesn't.
-  const [effectifRows, hourlyRows, totalsRow, rhRows, qualityRow, finaleRow, depotRow, exportRows, postes] =
+  const today = todayInFactoryTZ()
+  const [effectifRows, hourlyRows, totalsRow, rhRows, qualityRow, finaleRow, depotRow, exportRows, postes, cumulativeRow] =
     await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -101,7 +102,7 @@ export async function fullDashboard(model) {
       // reflected on this dashboard on the very next read.
       all('SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2', [
         model.chain_number,
-        todayInFactoryTZ(),
+        today,
       ]),
       get('SELECT * FROM production_totals WHERE model_id = $1', [model.id]),
       all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id]),
@@ -110,6 +111,17 @@ export async function fullDashboard(model) {
       get('SELECT * FROM depot WHERE model_id = $1', [model.id]),
       all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id]),
       all('SELECT * FROM poste_status WHERE model_id = $1', [model.id]),
+      // "Total sortie" (below) is the chain's whole-life output for THIS
+      // model, so it sums production_history across every day from the
+      // model's Début through today — not just today. Bounding by Début
+      // (rather than summing all of the chain's history unconditionally)
+      // keeps a previous, unrelated model that used to run on this same
+      // chain_number out of the current model's total.
+      get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
+        model.chain_number,
+        model.debut || today,
+        today,
+      ]),
     ])
 
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -126,12 +138,22 @@ export async function fullDashboard(model) {
   const demande = Math.round(computeObjectifJour(model.dt))
   const produit = prodAMaintenant(hourlyMap)
   const restant = Math.max(demande - produit, 0)
-  // Total sortie is auto-computed with the same running-sum logic as
-  // "Prod à maintenant" (produit) — it is never a manual entry. Total entré
-  // stays a single manual daily figure from Agent Production, so En cours
-  // and Le reste recompute live off of those two automatically.
-  const totalSortie = produit
+  // "Total sortie" (Bilan de la chaîne) is the model's whole-life output —
+  // every hour ever recorded for this chain from Début to today, not just
+  // today's — auto-computed, never a manual entry. This is deliberately a
+  // different number from "produit"/"Prod à maintenant" above, which stay
+  // today-only: those drive "Objectif atteint %" and the "Restant" (today's
+  // target) field, and must keep doing so unchanged.
+  const totalSortie = Number(cumulativeRow.total)
+  // En cours = what's been fed into the chain so far minus what's come out
+  // so far — both whole-life figures now, so this is what's still
+  // mid-process on the line since Début.
   const enCours = totals.total_entree - totalSortie
+  // Le reste (Bilan de la chaîne) = how much of the WHOLE order is still
+  // left to produce, based on the corrected whole-life Total sortie above —
+  // distinct from the daily "Restant" field (demande - produit) elsewhere
+  // on Home, which stays about today's target.
+  const leResteCommande = Math.max((model.qte_totale || 0) - totalSortie, 0)
 
   const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of rhRows) present[r.specialty] = r.present
@@ -194,7 +216,7 @@ export async function fullDashboard(model) {
     bilan: {
       totalEntree: totals.total_entree,
       totalSortie,
-      leReste: restant,
+      leReste: leResteCommande,
       enCours,
     },
     finaleEnCours: finale.en_cours,
