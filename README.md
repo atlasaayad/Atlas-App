@@ -137,8 +137,45 @@ bounded to `[model.debut, today]` and validated on both client and server.
   modifications — distinct from routine same-day entry, so a later review
   (BSCI/SMETA or otherwise) can see exactly where a retroactive change was
   made.
-- **"Total entré"** is unaffected by the date picker — it's a single daily
-  figure entered once by Agent Production and always refers to today.
+- **"Total entré"** is unaffected by the date picker — it's a single figure
+  entered by Agent Production; it isn't reset per day, since nothing resets
+  it, so in practice it tracks the running total fed into the chain.
+
+### Bilan de la chaîne — whole-life totals (Home dashboard)
+
+The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,
+En cours) describe the chain's cumulative balance for the active model, from
+its `debut` through today — not a single day. This is a different scope from
+"Objectif atteint %" / "Prod à maintenant" / "Restant" elsewhere on Home,
+which stay strictly about *today's* target and are computed separately so
+this section never affects them:
+
+- **Total sortie** = `SUM(production_history.qty)` for the chain, bounded to
+  `[model.debut, today]` — every hour ever recorded for this model, not just
+  today's. Recomputed on every dashboard read, so a correction made through
+  the Backdated Production Entry date picker (above) — to today or any
+  earlier day — changes this number immediately, with no caching in between.
+- **En cours** = Total entré − Total sortie: pieces fed into the chain but
+  not yet finished, since Début.
+- **Le reste** = `qte_totale − Total sortie` (floored at 0): how much of the
+  whole order is still left to produce — distinct from the "Restant" field
+  next to "Demandé"/"Produit", which is `demande (today's target) − produit
+  (today's output)`.
+
+### Save confirmation & request timeouts
+
+Every write (`client/src/lib/api.js`) is wrapped in a bounded timeout
+(`AbortController`, 15s by default; the AI-backed "اسأل أطلس" call gets 45s)
+so a dropped or hanging connection — common on a factory floor's WiFi — never
+leaves a save spinner running forever with no explanation. It always
+resolves, within a bounded time, into either a visible success state or a
+distinct "انتهت مهلة الاتصال" (connection timeout) error, never silence.
+Agent Production's hourly-slot and Total entré saves show a spinning
+indicator while in flight (replacing a plain "…" label) for a clearer
+in-progress cue. Server-side, the hourly-slot and totals PUT routes
+(`server/src/routes/production.js`) fire their `production_history`/
+`production_totals` write and the audit-log write in parallel instead of
+sequentially, since neither depends on the other's result.
 
 ### Early Warning Agent (Home dashboard, public)
 

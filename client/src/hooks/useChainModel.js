@@ -14,6 +14,8 @@ export function useChainModel(chainNumber) {
   const [dashboard, setDashboard] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  // Full resolve: which model (if any) is active on this chain, then its
+  // dashboard. Needed on mount/chain switch, since modelId isn't known yet.
   const fetchData = useCallback(async () => {
     const chains = await api.getChains()
     const info = chains.find((c) => c.chainNumber === chainNumber)
@@ -32,5 +34,16 @@ export function useChainModel(chainNumber) {
     fetchData().finally(() => setLoading(false))
   }, [fetchData])
 
-  return { modelId, dashboard, loading, refresh: fetchData }
+  // Silent post-save refresh: the active model on this chain essentially
+  // never changes between a field save and its refresh, so this skips the
+  // getChains() round trip fetchData() needs on first load and just
+  // re-reads the dashboard — one request instead of two on every single
+  // hourly-slot or totals save, which matters on a slow factory connection.
+  const refresh = useCallback(async () => {
+    if (!modelId) return fetchData()
+    const dash = await api.getDashboardByChain(chainNumber)
+    setDashboard(dash)
+  }, [chainNumber, modelId, fetchData])
+
+  return { modelId, dashboard, loading, refresh }
 }
