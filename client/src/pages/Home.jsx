@@ -216,9 +216,12 @@ function DashboardBody({ data }) {
       {/* Quality indicators */}
       <div className="grid grid-cols-2 gap-4">
         <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Qualité</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Qualité (cumulé)</div>
           <div className={`mt-1 font-display font-semibold ${data.quality.percentage === null ? 'text-sm text-slate-500' : 'text-xl text-turquoise glow-number'}`}>
             {data.quality.percentage === null ? 'Non renseigné' : `${data.quality.percentage}%`}
+          </div>
+          <div className="mt-0.5 text-[11px] text-slate-500">
+            aujourd'hui: {data.quality.dailyPercentage === null ? '—' : `${data.quality.dailyPercentage}%`}
           </div>
         </GlowCard>
         <GlowCard className="text-center">

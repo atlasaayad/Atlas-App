@@ -89,6 +89,17 @@ export function detectDeclineTrend(entries) {
   }
 }
 
+// Qualité% for any (produced qty, pièces retouche) pair — one hour, a full
+// day, or the model's whole life, always the same formula. Null (never a
+// fake 0% or 100%) when there's no real production recorded to divide by,
+// so the caller can render "non calculé" instead of a misleading number.
+export function computeQualityPct(producedQty, pieceRetouche) {
+  const qty = Number(producedQty) || 0
+  if (qty <= 0) return null
+  const retouche = Number(pieceRetouche) || 0
+  return Math.round(((qty - retouche) / qty) * 1000) / 10
+}
+
 // Today's date (YYYY-MM-DD) in the factory's timezone — used to key
 // permanent history records, independent of the server's own local TZ.
 export function todayInFactoryTZ(now = new Date()) {

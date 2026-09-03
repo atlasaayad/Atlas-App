@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeVTMinutes, computeDT, computeObjectifJour, detectDeclineTrend } from './calc.js'
+import { computeVTMinutes, computeDT, computeObjectifJour, detectDeclineTrend, computeQualityPct } from './calc.js'
 import { WORK_HOURS_PER_DAY } from './constants.js'
 
 function approx(actual, expected, epsilon = 1e-9) {
@@ -86,6 +86,18 @@ test('detectDeclineTrend: heures non consécutives (lacune) → pas de comparais
     { slotIndex: 6, qty: 90 },
   ]
   assert.equal(detectDeclineTrend(entries), null)
+})
+
+test('computeQualityPct = (qty - pièces retouche) / qty * 100', () => {
+  // Cas de l'exemple utilisateur exact: 100 pièces produites, 10 retouches → 90%
+  approx(computeQualityPct(100, 10), 90)
+  approx(computeQualityPct(1000, 0), 100)
+  approx(computeQualityPct(200, 200), 0)
+})
+
+test("computeQualityPct: aucune production réelle enregistrée (qty = 0) → null, jamais une division par zéro", () => {
+  assert.equal(computeQualityPct(0, 0), null)
+  assert.equal(computeQualityPct(0, 5), null)
 })
 
 test('detectDeclineTrend: la série se prolonge au-delà de 3 heures si la baisse continue', () => {

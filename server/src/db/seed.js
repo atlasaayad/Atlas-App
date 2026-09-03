@@ -120,7 +120,17 @@ async function seedDemoModel() {
     ])
   }
 
-  await run(`INSERT INTO quality (model_id, percentage, reprises, updated_at) VALUES ($1, $2, $3, $4)`, [modelId, 96.5, 14, now])
+  await run(`INSERT INTO quality (model_id, reprises, updated_at) VALUES ($1, $2, $3)`, [modelId, 14, now])
+  // Demo "Pièces retouche" per hour — Qualité% for the demo model is
+  // computed live from these against demoQty above, never stored itself.
+  const demoRetouche = [12, 15, 10, 8, 14, 20, 11, 9, 0]
+  for (let idx = 0; idx < demoRetouche.length; idx++) {
+    await run(
+      `INSERT INTO quality_history (id, model_id, chain_number, date, slot_index, piece_retouche, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+      [`qh_demo_${idx}`, modelId, 1, today, idx, demoRetouche[idx], now]
+    )
+  }
   await run(
     `INSERT INTO finale (
        model_id, en_cours, piece_retouche, piece_terminee, piece_2eme,

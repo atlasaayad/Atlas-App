@@ -348,6 +348,134 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
   })
 })
 
+test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب تلقائياً من إنتاج Agent Production الحقيقي', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  const today = todayInFactoryTZ()
+  function daysAgo(n) {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - n)
+    return d.toISOString().slice(0, 10)
+  }
+  const yesterday = daysAgo(1)
+  const debut = daysAgo(5)
+  const tomorrow = daysAgo(-1)
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_QUALITY', qteTotale: 1000, dessin: 'TEST-Q', chainNumber: TEST_CHAIN, debut },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId]) // cascades, including quality_history
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('بدون أي بيانات: القسمة على صفر لا تحدث، والقيمة null (غير محسوب)', async () => {
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.quality.percentage, null)
+    assert.equal(dashboard.data.quality.dailyPercentage, null)
+  })
+
+  await t.test('مثال المستخدم بالضبط: إنتاج=100، Pièces retouche=10 → Qualité%=90', async () => {
+    const prod = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 100, date: today },
+    })
+    assert.equal(prod.status, 200)
+
+    const retouche = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 10, date: today },
+    })
+    assert.equal(retouche.status, 200)
+    assert.equal(retouche.data.isBackdated, false)
+
+    const hourly = await call(`/quality/models/${modelId}/hourly?date=${today}`, { token: qualityToken })
+    const slot0 = hourly.data.hourly.find((h) => h.index === 0)
+    assert.equal(slot0.qty, 100)
+    assert.equal(slot0.pieceRetouche, 10)
+    assert.equal(slot0.qualityPct, 90)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.quality.dailyPercentage, 90)
+    assert.equal(dashboard.data.quality.percentage, 90) // cumulatif = journalier ici (aucune autre journée encore)
+    assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
+    assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 10)
+
+    const log = await get(
+      `SELECT details FROM audit_log WHERE model_id = $1 AND action = 'update_quality_hourly' ORDER BY created_at DESC LIMIT 1`,
+      [modelId]
+    )
+    assert.deepEqual(JSON.parse(log.details), { slotIndex: 0, pieceRetouche: 10, date: today, isBackdated: false })
+  })
+
+  await t.test('تعديل بأثر رجعي ليوم سابق: يُعلَّم isBackdated، ويُعاد حساب التراكمي بشكل صحيح', async () => {
+    await call(`/production/models/${modelId}/hourly/1`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 200, date: yesterday },
+    })
+    const put = await call(`/quality/models/${modelId}/hourly/1`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 20, date: yesterday },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.isBackdated, true)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    // Cumulatif: (100 + 200) produites, (10 + 20) retouche → (300-30)/300*100 = 90
+    assert.equal(dashboard.data.quality.percentage, 90)
+    assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 30)
+    // Journalier (aujourd'hui uniquement) reste inchangé — la correction d'hier ne le touche pas.
+    assert.equal(dashboard.data.quality.dailyPercentage, 90)
+    assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
+  })
+
+  await t.test('Reprises: رقم تراكمي منفصل تماماً، لا يؤثر على Qualité% ولا يتأثر به', async () => {
+    const put = await call(`/quality/models/${modelId}`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { reprises: 7 },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.quality.reprises, 7)
+    assert.equal(dashboard.data.quality.percentage, 90) // inchangé
+  })
+
+  await t.test('رفض تاريخ مستقبلي ورفض تاريخ قبل Début', async () => {
+    const future = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 5, date: tomorrow },
+    })
+    assert.equal(future.status, 400)
+    assert.equal(future.data.error, 'date_in_future')
+
+    const beforeDebutQ = daysAgo(6)
+    const early = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 5, date: beforeDebutQ },
+    })
+    assert.equal(early.status, 400)
+    assert.equal(early.data.error, 'date_before_debut')
+  })
+})
+
 // The full /api/ask route can't be driven past the daily-limit check in this
 // environment (no real ANTHROPIC_API_KEY means it 503s before ever reaching
 // it), so this exercises the counting/limiting logic directly — it's the

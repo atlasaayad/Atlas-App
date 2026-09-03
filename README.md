@@ -141,6 +141,33 @@ bounded to `[model.debut, today]` and validated on both client and server.
   entered by Agent Production; it isn't reset per day, since nothing resets
   it, so in practice it tracks the running total fed into the chain.
 
+### Quality screen — hourly "Pièces retouche" + auto-computed Qualité% (Quality)
+
+The Quality screen no longer has a manual Qualité% slider. It has an hourly
+table (`QualityForm.jsx`, `GET/PUT /api/quality/models/:id/hourly`) — same
+date-picker/backdated-entry pattern as Agent Production's "Production par
+heure" — where Quality enters **"Pièces retouche"**: how many pieces from
+that hour need rework. This is a separate field from **"Reprises"** (a
+single running figure, unaffected by the date picker, entered via its own
+form below the hourly table).
+
+- **Qualité% is never entered manually or stored** — it's always computed
+  live: `(qty − pièces retouche) / qty × 100` for whatever period is being
+  shown (`computeQualityPct()` in `server/src/calc.js`), where `qty` is
+  Agent Production's real recorded output for the same chain/date/slot. A
+  zero-production hour/day/model shows "غير محسوب" (null), never a fake 0%
+  or 100%.
+- **Single source of truth**: `quality_history` (permanent, chain/date/slot
+  — same architecture as `production_history`) holds every "Pièces
+  retouche" entry ever saved, today's included. Home's "Qualité" card shows
+  both the cumulative percentage (since the model's `debut`, pairing with
+  the whole-life "Total sortie") and today's percentage (pairing with
+  "Prod à maintenant") — each computed from its own SUM query on every
+  read, never cached.
+- **Backdated entry**: identical date bounds/audit-log flagging as
+  production's hourly entry (`isBackdated`, `date_in_future`,
+  `date_before_debut`) — see Backdated Production Entry above.
+
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 
 The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,

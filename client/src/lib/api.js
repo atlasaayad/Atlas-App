@@ -105,7 +105,10 @@ export const api = {
     updateAttendance: (token, id, attendance) => request(`/rh/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
   },
   quality: {
-    update: (token, id, percentage, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { percentage, reprises }, token }),
+    updateReprises: (token, id, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { reprises }, token }),
+    getHourly: (token, id, date) => request(`/quality/models/${id}/hourly?date=${date}`, { token }),
+    updateHourly: (token, id, slotIndex, pieceRetouche, date) =>
+      request(`/quality/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { pieceRetouche, date }, token }),
   },
   finale: {
     update: (token, id, payload) => request(`/finale/models/${id}`, { method: 'PUT', body: payload, token }),

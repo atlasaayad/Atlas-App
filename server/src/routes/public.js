@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
 import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
-import { computeObjectifJour, prodAMaintenant, todayInFactoryTZ } from '../calc.js'
+import { computeObjectifJour, prodAMaintenant, todayInFactoryTZ, computeQualityPct } from '../calc.js'
 
 export const publicRouter = Router()
 
@@ -92,8 +92,20 @@ export async function fullDashboard(model) {
   // sequential round trips vs. 1 parallel batch is the difference between a
   // dashboard load that visibly hangs and one that doesn't.
   const today = todayInFactoryTZ()
-  const [effectifRows, hourlyRows, totalsRow, rhRows, qualityRow, finaleRow, depotRow, exportRows, postes, cumulativeRow] =
-    await Promise.all([
+  const [
+    effectifRows,
+    hourlyRows,
+    totalsRow,
+    rhRows,
+    qualityRow,
+    finaleRow,
+    depotRow,
+    exportRows,
+    postes,
+    cumulativeRow,
+    retoucheTodayRow,
+    retoucheCumulativeRow,
+  ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
       // source of truth for hourly production, today included (see the
@@ -118,6 +130,18 @@ export async function fullDashboard(model) {
       // keeps a previous, unrelated model that used to run on this same
       // chain_number out of the current model's total.
       get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
+        model.chain_number,
+        model.debut || today,
+        today,
+      ]),
+      // Qualité% (below) is computed from these two "Pièces retouche" sums
+      // against the production sums above — today's and whole-life — never
+      // stored anywhere itself (see computeQualityPct() in calc.js).
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date = $2', [
+        model.chain_number,
+        today,
+      ]),
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
         model.chain_number,
         model.debut || today,
         today,
@@ -160,10 +184,19 @@ export async function fullDashboard(model) {
   const effectifs = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
   const ouvriersPresents = effectifs.reduce((s, e) => s + e.present, 0)
 
-  // No row yet means Quality hasn't reported anything for this model — that
-  // must never look like a real "100% quality" confirmation, so it's null
-  // (rendered as "not reported yet"), not a number nobody actually entered.
-  const quality = qualityRow || { percentage: null, reprises: null }
+  // No row yet means Quality hasn't reported "Reprises" for this model — null
+  // (rendered as "not reported yet"), not a fake 0. Qualité% itself is never
+  // stored (see computeQualityPct() below) so there's no "row missing" case
+  // for it — the null-when-no-production case is handled by
+  // computeQualityPct returning null on a zero denominator.
+  const quality = qualityRow || { reprises: null }
+  const pieceRetoucheToday = Number(retoucheTodayRow.total)
+  const pieceRetoucheCumulative = Number(retoucheCumulativeRow.total)
+  // Today's Qualité% pairs with "produit" (today-only production); the
+  // cumulative one pairs with the whole-life "totalSortie" above — same
+  // scoping split as Total sortie vs. Prod à maintenant.
+  const qualityDailyPct = computeQualityPct(produit, pieceRetoucheToday)
+  const qualityCumulativePct = computeQualityPct(totalSortie, pieceRetoucheCumulative)
   const finale = finaleRow || {
     en_cours: 0,
     piece_retouche: 0,
@@ -234,7 +267,13 @@ export async function fullDashboard(model) {
     depotTotal: depot.total_pieces,
     exports,
     objectifAtteintPct,
-    quality: { percentage: quality.percentage, reprises: quality.reprises },
+    quality: {
+      percentage: qualityCumulativePct,
+      dailyPercentage: qualityDailyPct,
+      reprises: quality.reprises,
+      pieceRetoucheToday,
+      pieceRetoucheCumulative,
+    },
     etatDesPostes,
     effectifs,
   }
