@@ -74,10 +74,11 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
 })
 
 // Total sortie is never written here — it is auto-computed on read from
-// production_history (same running-sum logic as "Prod à maintenant"). Only
-// Total entré is a manual figure, entered once per day by Agent Production,
-// and always refers to today — the date picker above the hourly table does
-// not apply to it.
+// production_history (a whole-life sum from Début to today, see
+// fullDashboard() in routes/public.js — not the same scope as "Prod à
+// maintenant", which stays today-only). Total entré is the only manual
+// figure, and isn't reset per day either — the date picker above the hourly
+// table doesn't apply to it.
 productionRouter.put('/models/:id/totals', async (req, res) => {
   const { id } = req.params
   const totalEntree = Number(req.body?.totalEntree) || 0
