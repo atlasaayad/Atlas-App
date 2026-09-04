@@ -446,6 +446,19 @@ factory data:
 > area worth being aware of if this grows past a pilot; Vercel Pro removes
 > that restriction.
 
+### Cache headers — every deploy must actually reach every phone
+
+`vercel.json` sets `Cache-Control: public, max-age=0, must-revalidate` on
+every path except `/assets/*` (Vite's content-hashed JS/CSS, which gets a
+long `immutable` cache — safe, since a new build always produces new
+hashed filenames). Without this, a phone's browser can keep serving an
+old cached `index.html` (and therefore the old JS bundle it references)
+for a while after a fix is deployed and merged — someone can retest a
+just-shipped fix and still see the old broken behavior, which looks
+identical to the fix not having worked at all. If a report says a
+just-merged fix "still doesn't work," first rule out a stale cached page
+(hard refresh / clear site data) before re-diagnosing the code.
+
 ### Environment variables (Vercel Project Settings)
 
 | Variable | Required | Notes |
