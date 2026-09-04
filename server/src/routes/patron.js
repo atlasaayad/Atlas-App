@@ -38,6 +38,10 @@ const EXPORT_TABLES = [
   { sheet: 'Totaux Production', table: 'production_totals', orderBy: 'model_id' },
   { sheet: 'Presence RH', table: 'rh_attendance', orderBy: 'model_id, specialty' },
   { sheet: 'Qualite', table: 'quality', orderBy: 'model_id' },
+  // quality_history is the full permanent record of "Pièces retouche" per
+  // chain/date/slot — Qualité% itself is never stored, always computed live.
+  { sheet: 'Qualite Horaire', table: 'quality_history', orderBy: 'chain_number, date, slot_index' },
+  { sheet: 'Temps de Lancement', table: 'launch_timer', orderBy: 'model_id' },
   { sheet: 'Finale', table: 'finale', orderBy: 'model_id' },
   { sheet: 'Depot', table: 'depot', orderBy: 'model_id' },
   { sheet: 'Exports Logistics', table: 'logistics_exports', orderBy: 'model_id, date' },

@@ -74,6 +74,7 @@ export const api = {
   login: (deptKey, pin) => request(`/auth/${deptKey}/login`, { method: 'POST', body: { pin } }),
   getModels: () => request('/models'),
   getChains: () => request('/chains'),
+  getRanking: () => request('/chains/ranking'),
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
@@ -94,6 +95,10 @@ export const api = {
     updateModel: (token, id, payload) => request(`/methode/models/${id}`, { method: 'PUT', body: payload, token }),
     updateGamme: (token, id, lines) => request(`/methode/models/${id}/gamme`, { method: 'PUT', body: { lines }, token }),
     updateEffectif: (token, id, effectif) => request(`/methode/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
+    updateAttendance: (token, id, attendance) => request(`/methode/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
+    updateLaunchTimer: (token, id, config) => request(`/methode/models/${id}/launch-timer`, { method: 'PUT', body: config, token }),
+    startLaunchTimer: (token, id) => request(`/methode/models/${id}/launch-timer/start`, { method: 'POST', token }),
+    stopLaunchTimer: (token, id, payload) => request(`/methode/models/${id}/launch-timer/stop`, { method: 'POST', body: payload, token }),
   },
   production: {
     getHourly: (token, id, date) => request(`/production/models/${id}/hourly?date=${date}`, { token }),
@@ -105,7 +110,10 @@ export const api = {
     updateAttendance: (token, id, attendance) => request(`/rh/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
   },
   quality: {
-    update: (token, id, percentage, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { percentage, reprises }, token }),
+    updateReprises: (token, id, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { reprises }, token }),
+    getHourly: (token, id, date) => request(`/quality/models/${id}/hourly?date=${date}`, { token }),
+    updateHourly: (token, id, slotIndex, pieceRetouche, date) =>
+      request(`/quality/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { pieceRetouche, date }, token }),
   },
   finale: {
     update: (token, id, payload) => request(`/finale/models/${id}`, { method: 'PUT', body: payload, token }),

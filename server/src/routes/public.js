@@ -1,8 +1,16 @@
 import { Router } from 'express'
 import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
-import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
-import { computeObjectifJour, prodAMaintenant, todayInFactoryTZ } from '../calc.js'
+import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS, WORK_HOURS_PER_DAY } from '../constants.js'
+import {
+  computeObjectifJour,
+  prodAMaintenant,
+  todayInFactoryTZ,
+  computeQualityPct,
+  computeRendementProduction,
+  computeScoreRendement,
+  daysBetweenInclusive,
+} from '../calc.js'
 
 export const publicRouter = Router()
 
@@ -78,12 +86,37 @@ publicRouter.get('/chains', async (req, res) => {
 publicRouter.get('/models/:id', async (req, res) => {
   const model = await get('SELECT * FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
-  const gamme = await all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id])
-  const effectifRows = await all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id])
+  const [gamme, effectifRows, launchTimerRow] = await Promise.all([
+    all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id]),
+    all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
+    get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
+  ])
   const effectif = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of effectifRows) effectif[r.specialty] = r.required
-  res.json({ ...model, gamme, effectif })
+  res.json({ ...model, gamme, effectif, launchTimer: formatLaunchTimer(launchTimerRow) })
 })
+
+// Raw config + timestamps only — the ticking countdown/overrun display is
+// derived from these client-side (every second) using the same
+// computeLaunchTimerState() formula, not recomputed by the server on a
+// polling cadence that would make the seconds jump.
+function formatLaunchTimer(row) {
+  if (!row) return null
+  return {
+    objectifHeures: row.objectif_heures,
+    groupeLancement: row.groupe_lancement,
+    agentMethode: row.agent_methode,
+    mecanicien: row.mecanicien,
+    electriciens: row.electriciens,
+    agentQuality: row.agent_quality,
+    chefChaine: row.chef_chaine,
+    startedAt: row.started_at,
+    stoppedAt: row.stopped_at,
+    responsible: row.responsible,
+    reasonCode: row.reason_code,
+    reasonComment: row.reason_comment,
+  }
+}
 
 export async function fullDashboard(model) {
   // All 9 lookups below are independent (keyed only by model.id) and none
@@ -92,8 +125,22 @@ export async function fullDashboard(model) {
   // sequential round trips vs. 1 parallel batch is the difference between a
   // dashboard load that visibly hangs and one that doesn't.
   const today = todayInFactoryTZ()
-  const [effectifRows, hourlyRows, totalsRow, rhRows, qualityRow, finaleRow, depotRow, exportRows, postes, cumulativeRow] =
-    await Promise.all([
+  const [
+    effectifRows,
+    hourlyRows,
+    totalsRow,
+    rhRows,
+    qualityRow,
+    finaleRow,
+    depotRow,
+    exportRows,
+    postes,
+    cumulativeRow,
+    retoucheTodayRow,
+    retoucheCumulativeRow,
+    qualityHourlyRows,
+    launchTimerRow,
+  ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
       // source of truth for hourly production, today included (see the
@@ -122,6 +169,26 @@ export async function fullDashboard(model) {
         model.debut || today,
         today,
       ]),
+      // Qualité% (below) is computed from these two "Pièces retouche" sums
+      // against the production sums above — today's and whole-life — never
+      // stored anywhere itself (see computeQualityPct() in calc.js).
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date = $2', [
+        model.chain_number,
+        today,
+      ]),
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
+        model.chain_number,
+        model.debut || today,
+        today,
+      ]),
+      // Per-slot (not summed) today's "Pièces retouche" — needed to compute
+      // Qualité% for just the single most-recently-recorded hour, for the
+      // "hourly" Rendement level below.
+      all('SELECT slot_index, piece_retouche FROM quality_history WHERE chain_number = $1 AND date = $2', [
+        model.chain_number,
+        today,
+      ]),
+      get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
     ])
 
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -160,10 +227,47 @@ export async function fullDashboard(model) {
   const effectifs = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
   const ouvriersPresents = effectifs.reduce((s, e) => s + e.present, 0)
 
-  // No row yet means Quality hasn't reported anything for this model — that
-  // must never look like a real "100% quality" confirmation, so it's null
-  // (rendered as "not reported yet"), not a number nobody actually entered.
-  const quality = qualityRow || { percentage: null, reprises: null }
+  // No row yet means Quality hasn't reported "Reprises" for this model — null
+  // (rendered as "not reported yet"), not a fake 0. Qualité% itself is never
+  // stored (see computeQualityPct() below) so there's no "row missing" case
+  // for it — the null-when-no-production case is handled by
+  // computeQualityPct returning null on a zero denominator.
+  const quality = qualityRow || { reprises: null }
+  const pieceRetoucheToday = Number(retoucheTodayRow.total)
+  const pieceRetoucheCumulative = Number(retoucheCumulativeRow.total)
+  // Today's Qualité% pairs with "produit" (today-only production); the
+  // cumulative one pairs with the whole-life "totalSortie" above — same
+  // scoping split as Total sortie vs. Prod à maintenant.
+  const qualityDailyPct = computeQualityPct(produit, pieceRetoucheToday)
+  const qualityCumulativePct = computeQualityPct(totalSortie, pieceRetoucheCumulative)
+
+  // Rendement = standard SAM-based line efficiency (computeRendementProduction)
+  // averaged 50/50 with Qualité% into a single Score_Rendement, at 3 scopes:
+  // one hour, today, and the model's whole life. SAM is "VT" from Agent
+  // Méthode's gamme; "workers present" is today's live headcount
+  // (rh_attendance, sum across specialties — Agent Méthode or RH, whichever
+  // saved most recently) applied to every scope alike, since there's no
+  // historical daily-headcount record to look up a past day's real count.
+  const samMinutes = model.vt
+  const qualityHourlyMap = Object.fromEntries(qualityHourlyRows.map((r) => [r.slot_index, r.piece_retouche]))
+  const lastHourEntry = hourlyRows.reduce((max, r) => (!max || r.slot_index > max.slot_index ? r : max), null)
+  const hourlyQty = lastHourEntry ? lastHourEntry.qty : null
+  const hourlyQualityPct = lastHourEntry ? computeQualityPct(hourlyQty, qualityHourlyMap[lastHourEntry.slot_index] || 0) : null
+  const hourlyRendementProdPct = lastHourEntry ? computeRendementProduction(hourlyQty, samMinutes, ouvriersPresents, 60) : null
+  const hourlyScoreRendement = computeScoreRendement(hourlyRendementProdPct, hourlyQualityPct)
+
+  const dailyRendementProdPct = computeRendementProduction(produit, samMinutes, ouvriersPresents, WORK_HOURS_PER_DAY * 60)
+  const dailyScoreRendement = computeScoreRendement(dailyRendementProdPct, qualityDailyPct)
+
+  const cumulativeDays = daysBetweenInclusive(model.debut || today, today)
+  const cumulativeRendementProdPct = computeRendementProduction(
+    totalSortie,
+    samMinutes,
+    ouvriersPresents,
+    cumulativeDays * WORK_HOURS_PER_DAY * 60
+  )
+  const cumulativeScoreRendement = computeScoreRendement(cumulativeRendementProdPct, qualityCumulativePct)
+
   const finale = finaleRow || {
     en_cours: 0,
     piece_retouche: 0,
@@ -234,9 +338,21 @@ export async function fullDashboard(model) {
     depotTotal: depot.total_pieces,
     exports,
     objectifAtteintPct,
-    quality: { percentage: quality.percentage, reprises: quality.reprises },
+    quality: {
+      percentage: qualityCumulativePct,
+      dailyPercentage: qualityDailyPct,
+      reprises: quality.reprises,
+      pieceRetoucheToday,
+      pieceRetoucheCumulative,
+    },
+    rendement: {
+      hourly: { productionPct: hourlyRendementProdPct, qualityPct: hourlyQualityPct, score: hourlyScoreRendement, slotIndex: lastHourEntry?.slot_index ?? null },
+      daily: { productionPct: dailyRendementProdPct, qualityPct: qualityDailyPct, score: dailyScoreRendement },
+      cumulative: { productionPct: cumulativeRendementProdPct, qualityPct: qualityCumulativePct, score: cumulativeScoreRendement },
+    },
     etatDesPostes,
     effectifs,
+    launchTimer: formatLaunchTimer(launchTimerRow),
   }
 }
 
@@ -250,6 +366,47 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
   const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1', [Number(req.params.chainNumber)])
   if (!model) return res.status(404).json({ error: 'no_active_model' })
   res.json(await fullDashboard(model))
+})
+
+// 🏆 Classement des chaînes — every chain (1-8), ranked by today's
+// Score_Rendement. Reuses fullDashboard() per chain (run in parallel) so
+// this is always computed live from the same real-time figures shown on
+// each chain's own dashboard — no separate cached leaderboard state.
+publicRouter.get('/chains/ranking', async (req, res) => {
+  const active = await all('SELECT * FROM models WHERE active = 1')
+  const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
+
+  const entries = await Promise.all(
+    CHAIN_NUMBERS.map(async (chainNumber) => {
+      const model = byChain[chainNumber]
+      if (!model) return { chainNumber, model: null, rendement: null }
+      const dash = await fullDashboard(model)
+      return {
+        chainNumber,
+        model: { client: model.client, dessin: model.dessin },
+        rendement: { daily: dash.rendement.daily, cumulative: dash.rendement.cumulative },
+      }
+    })
+  )
+
+  // Sort key: chains with a real daily score first (best to worst), then
+  // chains with an active model but no score yet (not enough data to
+  // compute Rendement today), then chains with no active model at all —
+  // never silently dropped, always shown, always at the bottom in that order.
+  function tier(e) {
+    if (!e.model) return 2
+    if (e.rendement.daily.score === null) return 1
+    return 0
+  }
+  entries.sort((a, b) => {
+    const ta = tier(a)
+    const tb = tier(b)
+    if (ta !== tb) return ta - tb
+    if (ta === 0) return b.rendement.daily.score - a.rendement.daily.score
+    return a.chainNumber - b.chainNumber
+  })
+
+  res.json(entries.map((e, i) => ({ rank: i + 1, ...e })))
 })
 
 // Historique — everything computed live from production_history, nothing

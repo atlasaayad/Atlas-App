@@ -9,15 +9,18 @@ import LiveIndicator from '../components/LiveIndicator'
 import EarlyWarningBanner from '../components/EarlyWarningBanner'
 import HistoriqueModal from '../components/HistoriqueModal'
 import DetailsFinaleModal from '../components/DetailsFinaleModal'
+import ClassementModal from '../components/ClassementModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
-import { CHAIN_NUMBERS } from '../lib/constants'
+import { CHAIN_NUMBERS, DELAY_REASONS } from '../lib/constants'
+import { computeLaunchTimerState, formatDuration } from '../lib/calc'
 
 export default function Home() {
   const [chains, setChains] = useState([])
   const [chainsLoaded, setChainsLoaded] = useState(false)
   const [chainNumber, setChainNumber] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
+  const [showClassement, setShowClassement] = useState(false)
 
   useEffect(() => {
     api.getChains().then((data) => {
@@ -58,7 +61,7 @@ export default function Home() {
             <LiveIndicator lastUpdated={lastUpdated} />
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <select
             value={chainNumber || ''}
             onChange={(e) => setChainNumber(Number(e.target.value))}
@@ -90,8 +93,16 @@ export default function Home() {
               </option>
             ))}
           </select>
+          <button
+            onClick={() => setShowClassement(true)}
+            className="rounded-md border border-turquoise/40 px-3 py-2 text-sm text-turquoise active:bg-turquoise/10"
+          >
+            🏆 Classement des chaînes
+          </button>
         </div>
       </div>
+
+      {showClassement && <ClassementModal onClose={() => setShowClassement(false)} />}
 
       <EarlyWarningBanner />
 
@@ -156,6 +167,7 @@ function DashboardBody({ data }) {
             <Field label="Fin prévue" value={data.identity.finPrevue} />
           </div>
         </div>
+        {data.launchTimer?.startedAt && <LaunchTimerStatus launchTimer={data.launchTimer} />}
       </GlowCard>
 
       {/* 2. Hourly chart + side stats — Objectif/heure and Objectif atteint live in the header, modest size */}
@@ -213,12 +225,28 @@ function DashboardBody({ data }) {
         </div>
       </GlowCard>
 
+      {/* Rendement — composite efficiency+quality score, distinct from Objectif atteint% */}
+      <GlowCard title="Rendement">
+        <p className="mb-3 text-xs text-slate-500">
+          Rendement = كفاءة استخدام وقت العمل (SAM-based) + الجودة معاً — مختلف عن "Objectif atteint %" اللي يقارن
+          الكمية فقط بالهدف.
+        </p>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <RendementLevel label="بالساعة" data={data.rendement.hourly} />
+          <RendementLevel label="اليوم" data={data.rendement.daily} />
+          <RendementLevel label="تراكمي" data={data.rendement.cumulative} />
+        </div>
+      </GlowCard>
+
       {/* Quality indicators */}
       <div className="grid grid-cols-2 gap-4">
         <GlowCard className="text-center">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Qualité</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Qualité (cumulé)</div>
           <div className={`mt-1 font-display font-semibold ${data.quality.percentage === null ? 'text-sm text-slate-500' : 'text-xl text-turquoise glow-number'}`}>
             {data.quality.percentage === null ? 'Non renseigné' : `${data.quality.percentage}%`}
+          </div>
+          <div className="mt-0.5 text-[11px] text-slate-500">
+            aujourd'hui: {data.quality.dailyPercentage === null ? '—' : `${data.quality.dailyPercentage}%`}
           </div>
         </GlowCard>
         <GlowCard className="text-center">
@@ -265,6 +293,68 @@ function DashboardBody({ data }) {
       <GlowCard title="État des effectifs">
         <EffectifsGrid effectifs={data.effectifs} />
       </GlowCard>
+    </div>
+  )
+}
+
+function LaunchTimerStatus({ launchTimer }) {
+  const [now, setNow] = useState(new Date())
+
+  // Ticks live only while actually running — once stopped, the state is
+  // fixed (elapsed/overrun computed from started_at/stopped_at) and doesn't
+  // need a clock at all.
+  useEffect(() => {
+    if (launchTimer.stoppedAt) return undefined
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [launchTimer.stoppedAt])
+
+  const state = computeLaunchTimerState(launchTimer, now)
+
+  return (
+    <div className="mt-3 border-t border-slate-800 pt-3">
+      <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Temps de lancement</div>
+      {(state.status === 'running' || state.status === 'overrun_running') && (
+        <div className="flex items-center gap-2">
+          <span className={`font-mono text-lg font-semibold ${state.status === 'overrun_running' ? 'text-status-bad' : 'text-turquoise'}`}>
+            {state.status === 'overrun_running' ? `+${formatDuration(state.overrunSeconds)}` : formatDuration(state.remainingSeconds)}
+          </span>
+          <span className="text-xs text-slate-500">{state.status === 'overrun_running' ? '⚠️ تجاوز الهدف — جاري التشغيل' : 'جاري التشغيل'}</span>
+        </div>
+      )}
+      {state.status === 'stopped_on_target' && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-status-good">🎯 Objectif atteint</span>
+          <span className="text-xs text-slate-500">({formatDuration(state.elapsedSeconds)})</span>
+        </div>
+      )}
+      {state.status === 'stopped_overrun' && (
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-status-bad">⚠️ تجاوز الهدف بمقدار {formatDuration(state.overrunSeconds)}</span>
+            <span className="text-xs text-slate-500">({formatDuration(state.elapsedSeconds)})</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-400">
+            المسؤول: {launchTimer.responsible} · السبب: {DELAY_REASONS.find((r) => r.code === launchTimer.reasonCode)?.label || launchTimer.reasonCode}
+          </div>
+          {launchTimer.reasonComment && <div className="mt-0.5 text-xs text-slate-500">{launchTimer.reasonComment}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RendementLevel({ label, data }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-navy-900/40 py-3">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`mt-1 font-display font-semibold ${data.score === null ? 'text-sm text-slate-500' : 'text-lg text-turquoise glow-number'}`}>
+        {data.score === null ? 'غير محسوب' : `${data.score}%`}
+      </div>
+      <div className="mt-1 text-[10px] text-slate-500">
+        Prod: {data.productionPct === null ? '—' : `${data.productionPct}%`} · Qualité:{' '}
+        {data.qualityPct === null ? '—' : `${data.qualityPct}%`}
+      </div>
     </div>
   )
 }

@@ -141,6 +141,115 @@ bounded to `[model.debut, today]` and validated on both client and server.
   entered by Agent Production; it isn't reset per day, since nothing resets
   it, so in practice it tracks the running total fed into the chain.
 
+### Quality screen — hourly "Pièces retouche" + auto-computed Qualité% (Quality)
+
+The Quality screen no longer has a manual Qualité% slider. It has an hourly
+table (`QualityForm.jsx`, `GET/PUT /api/quality/models/:id/hourly`) — same
+date-picker/backdated-entry pattern as Agent Production's "Production par
+heure" — where Quality enters **"Pièces retouche"**: how many pieces from
+that hour need rework. This is a separate field from **"Reprises"** (a
+single running figure, unaffected by the date picker, entered via its own
+form below the hourly table).
+
+- **Qualité% is never entered manually or stored** — it's always computed
+  live: `(qty − pièces retouche) / qty × 100` for whatever period is being
+  shown (`computeQualityPct()` in `server/src/calc.js`), where `qty` is
+  Agent Production's real recorded output for the same chain/date/slot. A
+  zero-production hour/day/model shows "غير محسوب" (null), never a fake 0%
+  or 100%.
+- **Single source of truth**: `quality_history` (permanent, chain/date/slot
+  — same architecture as `production_history`) holds every "Pièces
+  retouche" entry ever saved, today's included. Home's "Qualité" card shows
+  both the cumulative percentage (since the model's `debut`, pairing with
+  the whole-life "Total sortie") and today's percentage (pairing with
+  "Prod à maintenant") — each computed from its own SUM query on every
+  read, never cached.
+- **Backdated entry**: identical date bounds/audit-log flagging as
+  production's hourly entry (`isBackdated`, `date_in_future`,
+  `date_before_debut`) — see Backdated Production Entry above.
+
+### Rendement — composite efficiency+quality score (Home dashboard)
+
+"Rendement" (`computeRendementProduction()`/`computeScoreRendement()` in
+`server/src/calc.js`) is a different metric from "Objectif atteint %":
+Objectif compares quantity produced against a target; Rendement measures how
+efficiently work time was actually used, combined with quality. Home shows
+it at 3 scopes side by side — hourly (last recorded hour), daily (today),
+cumulative (since the model's `debut`) — each independently computed on
+every dashboard read, never cached.
+
+- **Rendement_Production%** = standard SAM-based line-efficiency formula:
+  `(qty produced × SAM) / (workers present × attendance minutes) × 100`.
+  SAM is "VT" from Agent Méthode's gamme (in minutes). Attendance minutes
+  are fixed per scope: 60 for one hour, `WORK_HOURS_PER_DAY × 60` (540) for
+  a full day, and `(days from Début to today, inclusive) × 540` for the
+  cumulative scope — the same headcount is assumed for every day, since
+  there's no historical daily-headcount record to look up a past day's
+  real count.
+- **Score_Rendement** = simple 50/50 average of Rendement_Production% and
+  Qualité% (see the Quality section above) at the same scope. Null (never a
+  misleading average) if either side hasn't been computed yet.
+- **"Présence" — who enters headcount**: Agent Méthode is now the primary
+  owner of the actual daily headcount per specialty (`PUT
+  /api/methode/models/:id/attendance`, a new "Présence" tab on Méthode's
+  screen) — previously RH-only. **RH keeps the exact same field** as a
+  backup entry point (`PUT /api/rh/models/:id/attendance`); both write the
+  identical `rh_attendance` rows, so whichever department saved most
+  recently is automatically what Rendement uses — no separate
+  "which department wins" logic needed.
+
+### 🏆 Classement des chaînes (Home dashboard, public)
+
+A "🏆 Classement des chaînes" button next to the Chaîne/Module selectors on
+Home opens a modal (`ClassementModal.jsx`, `GET /api/chains/ranking`) ranking
+all 8 chains by today's Score_Rendement — reusing `fullDashboard()` per
+chain (run in parallel) so it's always the same live figures as each
+chain's own dashboard, never a separately cached leaderboard.
+
+- **Sort order**: chains with a real daily score first (best to worst),
+  then chains with an active model but not enough data today to compute one
+  (`score: null`), then chains with no active model at all — every one of
+  the 8 chains always appears, in that order, never silently dropped.
+- Each row shows both the daily score (the sort key) and the cumulative
+  one (since the model's `debut`) independently — a chain can have a
+  meaningful cumulative Rendement while today alone doesn't have enough
+  recorded hours yet, and vice versa; neither hides the other.
+
+### Temps de lancement — launch countdown with team + accountable overrun (Agent Méthode)
+
+A "Temps de lancement" tab on Agent Méthode's screen (`launch_timer` table,
+one row per model/launch) lets Méthode set an "Objectif (heures)" for a new
+launch, plus documentary team fields (Groupe de lancement, Agent méthode,
+Mécanicien, Électriciens, Agent Quality, Chef de chaîne — free text, not new
+calculation inputs). Only Agent Méthode can start or stop it.
+
+- **Nothing is stored except two timestamps**: `started_at` and
+  `stopped_at`. The running countdown, the red overrun flip, and the final
+  elapsed/overrun durations are all derived live from those two plus
+  Objectif (`computeLaunchTimerState()` in `server/src/calc.js`, mirrored
+  client-side in `client/src/lib/calc.js` for the per-second UI tick) —
+  never a separately stored "elapsed time" that could drift from the real
+  clock.
+- **▶️ Démarrer** starts the countdown. While the elapsed time is still
+  under Objectif it shows a normal (turquoise) countdown; once it passes
+  Objectif with no stop yet, it flips red and counts *up* from zero
+  (`+Xh Ymin` overtime) — still ticking live.
+- **⏹ Arrêter / Première pièce terminée**: if stopped before the overrun
+  flip, records "🎯 Objectif atteint" with the actual elapsed time, no
+  extra fields. If stopped after the flip, the person responsible (chosen
+  from the real names entered above, tagged with their role — e.g. "Ahmed
+  (Mécanicien)" — not a bare role label) and a reason (a fixed list:
+  parts shortage, machine breakdown, worker shortage, quality issue,
+  external stoppage, other — plus an optional free comment) are **required
+  by the server**, not just the UI — the stop request is rejected
+  (`responsible_and_reason_required` / `invalid_reason_code`) without them,
+  so this can never be skipped from a scripted or malformed request either.
+- The final result (elapsed time, target-met/exceeded status, and — on an
+  overrun — who's responsible and why) is shown permanently on the
+  "Identité du modèle" card on Home, visible to everyone, and the
+  responsible/reason are also written to the audit log
+  (`stop_launch_timer` action) for later BSCI/SMETA-style review.
+
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 
 The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,

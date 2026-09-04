@@ -11,7 +11,7 @@ import { app } from '../src/app.js'
 import { runSeed } from '../src/db/seed.js'
 import { get, run, pool } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
-import { todayInFactoryTZ } from '../src/calc.js'
+import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
 
 let server
 let base
@@ -291,7 +291,10 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
 
     const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
     assert.equal(dashboard.data.hourly.find((h) => h.index === 2).qty, 250)
-    assert.equal(dashboard.data.produit, 250) // prodAMaintenant تحسب من نفس المصدر
+    // prodAMaintenant تحسب من نفس المصدر، لكن حسب الساعة الحالية فعلياً (لو
+    // الاختبار اشتغل قبل بداية الدوام 6:30، الناتج صفر بشكل صحيح) — نحسب
+    // القيمة المتوقعة بنفس الدالة الحقيقية بدل افتراض توقيت ثابت.
+    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250 }))
   })
 
   await t.test('Total sortie/Le reste/En cours بـBilan de la chaîne يجمعون كل الأيام من Début — مو يوم واحد فقط', async () => {
@@ -323,8 +326,11 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
     assert.equal(dashboard.data.bilan.enCours, 2000 - 1374) // 626
     assert.equal(dashboard.data.bilan.leReste, 5000 - 1374) // 3626, based on qte_totale
     // "Prod à maintenant" / "Produit" must stay today-only, unaffected by
-    // the whole-life Total sortie fix above.
-    assert.equal(dashboard.data.produit, 325)
+    // the whole-life Total sortie fix above. Computed dynamically (not
+    // hardcoded to 325) so this doesn't depend on what time of day the
+    // test happens to run — before 6:30 the real app also legitimately
+    // reports 0, no matter what's recorded.
+    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250, 3: 75 }))
   })
 
   await t.test('رفض تاريخ مستقبلي', async () => {
@@ -345,6 +351,440 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
     })
     assert.equal(put.status, 400)
     assert.equal(put.data.error, 'date_before_debut')
+  })
+})
+
+test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب تلقائياً من إنتاج Agent Production الحقيقي', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  const today = todayInFactoryTZ()
+  function daysAgo(n) {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - n)
+    return d.toISOString().slice(0, 10)
+  }
+  const yesterday = daysAgo(1)
+  const debut = daysAgo(5)
+  const tomorrow = daysAgo(-1)
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_QUALITY', qteTotale: 1000, dessin: 'TEST-Q', chainNumber: TEST_CHAIN, debut },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId]) // cascades, including quality_history
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('بدون أي بيانات: القسمة على صفر لا تحدث، والقيمة null (غير محسوب)', async () => {
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.quality.percentage, null)
+    assert.equal(dashboard.data.quality.dailyPercentage, null)
+  })
+
+  await t.test('مثال المستخدم بالضبط: إنتاج=100، Pièces retouche=10 → Qualité%=90', async () => {
+    const prod = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 100, date: today },
+    })
+    assert.equal(prod.status, 200)
+
+    const retouche = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 10, date: today },
+    })
+    assert.equal(retouche.status, 200)
+    assert.equal(retouche.data.isBackdated, false)
+
+    const hourly = await call(`/quality/models/${modelId}/hourly?date=${today}`, { token: qualityToken })
+    const slot0 = hourly.data.hourly.find((h) => h.index === 0)
+    assert.equal(slot0.qty, 100)
+    assert.equal(slot0.pieceRetouche, 10)
+    assert.equal(slot0.qualityPct, 90)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    // dailyPercentage se base sur "produit" (prodAMaintenant), qui dépend de
+    // l'heure réelle actuelle — avant 6:30 il est légitimement 0 (donc
+    // dailyPercentage null), peu importe ce qui est enregistré. On calcule
+    // la valeur attendue avec la même fonction que l'app plutôt que de
+    // supposer une heure fixe.
+    const expectedDailyPct = computeQualityPct(prodAMaintenant({ 0: 100 }), 10)
+    assert.equal(dashboard.data.quality.dailyPercentage, expectedDailyPct)
+    assert.equal(dashboard.data.quality.percentage, 90) // cumulatif (Total sortie) n'est jamais borné par l'heure actuelle
+    assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
+    assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 10)
+
+    const log = await get(
+      `SELECT details FROM audit_log WHERE model_id = $1 AND action = 'update_quality_hourly' ORDER BY created_at DESC LIMIT 1`,
+      [modelId]
+    )
+    assert.deepEqual(JSON.parse(log.details), { slotIndex: 0, pieceRetouche: 10, date: today, isBackdated: false })
+  })
+
+  await t.test('تعديل بأثر رجعي ليوم سابق: يُعلَّم isBackdated، ويُعاد حساب التراكمي بشكل صحيح', async () => {
+    await call(`/production/models/${modelId}/hourly/1`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 200, date: yesterday },
+    })
+    const put = await call(`/quality/models/${modelId}/hourly/1`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 20, date: yesterday },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.isBackdated, true)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    // Cumulatif: (100 + 200) produites, (10 + 20) retouche → (300-30)/300*100 = 90
+    assert.equal(dashboard.data.quality.percentage, 90)
+    assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 30)
+    // Journalier (aujourd'hui uniquement) reste inchangé — la correction d'hier ne le touche pas.
+    assert.equal(dashboard.data.quality.dailyPercentage, computeQualityPct(prodAMaintenant({ 0: 100 }), 10))
+    assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
+  })
+
+  await t.test('Reprises: رقم تراكمي منفصل تماماً، لا يؤثر على Qualité% ولا يتأثر به', async () => {
+    const put = await call(`/quality/models/${modelId}`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { reprises: 7 },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.quality.reprises, 7)
+    assert.equal(dashboard.data.quality.percentage, 90) // inchangé
+  })
+
+  await t.test('رفض تاريخ مستقبلي ورفض تاريخ قبل Début', async () => {
+    const future = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 5, date: tomorrow },
+    })
+    assert.equal(future.status, 400)
+    assert.equal(future.data.error, 'date_in_future')
+
+    const beforeDebutQ = daysAgo(6)
+    const early = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 5, date: beforeDebutQ },
+    })
+    assert.equal(early.status, 400)
+    assert.equal(early.data.error, 'date_before_debut')
+  })
+})
+
+test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne avec Qualité%, aux 3 niveaux', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+  const rhToken = await login('rh', '8888')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const today = todayInFactoryTZ()
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_RENDEMENT', qteTotale: 1000, dessin: 'TEST-R', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  // Gamme totalisant 300s de TPS → SAM (VT) = 300/60 = 5 minutes exactement,
+  // pour matcher l'exemple de test de l'utilisateur (SAM=5 minutes).
+  const gamme = await call(`/methode/models/${modelId}/gamme`, {
+    method: 'PUT',
+    token: methodeToken,
+    body: { lines: [{ operation: 'A', machine: '301', tps: 300 }] },
+  })
+  assert.equal(gamme.status, 200)
+  assert.equal(gamme.data.vt, 5)
+
+  await t.test('Agent Méthode entre 10 ouvriers présents (301) — nouvel endpoint, mêmes lignes rh_attendance que RH', async () => {
+    const put = await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { '301': 10 } },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 10)
+  })
+
+  await t.test('RH peut écraser la même valeur (dernier enregistrement, peu importe le département, qui compte)', async () => {
+    const put = await call(`/rh/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: rhToken,
+      body: { attendance: { '301': 12 } },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 12) // RH's more recent save wins
+  })
+
+  await t.test("remet 10 (valeur utilisée pour le reste du test, exemple utilisateur)", async () => {
+    await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { '301': 10 } },
+    })
+  })
+
+  await t.test('exemple exact de l\'utilisateur: qty=100, SAM=5min, ouvriers=10, minutes(jour complet)=540 → Rendement_Production%≈9.3, Score=moyenne avec Qualité%', async () => {
+    const prod = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 100, date: today },
+    })
+    assert.equal(prod.status, 200)
+    const retouche = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 10, date: today },
+    })
+    assert.equal(retouche.status, 200)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.status, 200)
+
+    // Cumulatif: Début = aujourd'hui → 1 seul jour écoulé → minutes = 1*9*60 = 540,
+    // exactement l'exemple de l'utilisateur. totalSortie/pieceRetoucheCumulative
+    // ne dépendent jamais de l'heure actuelle (contrairement à "produit").
+    assert.equal(dashboard.data.bilan.totalSortie, 100)
+    // (100*5)/(10*540)*100 = 9.259... → 9.3
+    assert.equal(dashboard.data.rendement.cumulative.productionPct, 9.3)
+    assert.equal(dashboard.data.rendement.cumulative.qualityPct, 90) // (100-10)/100*100
+    // Score_Rendement = (9.3 + 90) / 2 = 49.65 → 49.7 (moyenne exacte, arrondie)
+    assert.equal(dashboard.data.rendement.cumulative.score, 49.7)
+
+    // Heure — la seule heure enregistrée aujourd'hui (slot 0), minutes fixes = 60,
+    // indépendant de l'heure actuelle réelle.
+    assert.equal(dashboard.data.rendement.hourly.slotIndex, 0)
+    // (100*5)/(10*60)*100 = 83.33... → 83.3
+    assert.equal(dashboard.data.rendement.hourly.productionPct, 83.3)
+    assert.equal(dashboard.data.rendement.hourly.qualityPct, 90)
+    assert.equal(dashboard.data.rendement.hourly.score, 86.7) // (83.3+90)/2 = 86.65 → 86.7
+
+    // Journalier: dépend de "produit" (prodAMaintenant), qui dépend de l'heure
+    // actuelle réelle — on calcule la valeur attendue avec la même fonction
+    // que l'app plutôt que de supposer une heure fixe (avant 6:30 "produit"
+    // est légitimement 0, peu importe ce qui est enregistré).
+    const expectedProduit = prodAMaintenant({ 0: 100 })
+    const expectedDailyProdPct = computeRendementProduction(expectedProduit, 5, 10, 9 * 60)
+    const expectedDailyQualityPct = computeQualityPct(expectedProduit, 10)
+    const expectedDailyScore = computeScoreRendement(expectedDailyProdPct, expectedDailyQualityPct)
+    assert.equal(dashboard.data.rendement.daily.productionPct, expectedDailyProdPct)
+    assert.equal(dashboard.data.rendement.daily.qualityPct, expectedDailyQualityPct)
+    assert.equal(dashboard.data.rendement.daily.score, expectedDailyScore)
+  })
+})
+
+test('🏆 Classement des chaînes: كل السلاسل الثمانية تظهر دائماً، الفارغة بآخر الترتيب، والترتيب صحيح تنازلياً', async (t) => {
+  const res = await call('/chains/ranking')
+  assert.equal(res.status, 200)
+  const ranking = res.data
+
+  // كل السلاسل الثمانية موجودة بالضبط مرة وحدة، ومرقّمة 1..8 بالترتيب —
+  // ما فيه سلسلة مُستبعدة بصمت.
+  assert.equal(ranking.length, 8)
+  assert.deepEqual(ranking.map((e) => e.chainNumber).slice().sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.deepEqual(ranking.map((e) => e.rank), [1, 2, 3, 4, 5, 6, 7, 8])
+
+  // معيار الترتيب: سلاسل بها Score حقيقي اليوم (تنازلي فيما بينها) أولاً،
+  // ثم سلاسل بها موديل نشط لكن بدون بيانات كافية اليوم (score=null)، ثم
+  // السلاسل الفارغة (بدون موديل) بآخر الترتيب — أبداً ما ينعكس هذا الترتيب،
+  // بغض النظر عن الوقت الحالي أو حالة البيانات الحقيقية وقت الاختبار.
+  function tier(e) {
+    if (!e.model) return 2
+    if (e.rendement.daily.score === null) return 1
+    return 0
+  }
+  let prevTier = -1
+  let prevScore = Infinity
+  for (const e of ranking) {
+    const t = tier(e)
+    assert.ok(t >= prevTier, `الترتيب انعكس عند Chaîne ${e.chainNumber}: ${JSON.stringify(ranking.map((x) => [x.chainNumber, tier(x)]))}`)
+    if (t !== prevTier) prevScore = Infinity
+    if (t === 0) {
+      assert.ok(e.rendement.daily.score <= prevScore, `النتيجة يجب تكون تنازلية داخل نفس الفئة عند Chaîne ${e.chainNumber}`)
+      prevScore = e.rendement.daily.score
+    }
+    prevTier = t
+  }
+
+  // Chaîne 6 ما استُخدمت بأي اختبار آخر — يجب تظهر بوضوح model: null، مو مستبعدة.
+  const emptyEntry = ranking.find((e) => e.chainNumber === 6)
+  assert.ok(emptyEntry)
+  assert.equal(emptyEntry.model, null)
+  assert.equal(emptyEntry.rendement, null)
+})
+
+test('Temps de lancement: Démarrer/Arrêter، هدف تحقق بدون سبب، وتجاوز يتطلب مسؤول وسبب إجبارياً', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const modelIds = []
+
+  t.after(async () => {
+    for (const id of modelIds) {
+      await run('DELETE FROM models WHERE id = $1', [id])
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+    }
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_LAUNCH_1', qteTotale: 1000, dessin: 'TL1', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+  modelIds.push(modelId)
+
+  await t.test('بدون تهيئة Objectif بعد، Démarrer يُرفض', async () => {
+    const start = await call(`/methode/models/${modelId}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    assert.equal(start.status, 400)
+    assert.equal(start.data.error, 'launch_timer_not_configured')
+  })
+
+  await t.test('تهيئة Objectif (heures) + أسماء الفريق', async () => {
+    const put = await call(`/methode/models/${modelId}/launch-timer`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: {
+        objectifHeures: 2,
+        groupeLancement: 'G1',
+        agentMethode: 'Ali',
+        mecanicien: 'Omar',
+        electriciens: 'Said',
+        agentQuality: 'Rim',
+        chefChaine: 'Nabil',
+      },
+    })
+    assert.equal(put.status, 200)
+    const model = await call(`/models/${modelId}`)
+    assert.equal(model.data.launchTimer.objectifHeures, 2)
+    assert.equal(model.data.launchTimer.agentMethode, 'Ali')
+    assert.equal(model.data.launchTimer.startedAt, null)
+  })
+
+  await t.test('▶️ Démarrer ينجح، وتكرار الضغط يُرفض (already_started)', async () => {
+    const start = await call(`/methode/models/${modelId}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    assert.equal(start.status, 200)
+    assert.ok(start.data.startedAt)
+
+    const startAgain = await call(`/methode/models/${modelId}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    assert.equal(startAgain.status, 400)
+    assert.equal(startAgain.data.error, 'already_started')
+  })
+
+  await t.test('⏹ Arrêter قبل بلوغ الهدف: 🎯 Objectif atteint، بدون طلب مسؤول أو سبب', async () => {
+    // نحاكي مرور 30 دقيقة فقط من أصل هدف ساعتين، بتعديل started_at مباشرة.
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    await run('UPDATE launch_timer SET started_at = $1 WHERE model_id = $2', [thirtyMinAgo, modelId])
+
+    const stop = await call(`/methode/models/${modelId}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    assert.equal(stop.status, 200)
+    assert.equal(stop.data.overrun, false)
+
+    const model = await call(`/models/${modelId}`)
+    assert.equal(model.data.launchTimer.responsible, null)
+    assert.equal(model.data.launchTimer.reasonCode, null)
+
+    const stopAgain = await call(`/methode/models/${modelId}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    assert.equal(stopAgain.status, 400)
+    assert.equal(stopAgain.data.error, 'already_stopped')
+  })
+
+  // Deuxième lancement (nouveau modèle sur la même chaîne) pour le scénario
+  // de dépassement — chaque lancement a son propre enregistrement.
+  const created2 = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_LAUNCH_2', qteTotale: 1000, dessin: 'TL2', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created2.status, 201)
+  const modelId2 = created2.data.id
+  modelIds.push(modelId2)
+
+  await call(`/methode/models/${modelId2}/launch-timer`, {
+    method: 'PUT',
+    token: methodeToken,
+    body: { objectifHeures: 1, agentMethode: 'Ali', mecanicien: 'Omar' },
+  })
+  await call(`/methode/models/${modelId2}/launch-timer/start`, { method: 'POST', token: methodeToken })
+  // نحاكي مرور ساعتين على هدف ساعة واحدة → تجاوز ساعة كاملة.
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+  await run('UPDATE launch_timer SET started_at = $1 WHERE model_id = $2', [twoHoursAgo, modelId2])
+
+  await t.test('تجاوز الهدف: الإيقاف يُرفض بدون مسؤول وسبب', async () => {
+    const stop = await call(`/methode/models/${modelId2}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    assert.equal(stop.status, 400)
+    assert.equal(stop.data.error, 'responsible_and_reason_required')
+  })
+
+  await t.test('تجاوز الهدف: كود سبب غير صحيح يُرفض', async () => {
+    const stop = await call(`/methode/models/${modelId2}/launch-timer/stop`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { responsible: 'Ali (Agent méthode)', reasonCode: 'not_a_real_reason' },
+    })
+    assert.equal(stop.status, 400)
+    assert.equal(stop.data.error, 'invalid_reason_code')
+  })
+
+  await t.test('تجاوز الهدف: بمسؤول وسبب صحيحين ينجح، ويُسجَّل بسجل التعديلات', async () => {
+    const stop = await call(`/methode/models/${modelId2}/launch-timer/stop`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { responsible: 'Omar (Mécanicien)', reasonCode: 'machine_breakdown', reasonComment: 'Panne moteur' },
+    })
+    assert.equal(stop.status, 200)
+    assert.equal(stop.data.overrun, true)
+
+    const model = await call(`/models/${modelId2}`)
+    assert.equal(model.data.launchTimer.responsible, 'Omar (Mécanicien)')
+    assert.equal(model.data.launchTimer.reasonCode, 'machine_breakdown')
+    assert.equal(model.data.launchTimer.reasonComment, 'Panne moteur')
+
+    // ~1h de dépassement (60 min ± quelques secondes de marge d'exécution du test).
+    const elapsedMinutes = (new Date(model.data.launchTimer.stoppedAt) - new Date(model.data.launchTimer.startedAt)) / 60000
+    assert.ok(elapsedMinutes > 119 && elapsedMinutes < 121, `elapsed inattendu: ${elapsedMinutes}min`)
+
+    const log = await get(
+      `SELECT details FROM audit_log WHERE model_id = $1 AND action = 'stop_launch_timer' ORDER BY created_at DESC LIMIT 1`,
+      [modelId2]
+    )
+    const details = JSON.parse(log.details)
+    assert.equal(details.overrun, true)
+    assert.equal(details.responsible, 'Omar (Mécanicien)')
+    assert.equal(details.reasonCode, 'machine_breakdown')
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.launchTimer.responsible, 'Omar (Mécanicien)')
   })
 })
 

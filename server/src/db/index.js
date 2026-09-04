@@ -188,6 +188,27 @@ CREATE TABLE IF NOT EXISTS quality (
   updated_at TEXT
 );
 
+-- Permanent hourly record of "Pièces retouche" (pieces needing rework),
+-- keyed by chain/date/slot exactly like production_history — same
+-- architecture, so Quality can go back and correct any previous day too.
+-- Qualité% is never stored here or anywhere: it's always computed live from
+-- this table's piece_retouche against Agent Production's real qty for the
+-- same chain/date/slot (see computeQualityPct() in calc.js and
+-- fullDashboard() in routes/public.js). "percentage" above is legacy from
+-- the old manual-slider Quality screen and is no longer written to.
+CREATE TABLE IF NOT EXISTS quality_history (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  chain_number INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  slot_index INTEGER NOT NULL,
+  piece_retouche INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE (chain_number, date, slot_index)
+);
+CREATE INDEX IF NOT EXISTS idx_quality_history_chain_date ON quality_history (chain_number, date);
+
 CREATE TABLE IF NOT EXISTS finale (
   model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
   en_cours INTEGER DEFAULT 0,
@@ -257,6 +278,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
   action TEXT,
   details TEXT,
   created_at TEXT
+);
+
+-- "Temps de lancement" — one row per model/launch. started_at/stopped_at
+-- are the only timestamps kept; the running countdown, the red overrun
+-- state, and the final elapsed/overrun durations are all derived live from
+-- these two plus objectif_heures (see calc.js/methodeLaunch.js) — never a
+-- separately stored "elapsed time" that could drift from the real clock.
+-- responsible/reason_code/reason_comment are set only when Agent Méthode
+-- stops the timer after it already went into overrun; NULL otherwise.
+CREATE TABLE IF NOT EXISTS launch_timer (
+  model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
+  objectif_heures DOUBLE PRECISION DEFAULT 0,
+  groupe_lancement TEXT,
+  agent_methode TEXT,
+  mecanicien TEXT,
+  electriciens TEXT,
+  agent_quality TEXT,
+  chef_chaine TEXT,
+  started_at TEXT,
+  stopped_at TEXT,
+  responsible TEXT,
+  reason_code TEXT,
+  reason_comment TEXT,
+  updated_at TEXT
 );
 `
 

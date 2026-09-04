@@ -2,8 +2,9 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { SPECIALTIES } from '../constants.js'
-import { computeVTMinutes, computeDT } from '../calc.js'
+import { SPECIALTIES, DELAY_REASONS } from '../constants.js'
+import { computeVTMinutes, computeDT, computeLaunchTimerState } from '../calc.js'
+import { saveAttendance } from '../attendanceShared.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -124,4 +125,97 @@ methodeRouter.put('/models/:id/effectif', async (req, res) => {
   const computed = await recompute(req.params.id)
   await logAudit({ deptKey: 'methode', modelId: req.params.id, action: 'update_effectif', details: { effectif, ...computed } })
   res.json({ ok: true, ...computed })
+})
+
+// Actual daily headcount present, per specialty — for the Rendement_Production%
+// calculation (see fullDashboard() in routes/public.js). Agent Méthode is now
+// the primary owner of this figure (previously RH-only); RH keeps the same
+// endpoint as a backup — both write the exact same rh_attendance rows, so
+// whichever department saves most recently is automatically what's used.
+methodeRouter.put('/models/:id/attendance', async (req, res) => {
+  await saveAttendance({ deptKey: 'methode', id: req.params.id, attendance: req.body?.attendance || {} })
+  res.json({ ok: true })
+})
+
+const DELAY_REASON_CODES = new Set(DELAY_REASONS.map((r) => r.code))
+
+// "Temps de lancement" config — Objectif (heures) + the team names shown
+// with every new model/launch. Editable any time before the timer is
+// stopped (Démarrer/Arrêter below are separate actions, not touched here).
+methodeRouter.put('/models/:id/launch-timer', async (req, res) => {
+  const model = await get('SELECT id FROM models WHERE id = $1', [req.params.id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+  const { objectifHeures, groupeLancement, agentMethode, mecanicien, electriciens, agentQuality, chefChaine } = req.body || {}
+  const now = new Date().toISOString()
+  await run(
+    `INSERT INTO launch_timer (model_id, objectif_heures, groupe_lancement, agent_methode, mecanicien, electriciens, agent_quality, chef_chaine, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (model_id) DO UPDATE SET
+       objectif_heures = excluded.objectif_heures, groupe_lancement = excluded.groupe_lancement,
+       agent_methode = excluded.agent_methode, mecanicien = excluded.mecanicien,
+       electriciens = excluded.electriciens, agent_quality = excluded.agent_quality,
+       chef_chaine = excluded.chef_chaine, updated_at = excluded.updated_at`,
+    [req.params.id, Math.max(0, Number(objectifHeures) || 0), groupeLancement || null, agentMethode || null, mecanicien || null, electriciens || null, agentQuality || null, chefChaine || null, now]
+  )
+  await logAudit({ deptKey: 'methode', modelId: req.params.id, action: 'update_launch_timer_config', details: req.body })
+  res.json({ ok: true })
+})
+
+// ▶️ Démarrer — starts the countdown from Objectif (heures). Only allowed
+// once (a model/launch has exactly one timer), and only after Objectif has
+// actually been set to something real.
+methodeRouter.post('/models/:id/launch-timer/start', async (req, res) => {
+  const timer = await get('SELECT * FROM launch_timer WHERE model_id = $1', [req.params.id])
+  if (!timer) return res.status(400).json({ error: 'launch_timer_not_configured' })
+  if (timer.started_at) return res.status(400).json({ error: 'already_started' })
+  if (!timer.objectif_heures || timer.objectif_heures <= 0) return res.status(400).json({ error: 'objectif_required' })
+
+  const now = new Date().toISOString()
+  await run('UPDATE launch_timer SET started_at = $1, updated_at = $1 WHERE model_id = $2', [now, req.params.id])
+  await logAudit({ deptKey: 'methode', modelId: req.params.id, action: 'start_launch_timer', details: { objectifHeures: timer.objectif_heures, startedAt: now } })
+  res.json({ ok: true, startedAt: now })
+})
+
+// ⏹ Arrêter / Première pièce terminée — stops the countdown. If it had
+// already gone into overrun (red, counting up past Objectif), the person
+// responsible and a reason are required before the stop is accepted — this
+// is enforced server-side, not just in the UI, so it can never be skipped.
+methodeRouter.post('/models/:id/launch-timer/stop', async (req, res) => {
+  const timer = await get('SELECT * FROM launch_timer WHERE model_id = $1', [req.params.id])
+  if (!timer) return res.status(400).json({ error: 'launch_timer_not_configured' })
+  if (!timer.started_at) return res.status(400).json({ error: 'not_started' })
+  if (timer.stopped_at) return res.status(400).json({ error: 'already_stopped' })
+
+  const now = new Date().toISOString()
+  const state = computeLaunchTimerState({ objectifHeures: timer.objectif_heures, startedAt: timer.started_at, stoppedAt: now })
+
+  const { responsible, reasonCode, reasonComment } = req.body || {}
+  if (state.status === 'stopped_overrun') {
+    if (!responsible || !reasonCode) return res.status(400).json({ error: 'responsible_and_reason_required' })
+    if (!DELAY_REASON_CODES.has(reasonCode)) return res.status(400).json({ error: 'invalid_reason_code' })
+  }
+
+  const finalResponsible = state.status === 'stopped_overrun' ? responsible : null
+  const finalReasonCode = state.status === 'stopped_overrun' ? reasonCode : null
+  const finalReasonComment = state.status === 'stopped_overrun' ? reasonComment || null : null
+
+  await run(
+    'UPDATE launch_timer SET stopped_at = $1, responsible = $2, reason_code = $3, reason_comment = $4, updated_at = $1 WHERE model_id = $5',
+    [now, finalResponsible, finalReasonCode, finalReasonComment, req.params.id]
+  )
+  await logAudit({
+    deptKey: 'methode',
+    modelId: req.params.id,
+    action: 'stop_launch_timer',
+    details: {
+      stoppedAt: now,
+      elapsedSeconds: state.elapsedSeconds,
+      overrun: state.status === 'stopped_overrun',
+      overrunSeconds: state.overrunSeconds,
+      responsible: finalResponsible,
+      reasonCode: finalReasonCode,
+      reasonComment: finalReasonComment,
+    },
+  })
+  res.json({ ok: true, stoppedAt: now, overrun: state.status === 'stopped_overrun' })
 })
