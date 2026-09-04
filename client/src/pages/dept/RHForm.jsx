@@ -57,7 +57,7 @@ export default function RHForm({ token, chainNumber }) {
                     label={`${sp} / ${required} مطلوب`}
                     value={attendance[sp] ?? 0}
                     onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
-                    max={30}
+                    max={999}
                   />
                   {voiceMode && (
                     <VoiceMicButton label={sp} onConfirm={(n) => setAttendance({ ...attendance, [sp]: n })} />

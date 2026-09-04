@@ -94,6 +94,7 @@ export const api = {
     updateModel: (token, id, payload) => request(`/methode/models/${id}`, { method: 'PUT', body: payload, token }),
     updateGamme: (token, id, lines) => request(`/methode/models/${id}/gamme`, { method: 'PUT', body: { lines }, token }),
     updateEffectif: (token, id, effectif) => request(`/methode/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
+    updateAttendance: (token, id, attendance) => request(`/methode/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
   },
   production: {
     getHourly: (token, id, date) => request(`/production/models/${id}/hourly?date=${date}`, { token }),

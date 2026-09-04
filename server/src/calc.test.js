@@ -1,6 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeVTMinutes, computeDT, computeObjectifJour, detectDeclineTrend, computeQualityPct } from './calc.js'
+import {
+  computeVTMinutes,
+  computeDT,
+  computeObjectifJour,
+  detectDeclineTrend,
+  computeQualityPct,
+  computeRendementProduction,
+  computeScoreRendement,
+  daysBetweenInclusive,
+} from './calc.js'
 import { WORK_HOURS_PER_DAY } from './constants.js'
 
 function approx(actual, expected, epsilon = 1e-9) {
@@ -98,6 +107,36 @@ test('computeQualityPct = (qty - pièces retouche) / qty * 100', () => {
 test("computeQualityPct: aucune production réelle enregistrée (qty = 0) → null, jamais une division par zéro", () => {
   assert.equal(computeQualityPct(0, 0), null)
   assert.equal(computeQualityPct(0, 5), null)
+})
+
+test('computeRendementProduction = (qty * SAM) / (ouvriers * minutes) * 100', () => {
+  // Exemple de l'utilisateur: qty=100, SAM=5min, ouvriers=10, minutes=540
+  // → (100*5)/(10*540)*100 = 500/5400*100 = 9.259... → 9.3
+  approx(computeRendementProduction(100, 5, 10, 540), 9.3, 0.05)
+  // 100% d'efficacité exacte: qty*SAM == ouvriers*minutes
+  approx(computeRendementProduction(108, 5, 1, 540), 100, 0.05) // 108*5=540 = 1*540
+})
+
+test('computeRendementProduction: aucun ouvrier ou aucune minute de présence → null (jamais une division par zéro)', () => {
+  assert.equal(computeRendementProduction(100, 5, 0, 540), null)
+  assert.equal(computeRendementProduction(100, 5, 10, 0), null)
+})
+
+test('computeScoreRendement = moyenne simple de Rendement_Production% et Qualité%', () => {
+  approx(computeScoreRendement(9.3, 90), 49.7) // (9.3+90)/2 = 49.65 → arrondi à 49.7
+  approx(computeScoreRendement(80, 80), 80)
+})
+
+test('computeScoreRendement: une des deux valeurs non calculée (null) → null, jamais une moyenne trompeuse', () => {
+  assert.equal(computeScoreRendement(null, 90), null)
+  assert.equal(computeScoreRendement(80, null), null)
+  assert.equal(computeScoreRendement(null, null), null)
+})
+
+test('daysBetweenInclusive: compte les deux bornes incluses', () => {
+  assert.equal(daysBetweenInclusive('2026-09-01', '2026-09-01'), 1)
+  assert.equal(daysBetweenInclusive('2026-09-01', '2026-09-05'), 5)
+  assert.equal(daysBetweenInclusive('2026-08-29', '2026-09-04'), 7)
 })
 
 test('detectDeclineTrend: la série se prolonge au-delà de 3 heures si la baisse continue', () => {

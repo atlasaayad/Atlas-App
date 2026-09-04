@@ -29,15 +29,22 @@ const OPERATION_SUGGESTIONS = [
 export default function MethodeForm({ token, chainNumber }) {
   const [loading, setLoading] = useState(true)
   const [model, setModel] = useState(null)
+  const [dashboard, setDashboard] = useState(null)
 
   async function load() {
     setLoading(true)
     const chains = await api.getChains()
     const info = chains.find((c) => c.chainNumber === chainNumber)
     if (info?.model) {
-      setModel(await api.getModel(info.model.id))
+      // Dashboard fetched alongside the model so the Présence tab can show
+      // today's actual headcount (rh_attendance) next to the required
+      // headcount (effectif_requis) — getModel() alone only has the latter.
+      const [m, dash] = await Promise.all([api.getModel(info.model.id), api.getDashboardByChain(chainNumber)])
+      setModel(m)
+      setDashboard(dash)
     } else {
       setModel(null)
+      setDashboard(null)
     }
     setLoading(false)
   }
@@ -49,7 +56,7 @@ export default function MethodeForm({ token, chainNumber }) {
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
   if (!model) return <CreateModelForm token={token} chainNumber={chainNumber} onCreated={load} />
-  return <EditModel token={token} model={model} onSaved={load} />
+  return <EditModel token={token} model={model} dashboard={dashboard} onSaved={load} />
 }
 
 function CreateModelForm({ token, chainNumber, onCreated }) {
@@ -112,7 +119,7 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
   )
 }
 
-function EditModel({ token, model, onSaved }) {
+function EditModel({ token, model, dashboard, onSaved }) {
   const [tab, setTab] = useState('identite')
   return (
     <div className="space-y-4">
@@ -121,6 +128,7 @@ function EditModel({ token, model, onSaved }) {
           ['identite', 'Identité'],
           ['gamme', 'Gamme de montage'],
           ['effectif', 'Effectif'],
+          ['presence', 'Présence'],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -151,7 +159,67 @@ function EditModel({ token, model, onSaved }) {
       {tab === 'identite' && <IdentiteTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'gamme' && <GammeTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'effectif' && <EffectifTab token={token} model={model} onSaved={onSaved} />}
+      {tab === 'presence' && <PresenceTab token={token} model={model} dashboard={dashboard} onSaved={onSaved} />}
     </div>
+  )
+}
+
+function PresenceTab({ token, model, dashboard, onSaved }) {
+  const [attendance, setAttendance] = useState(
+    Object.fromEntries(SPECIALTIES.map((sp) => [sp, dashboard?.effectifs.find((e) => e.specialty === sp)?.present ?? 0]))
+  )
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
+
+  async function submit() {
+    setSaving(true)
+    try {
+      await api.methode.updateAttendance(token, model.id, attendance)
+      setSaved(true)
+      onSaved()
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <GlowCard>
+      <p className="mb-3 text-sm text-slate-400">
+        عدد العمال الحاضرين فعلياً اليوم لكل تخصص — يُستخدم لحساب Rendement (كفاءة الإنتاج). Agent Méthode هو
+        المسؤول الأساسي عن هذا الرقم الآن (بدل RH وحده سابقاً)؛ RH لسه يقدر يعدّله من شاشته كنسخة احتياطية — آخر
+        تحديث من أي القسمين هو المُعتمد.
+      </p>
+      {dashboard && (
+        <div className="mb-3 text-sm text-slate-400">
+          Rendement اليوم:{' '}
+          <span className="font-mono text-turquoise">
+            {dashboard.rendement.daily.score === null ? 'غير محسوب' : `${dashboard.rendement.daily.score}%`}
+          </span>
+        </div>
+      )}
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+        {SPECIALTIES.map((sp) => {
+          const required = model.effectif?.[sp] ?? 0
+          return (
+            <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+              <Stepper
+                label={`${sp} / ${required} مطلوب`}
+                value={attendance[sp] ?? 0}
+                onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
+                max={999}
+              />
+              {voiceMode && <VoiceMicButton label={sp} onConfirm={(n) => setAttendance({ ...attendance, [sp]: n })} />}
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-4">
+        <SaveButton onClick={submit} saving={saving} saved={saved} />
+      </div>
+    </GlowCard>
   )
 }
 

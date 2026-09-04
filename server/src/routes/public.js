@@ -1,8 +1,16 @@
 import { Router } from 'express'
 import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
-import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
-import { computeObjectifJour, prodAMaintenant, todayInFactoryTZ, computeQualityPct } from '../calc.js'
+import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS, WORK_HOURS_PER_DAY } from '../constants.js'
+import {
+  computeObjectifJour,
+  prodAMaintenant,
+  todayInFactoryTZ,
+  computeQualityPct,
+  computeRendementProduction,
+  computeScoreRendement,
+  daysBetweenInclusive,
+} from '../calc.js'
 
 export const publicRouter = Router()
 
@@ -105,6 +113,7 @@ export async function fullDashboard(model) {
     cumulativeRow,
     retoucheTodayRow,
     retoucheCumulativeRow,
+    qualityHourlyRows,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -144,6 +153,13 @@ export async function fullDashboard(model) {
       get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
         model.chain_number,
         model.debut || today,
+        today,
+      ]),
+      // Per-slot (not summed) today's "Pièces retouche" — needed to compute
+      // Qualité% for just the single most-recently-recorded hour, for the
+      // "hourly" Rendement level below.
+      all('SELECT slot_index, piece_retouche FROM quality_history WHERE chain_number = $1 AND date = $2', [
+        model.chain_number,
         today,
       ]),
     ])
@@ -197,6 +213,34 @@ export async function fullDashboard(model) {
   // scoping split as Total sortie vs. Prod à maintenant.
   const qualityDailyPct = computeQualityPct(produit, pieceRetoucheToday)
   const qualityCumulativePct = computeQualityPct(totalSortie, pieceRetoucheCumulative)
+
+  // Rendement = standard SAM-based line efficiency (computeRendementProduction)
+  // averaged 50/50 with Qualité% into a single Score_Rendement, at 3 scopes:
+  // one hour, today, and the model's whole life. SAM is "VT" from Agent
+  // Méthode's gamme; "workers present" is today's live headcount
+  // (rh_attendance, sum across specialties — Agent Méthode or RH, whichever
+  // saved most recently) applied to every scope alike, since there's no
+  // historical daily-headcount record to look up a past day's real count.
+  const samMinutes = model.vt
+  const qualityHourlyMap = Object.fromEntries(qualityHourlyRows.map((r) => [r.slot_index, r.piece_retouche]))
+  const lastHourEntry = hourlyRows.reduce((max, r) => (!max || r.slot_index > max.slot_index ? r : max), null)
+  const hourlyQty = lastHourEntry ? lastHourEntry.qty : null
+  const hourlyQualityPct = lastHourEntry ? computeQualityPct(hourlyQty, qualityHourlyMap[lastHourEntry.slot_index] || 0) : null
+  const hourlyRendementProdPct = lastHourEntry ? computeRendementProduction(hourlyQty, samMinutes, ouvriersPresents, 60) : null
+  const hourlyScoreRendement = computeScoreRendement(hourlyRendementProdPct, hourlyQualityPct)
+
+  const dailyRendementProdPct = computeRendementProduction(produit, samMinutes, ouvriersPresents, WORK_HOURS_PER_DAY * 60)
+  const dailyScoreRendement = computeScoreRendement(dailyRendementProdPct, qualityDailyPct)
+
+  const cumulativeDays = daysBetweenInclusive(model.debut || today, today)
+  const cumulativeRendementProdPct = computeRendementProduction(
+    totalSortie,
+    samMinutes,
+    ouvriersPresents,
+    cumulativeDays * WORK_HOURS_PER_DAY * 60
+  )
+  const cumulativeScoreRendement = computeScoreRendement(cumulativeRendementProdPct, qualityCumulativePct)
+
   const finale = finaleRow || {
     en_cours: 0,
     piece_retouche: 0,
@@ -273,6 +317,11 @@ export async function fullDashboard(model) {
       reprises: quality.reprises,
       pieceRetoucheToday,
       pieceRetoucheCumulative,
+    },
+    rendement: {
+      hourly: { productionPct: hourlyRendementProdPct, qualityPct: hourlyQualityPct, score: hourlyScoreRendement, slotIndex: lastHourEntry?.slot_index ?? null },
+      daily: { productionPct: dailyRendementProdPct, qualityPct: qualityDailyPct, score: dailyScoreRendement },
+      cumulative: { productionPct: cumulativeRendementProdPct, qualityPct: qualityCumulativePct, score: cumulativeScoreRendement },
     },
     etatDesPostes,
     effectifs,

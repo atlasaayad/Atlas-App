@@ -114,3 +114,37 @@ export function todayInFactoryTZ(now = new Date()) {
   const d = parts.find((p) => p.type === 'day').value
   return `${y}-${m}-${d}`
 }
+
+// Rendement_Production% — standard SAM-based line-efficiency formula:
+// (quantité produite × SAM) / (ouvriers présents × minutes de présence) × 100.
+// Works at any scope (one hour, a day, the model's whole life) — the caller
+// picks qty/attendanceMinutes to match. Null (never a misleading 0%) when
+// there's no real headcount or time to divide by.
+export function computeRendementProduction(qty, samMinutes, workersPresent, attendanceMinutes) {
+  const workers = Number(workersPresent) || 0
+  const minutes = Number(attendanceMinutes) || 0
+  if (workers <= 0 || minutes <= 0) return null
+  const q = Number(qty) || 0
+  const sam = Number(samMinutes) || 0
+  return Math.round(((q * sam) / (workers * minutes)) * 1000) / 10
+}
+
+// Score_Rendement = simple 50/50 average of Rendement_Production% and
+// Qualité% at the same scope. Null if either input is null/not-yet-computed
+// — averaging a real number against a missing one would misrepresent a
+// number nobody has actually confirmed yet, exactly like the individual
+// metrics never fake a 0% for missing data.
+export function computeScoreRendement(rendementProductionPct, qualityPct) {
+  if (rendementProductionPct === null || qualityPct === null) return null
+  return Math.round(((rendementProductionPct + qualityPct) / 2) * 10) / 10
+}
+
+// Inclusive day count between two YYYY-MM-DD dates (used to size the
+// cumulative-since-Début attendance-minutes denominator: cumulativeDays *
+// WORK_HOURS_PER_DAY * 60). UTC-based arithmetic on date-only strings, so
+// it's immune to DST — there is no time-of-day component to shift.
+export function daysBetweenInclusive(fromDate, toDate) {
+  const from = new Date(`${fromDate}T00:00:00Z`)
+  const to = new Date(`${toDate}T00:00:00Z`)
+  return Math.round((to - from) / 86400000) + 1
+}

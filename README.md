@@ -168,6 +168,36 @@ form below the hourly table).
   production's hourly entry (`isBackdated`, `date_in_future`,
   `date_before_debut`) — see Backdated Production Entry above.
 
+### Rendement — composite efficiency+quality score (Home dashboard)
+
+"Rendement" (`computeRendementProduction()`/`computeScoreRendement()` in
+`server/src/calc.js`) is a different metric from "Objectif atteint %":
+Objectif compares quantity produced against a target; Rendement measures how
+efficiently work time was actually used, combined with quality. Home shows
+it at 3 scopes side by side — hourly (last recorded hour), daily (today),
+cumulative (since the model's `debut`) — each independently computed on
+every dashboard read, never cached.
+
+- **Rendement_Production%** = standard SAM-based line-efficiency formula:
+  `(qty produced × SAM) / (workers present × attendance minutes) × 100`.
+  SAM is "VT" from Agent Méthode's gamme (in minutes). Attendance minutes
+  are fixed per scope: 60 for one hour, `WORK_HOURS_PER_DAY × 60` (540) for
+  a full day, and `(days from Début to today, inclusive) × 540` for the
+  cumulative scope — the same headcount is assumed for every day, since
+  there's no historical daily-headcount record to look up a past day's
+  real count.
+- **Score_Rendement** = simple 50/50 average of Rendement_Production% and
+  Qualité% (see the Quality section above) at the same scope. Null (never a
+  misleading average) if either side hasn't been computed yet.
+- **"Présence" — who enters headcount**: Agent Méthode is now the primary
+  owner of the actual daily headcount per specialty (`PUT
+  /api/methode/models/:id/attendance`, a new "Présence" tab on Méthode's
+  screen) — previously RH-only. **RH keeps the exact same field** as a
+  backup entry point (`PUT /api/rh/models/:id/attendance`); both write the
+  identical `rh_attendance` rows, so whichever department saved most
+  recently is automatically what Rendement uses — no separate
+  "which department wins" logic needed.
+
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 
 The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,

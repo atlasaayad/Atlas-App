@@ -213,6 +213,19 @@ function DashboardBody({ data }) {
         </div>
       </GlowCard>
 
+      {/* Rendement — composite efficiency+quality score, distinct from Objectif atteint% */}
+      <GlowCard title="Rendement">
+        <p className="mb-3 text-xs text-slate-500">
+          Rendement = كفاءة استخدام وقت العمل (SAM-based) + الجودة معاً — مختلف عن "Objectif atteint %" اللي يقارن
+          الكمية فقط بالهدف.
+        </p>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <RendementLevel label="بالساعة" data={data.rendement.hourly} />
+          <RendementLevel label="اليوم" data={data.rendement.daily} />
+          <RendementLevel label="تراكمي" data={data.rendement.cumulative} />
+        </div>
+      </GlowCard>
+
       {/* Quality indicators */}
       <div className="grid grid-cols-2 gap-4">
         <GlowCard className="text-center">
@@ -268,6 +281,21 @@ function DashboardBody({ data }) {
       <GlowCard title="État des effectifs">
         <EffectifsGrid effectifs={data.effectifs} />
       </GlowCard>
+    </div>
+  )
+}
+
+function RendementLevel({ label, data }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-navy-900/40 py-3">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`mt-1 font-display font-semibold ${data.score === null ? 'text-sm text-slate-500' : 'text-lg text-turquoise glow-number'}`}>
+        {data.score === null ? 'غير محسوب' : `${data.score}%`}
+      </div>
+      <div className="mt-1 text-[10px] text-slate-500">
+        Prod: {data.productionPct === null ? '—' : `${data.productionPct}%`} · Qualité:{' '}
+        {data.qualityPct === null ? '—' : `${data.qualityPct}%`}
+      </div>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
 import { SPECIALTIES } from '../constants.js'
 import { computeVTMinutes, computeDT } from '../calc.js'
+import { saveAttendance } from '../attendanceShared.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -124,4 +125,14 @@ methodeRouter.put('/models/:id/effectif', async (req, res) => {
   const computed = await recompute(req.params.id)
   await logAudit({ deptKey: 'methode', modelId: req.params.id, action: 'update_effectif', details: { effectif, ...computed } })
   res.json({ ok: true, ...computed })
+})
+
+// Actual daily headcount present, per specialty — for the Rendement_Production%
+// calculation (see fullDashboard() in routes/public.js). Agent Méthode is now
+// the primary owner of this figure (previously RH-only); RH keeps the same
+// endpoint as a backup — both write the exact same rh_attendance rows, so
+// whichever department saves most recently is automatically what's used.
+methodeRouter.put('/models/:id/attendance', async (req, res) => {
+  await saveAttendance({ deptKey: 'methode', id: req.params.id, attendance: req.body?.attendance || {} })
+  res.json({ ok: true })
 })

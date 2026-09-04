@@ -11,7 +11,7 @@ import { app } from '../src/app.js'
 import { runSeed } from '../src/db/seed.js'
 import { get, run, pool } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
-import { todayInFactoryTZ } from '../src/calc.js'
+import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
 
 let server
 let base
@@ -291,7 +291,10 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
 
     const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
     assert.equal(dashboard.data.hourly.find((h) => h.index === 2).qty, 250)
-    assert.equal(dashboard.data.produit, 250) // prodAMaintenant تحسب من نفس المصدر
+    // prodAMaintenant تحسب من نفس المصدر، لكن حسب الساعة الحالية فعلياً (لو
+    // الاختبار اشتغل قبل بداية الدوام 6:30، الناتج صفر بشكل صحيح) — نحسب
+    // القيمة المتوقعة بنفس الدالة الحقيقية بدل افتراض توقيت ثابت.
+    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250 }))
   })
 
   await t.test('Total sortie/Le reste/En cours بـBilan de la chaîne يجمعون كل الأيام من Début — مو يوم واحد فقط', async () => {
@@ -323,8 +326,11 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
     assert.equal(dashboard.data.bilan.enCours, 2000 - 1374) // 626
     assert.equal(dashboard.data.bilan.leReste, 5000 - 1374) // 3626, based on qte_totale
     // "Prod à maintenant" / "Produit" must stay today-only, unaffected by
-    // the whole-life Total sortie fix above.
-    assert.equal(dashboard.data.produit, 325)
+    // the whole-life Total sortie fix above. Computed dynamically (not
+    // hardcoded to 325) so this doesn't depend on what time of day the
+    // test happens to run — before 6:30 the real app also legitimately
+    // reports 0, no matter what's recorded.
+    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250, 3: 75 }))
   })
 
   await t.test('رفض تاريخ مستقبلي', async () => {
@@ -409,8 +415,14 @@ test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب �
     assert.equal(slot0.qualityPct, 90)
 
     const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
-    assert.equal(dashboard.data.quality.dailyPercentage, 90)
-    assert.equal(dashboard.data.quality.percentage, 90) // cumulatif = journalier ici (aucune autre journée encore)
+    // dailyPercentage se base sur "produit" (prodAMaintenant), qui dépend de
+    // l'heure réelle actuelle — avant 6:30 il est légitimement 0 (donc
+    // dailyPercentage null), peu importe ce qui est enregistré. On calcule
+    // la valeur attendue avec la même fonction que l'app plutôt que de
+    // supposer une heure fixe.
+    const expectedDailyPct = computeQualityPct(prodAMaintenant({ 0: 100 }), 10)
+    assert.equal(dashboard.data.quality.dailyPercentage, expectedDailyPct)
+    assert.equal(dashboard.data.quality.percentage, 90) // cumulatif (Total sortie) n'est jamais borné par l'heure actuelle
     assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
     assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 10)
 
@@ -440,7 +452,7 @@ test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب �
     assert.equal(dashboard.data.quality.percentage, 90)
     assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 30)
     // Journalier (aujourd'hui uniquement) reste inchangé — la correction d'hier ne le touche pas.
-    assert.equal(dashboard.data.quality.dailyPercentage, 90)
+    assert.equal(dashboard.data.quality.dailyPercentage, computeQualityPct(prodAMaintenant({ 0: 100 }), 10))
     assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
   })
 
@@ -473,6 +485,119 @@ test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب �
     })
     assert.equal(early.status, 400)
     assert.equal(early.data.error, 'date_before_debut')
+  })
+})
+
+test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne avec Qualité%, aux 3 niveaux', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+  const rhToken = await login('rh', '8888')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const today = todayInFactoryTZ()
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_RENDEMENT', qteTotale: 1000, dessin: 'TEST-R', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  // Gamme totalisant 300s de TPS → SAM (VT) = 300/60 = 5 minutes exactement,
+  // pour matcher l'exemple de test de l'utilisateur (SAM=5 minutes).
+  const gamme = await call(`/methode/models/${modelId}/gamme`, {
+    method: 'PUT',
+    token: methodeToken,
+    body: { lines: [{ operation: 'A', machine: '301', tps: 300 }] },
+  })
+  assert.equal(gamme.status, 200)
+  assert.equal(gamme.data.vt, 5)
+
+  await t.test('Agent Méthode entre 10 ouvriers présents (301) — nouvel endpoint, mêmes lignes rh_attendance que RH', async () => {
+    const put = await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { '301': 10 } },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 10)
+  })
+
+  await t.test('RH peut écraser la même valeur (dernier enregistrement, peu importe le département, qui compte)', async () => {
+    const put = await call(`/rh/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: rhToken,
+      body: { attendance: { '301': 12 } },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 12) // RH's more recent save wins
+  })
+
+  await t.test("remet 10 (valeur utilisée pour le reste du test, exemple utilisateur)", async () => {
+    await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { '301': 10 } },
+    })
+  })
+
+  await t.test('exemple exact de l\'utilisateur: qty=100, SAM=5min, ouvriers=10, minutes(jour complet)=540 → Rendement_Production%≈9.3, Score=moyenne avec Qualité%', async () => {
+    const prod = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 100, date: today },
+    })
+    assert.equal(prod.status, 200)
+    const retouche = await call(`/quality/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 10, date: today },
+    })
+    assert.equal(retouche.status, 200)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.status, 200)
+
+    // Cumulatif: Début = aujourd'hui → 1 seul jour écoulé → minutes = 1*9*60 = 540,
+    // exactement l'exemple de l'utilisateur. totalSortie/pieceRetoucheCumulative
+    // ne dépendent jamais de l'heure actuelle (contrairement à "produit").
+    assert.equal(dashboard.data.bilan.totalSortie, 100)
+    // (100*5)/(10*540)*100 = 9.259... → 9.3
+    assert.equal(dashboard.data.rendement.cumulative.productionPct, 9.3)
+    assert.equal(dashboard.data.rendement.cumulative.qualityPct, 90) // (100-10)/100*100
+    // Score_Rendement = (9.3 + 90) / 2 = 49.65 → 49.7 (moyenne exacte, arrondie)
+    assert.equal(dashboard.data.rendement.cumulative.score, 49.7)
+
+    // Heure — la seule heure enregistrée aujourd'hui (slot 0), minutes fixes = 60,
+    // indépendant de l'heure actuelle réelle.
+    assert.equal(dashboard.data.rendement.hourly.slotIndex, 0)
+    // (100*5)/(10*60)*100 = 83.33... → 83.3
+    assert.equal(dashboard.data.rendement.hourly.productionPct, 83.3)
+    assert.equal(dashboard.data.rendement.hourly.qualityPct, 90)
+    assert.equal(dashboard.data.rendement.hourly.score, 86.7) // (83.3+90)/2 = 86.65 → 86.7
+
+    // Journalier: dépend de "produit" (prodAMaintenant), qui dépend de l'heure
+    // actuelle réelle — on calcule la valeur attendue avec la même fonction
+    // que l'app plutôt que de supposer une heure fixe (avant 6:30 "produit"
+    // est légitimement 0, peu importe ce qui est enregistré).
+    const expectedProduit = prodAMaintenant({ 0: 100 })
+    const expectedDailyProdPct = computeRendementProduction(expectedProduit, 5, 10, 9 * 60)
+    const expectedDailyQualityPct = computeQualityPct(expectedProduit, 10)
+    const expectedDailyScore = computeScoreRendement(expectedDailyProdPct, expectedDailyQualityPct)
+    assert.equal(dashboard.data.rendement.daily.productionPct, expectedDailyProdPct)
+    assert.equal(dashboard.data.rendement.daily.qualityPct, expectedDailyQualityPct)
+    assert.equal(dashboard.data.rendement.daily.score, expectedDailyScore)
   })
 })
 
