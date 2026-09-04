@@ -12,7 +12,8 @@ import DetailsFinaleModal from '../components/DetailsFinaleModal'
 import ClassementModal from '../components/ClassementModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
-import { CHAIN_NUMBERS } from '../lib/constants'
+import { CHAIN_NUMBERS, DELAY_REASONS } from '../lib/constants'
+import { computeLaunchTimerState, formatDuration } from '../lib/calc'
 
 export default function Home() {
   const [chains, setChains] = useState([])
@@ -166,6 +167,7 @@ function DashboardBody({ data }) {
             <Field label="Fin prévue" value={data.identity.finPrevue} />
           </div>
         </div>
+        {data.launchTimer?.startedAt && <LaunchTimerStatus launchTimer={data.launchTimer} />}
       </GlowCard>
 
       {/* 2. Hourly chart + side stats — Objectif/heure and Objectif atteint live in the header, modest size */}
@@ -291,6 +293,53 @@ function DashboardBody({ data }) {
       <GlowCard title="État des effectifs">
         <EffectifsGrid effectifs={data.effectifs} />
       </GlowCard>
+    </div>
+  )
+}
+
+function LaunchTimerStatus({ launchTimer }) {
+  const [now, setNow] = useState(new Date())
+
+  // Ticks live only while actually running — once stopped, the state is
+  // fixed (elapsed/overrun computed from started_at/stopped_at) and doesn't
+  // need a clock at all.
+  useEffect(() => {
+    if (launchTimer.stoppedAt) return undefined
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [launchTimer.stoppedAt])
+
+  const state = computeLaunchTimerState(launchTimer, now)
+
+  return (
+    <div className="mt-3 border-t border-slate-800 pt-3">
+      <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Temps de lancement</div>
+      {(state.status === 'running' || state.status === 'overrun_running') && (
+        <div className="flex items-center gap-2">
+          <span className={`font-mono text-lg font-semibold ${state.status === 'overrun_running' ? 'text-status-bad' : 'text-turquoise'}`}>
+            {state.status === 'overrun_running' ? `+${formatDuration(state.overrunSeconds)}` : formatDuration(state.remainingSeconds)}
+          </span>
+          <span className="text-xs text-slate-500">{state.status === 'overrun_running' ? '⚠️ تجاوز الهدف — جاري التشغيل' : 'جاري التشغيل'}</span>
+        </div>
+      )}
+      {state.status === 'stopped_on_target' && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-status-good">🎯 Objectif atteint</span>
+          <span className="text-xs text-slate-500">({formatDuration(state.elapsedSeconds)})</span>
+        </div>
+      )}
+      {state.status === 'stopped_overrun' && (
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-status-bad">⚠️ تجاوز الهدف بمقدار {formatDuration(state.overrunSeconds)}</span>
+            <span className="text-xs text-slate-500">({formatDuration(state.elapsedSeconds)})</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-400">
+            المسؤول: {launchTimer.responsible} · السبب: {DELAY_REASONS.find((r) => r.code === launchTimer.reasonCode)?.label || launchTimer.reasonCode}
+          </div>
+          {launchTimer.reasonComment && <div className="mt-0.5 text-xs text-slate-500">{launchTimer.reasonComment}</div>}
+        </div>
+      )}
     </div>
   )
 }

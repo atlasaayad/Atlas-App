@@ -139,6 +139,36 @@ export function computeScoreRendement(rendementProductionPct, qualityPct) {
   return Math.round(((rendementProductionPct + qualityPct) / 2) * 10) / 10
 }
 
+// "Temps de lancement" live state — never stored anywhere; always derived
+// from started_at/stopped_at/objectif_heures at the moment of reading (the
+// client re-derives it every second locally for the ticking countdown,
+// using the same formula against its own clock). `now` defaults to the
+// real current time; pass a fixed Date in tests.
+export function computeLaunchTimerState({ objectifHeures, startedAt, stoppedAt }, now = new Date()) {
+  if (!startedAt) return { status: 'not_started' }
+
+  const objectifSeconds = Math.round((Number(objectifHeures) || 0) * 3600)
+  const startedMs = new Date(startedAt).getTime()
+  const endMs = stoppedAt ? new Date(stoppedAt).getTime() : now.getTime()
+  const elapsedSeconds = Math.max(0, Math.round((endMs - startedMs) / 1000))
+  const isOverrun = elapsedSeconds > objectifSeconds
+  const overrunSeconds = isOverrun ? elapsedSeconds - objectifSeconds : 0
+
+  if (!stoppedAt) {
+    return {
+      status: isOverrun ? 'overrun_running' : 'running',
+      elapsedSeconds,
+      remainingSeconds: isOverrun ? 0 : objectifSeconds - elapsedSeconds,
+      overrunSeconds,
+    }
+  }
+  return {
+    status: isOverrun ? 'stopped_overrun' : 'stopped_on_target',
+    elapsedSeconds,
+    overrunSeconds,
+  }
+}
+
 // Inclusive day count between two YYYY-MM-DD dates (used to size the
 // cumulative-since-Début attendance-minutes denominator: cumulativeDays *
 // WORK_HOURS_PER_DAY * 60). UTC-based arithmetic on date-only strings, so

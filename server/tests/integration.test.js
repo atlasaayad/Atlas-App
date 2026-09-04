@@ -641,6 +641,153 @@ test('🏆 Classement des chaînes: كل السلاسل الثمانية تظه�
   assert.equal(emptyEntry.rendement, null)
 })
 
+test('Temps de lancement: Démarrer/Arrêter، هدف تحقق بدون سبب، وتجاوز يتطلب مسؤول وسبب إجبارياً', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const modelIds = []
+
+  t.after(async () => {
+    for (const id of modelIds) {
+      await run('DELETE FROM models WHERE id = $1', [id])
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+    }
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_LAUNCH_1', qteTotale: 1000, dessin: 'TL1', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+  modelIds.push(modelId)
+
+  await t.test('بدون تهيئة Objectif بعد، Démarrer يُرفض', async () => {
+    const start = await call(`/methode/models/${modelId}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    assert.equal(start.status, 400)
+    assert.equal(start.data.error, 'launch_timer_not_configured')
+  })
+
+  await t.test('تهيئة Objectif (heures) + أسماء الفريق', async () => {
+    const put = await call(`/methode/models/${modelId}/launch-timer`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: {
+        objectifHeures: 2,
+        groupeLancement: 'G1',
+        agentMethode: 'Ali',
+        mecanicien: 'Omar',
+        electriciens: 'Said',
+        agentQuality: 'Rim',
+        chefChaine: 'Nabil',
+      },
+    })
+    assert.equal(put.status, 200)
+    const model = await call(`/models/${modelId}`)
+    assert.equal(model.data.launchTimer.objectifHeures, 2)
+    assert.equal(model.data.launchTimer.agentMethode, 'Ali')
+    assert.equal(model.data.launchTimer.startedAt, null)
+  })
+
+  await t.test('▶️ Démarrer ينجح، وتكرار الضغط يُرفض (already_started)', async () => {
+    const start = await call(`/methode/models/${modelId}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    assert.equal(start.status, 200)
+    assert.ok(start.data.startedAt)
+
+    const startAgain = await call(`/methode/models/${modelId}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    assert.equal(startAgain.status, 400)
+    assert.equal(startAgain.data.error, 'already_started')
+  })
+
+  await t.test('⏹ Arrêter قبل بلوغ الهدف: 🎯 Objectif atteint، بدون طلب مسؤول أو سبب', async () => {
+    // نحاكي مرور 30 دقيقة فقط من أصل هدف ساعتين، بتعديل started_at مباشرة.
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    await run('UPDATE launch_timer SET started_at = $1 WHERE model_id = $2', [thirtyMinAgo, modelId])
+
+    const stop = await call(`/methode/models/${modelId}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    assert.equal(stop.status, 200)
+    assert.equal(stop.data.overrun, false)
+
+    const model = await call(`/models/${modelId}`)
+    assert.equal(model.data.launchTimer.responsible, null)
+    assert.equal(model.data.launchTimer.reasonCode, null)
+
+    const stopAgain = await call(`/methode/models/${modelId}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    assert.equal(stopAgain.status, 400)
+    assert.equal(stopAgain.data.error, 'already_stopped')
+  })
+
+  // Deuxième lancement (nouveau modèle sur la même chaîne) pour le scénario
+  // de dépassement — chaque lancement a son propre enregistrement.
+  const created2 = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_LAUNCH_2', qteTotale: 1000, dessin: 'TL2', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created2.status, 201)
+  const modelId2 = created2.data.id
+  modelIds.push(modelId2)
+
+  await call(`/methode/models/${modelId2}/launch-timer`, {
+    method: 'PUT',
+    token: methodeToken,
+    body: { objectifHeures: 1, agentMethode: 'Ali', mecanicien: 'Omar' },
+  })
+  await call(`/methode/models/${modelId2}/launch-timer/start`, { method: 'POST', token: methodeToken })
+  // نحاكي مرور ساعتين على هدف ساعة واحدة → تجاوز ساعة كاملة.
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+  await run('UPDATE launch_timer SET started_at = $1 WHERE model_id = $2', [twoHoursAgo, modelId2])
+
+  await t.test('تجاوز الهدف: الإيقاف يُرفض بدون مسؤول وسبب', async () => {
+    const stop = await call(`/methode/models/${modelId2}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    assert.equal(stop.status, 400)
+    assert.equal(stop.data.error, 'responsible_and_reason_required')
+  })
+
+  await t.test('تجاوز الهدف: كود سبب غير صحيح يُرفض', async () => {
+    const stop = await call(`/methode/models/${modelId2}/launch-timer/stop`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { responsible: 'Ali (Agent méthode)', reasonCode: 'not_a_real_reason' },
+    })
+    assert.equal(stop.status, 400)
+    assert.equal(stop.data.error, 'invalid_reason_code')
+  })
+
+  await t.test('تجاوز الهدف: بمسؤول وسبب صحيحين ينجح، ويُسجَّل بسجل التعديلات', async () => {
+    const stop = await call(`/methode/models/${modelId2}/launch-timer/stop`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { responsible: 'Omar (Mécanicien)', reasonCode: 'machine_breakdown', reasonComment: 'Panne moteur' },
+    })
+    assert.equal(stop.status, 200)
+    assert.equal(stop.data.overrun, true)
+
+    const model = await call(`/models/${modelId2}`)
+    assert.equal(model.data.launchTimer.responsible, 'Omar (Mécanicien)')
+    assert.equal(model.data.launchTimer.reasonCode, 'machine_breakdown')
+    assert.equal(model.data.launchTimer.reasonComment, 'Panne moteur')
+
+    // ~1h de dépassement (60 min ± quelques secondes de marge d'exécution du test).
+    const elapsedMinutes = (new Date(model.data.launchTimer.stoppedAt) - new Date(model.data.launchTimer.startedAt)) / 60000
+    assert.ok(elapsedMinutes > 119 && elapsedMinutes < 121, `elapsed inattendu: ${elapsedMinutes}min`)
+
+    const log = await get(
+      `SELECT details FROM audit_log WHERE model_id = $1 AND action = 'stop_launch_timer' ORDER BY created_at DESC LIMIT 1`,
+      [modelId2]
+    )
+    const details = JSON.parse(log.details)
+    assert.equal(details.overrun, true)
+    assert.equal(details.responsible, 'Omar (Mécanicien)')
+    assert.equal(details.reasonCode, 'machine_breakdown')
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.launchTimer.responsible, 'Omar (Mécanicien)')
+  })
+})
+
 // The full /api/ask route can't be driven past the daily-limit check in this
 // environment (no real ANTHROPIC_API_KEY means it 503s before ever reaching
 // it), so this exercises the counting/limiting logic directly — it's the

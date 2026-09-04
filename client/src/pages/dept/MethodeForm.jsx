@@ -5,8 +5,8 @@ import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
-import { SPECIALTIES, MACHINES } from '../../lib/constants'
-import { computeVTMinutes, computeDT, computeObjectifJour } from '../../lib/calc'
+import { SPECIALTIES, MACHINES, DELAY_REASONS } from '../../lib/constants'
+import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration } from '../../lib/calc'
 
 // Quick-pick suggestions for common operation names — still a free-text
 // field (garment operations vary too much to force a fixed list), but this
@@ -31,8 +31,12 @@ export default function MethodeForm({ token, chainNumber }) {
   const [model, setModel] = useState(null)
   const [dashboard, setDashboard] = useState(null)
 
-  async function load() {
-    setLoading(true)
+  // Silent re-fetch (no `loading` flip) — used after every save so a tab
+  // doesn't unmount/remount and lose its own state (which tab is open, an
+  // in-progress form, the live launch-timer countdown's interval) every
+  // time something is saved. Only the initial load / chain switch below
+  // shows the "Chargement…" full-screen state.
+  async function refresh() {
     const chains = await api.getChains()
     const info = chains.find((c) => c.chainNumber === chainNumber)
     if (info?.model) {
@@ -46,17 +50,17 @@ export default function MethodeForm({ token, chainNumber }) {
       setModel(null)
       setDashboard(null)
     }
-    setLoading(false)
   }
 
   useEffect(() => {
-    load()
+    setLoading(true)
+    refresh().finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainNumber])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!model) return <CreateModelForm token={token} chainNumber={chainNumber} onCreated={load} />
-  return <EditModel token={token} model={model} dashboard={dashboard} onSaved={load} />
+  if (!model) return <CreateModelForm token={token} chainNumber={chainNumber} onCreated={refresh} />
+  return <EditModel token={token} model={model} dashboard={dashboard} onSaved={refresh} />
 }
 
 function CreateModelForm({ token, chainNumber, onCreated }) {
@@ -129,6 +133,7 @@ function EditModel({ token, model, dashboard, onSaved }) {
           ['gamme', 'Gamme de montage'],
           ['effectif', 'Effectif'],
           ['presence', 'Présence'],
+          ['lancement', 'Temps de lancement'],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -160,6 +165,7 @@ function EditModel({ token, model, dashboard, onSaved }) {
       {tab === 'gamme' && <GammeTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'effectif' && <EffectifTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'presence' && <PresenceTab token={token} model={model} dashboard={dashboard} onSaved={onSaved} />}
+      {tab === 'lancement' && <LaunchTimerTab token={token} model={model} onSaved={onSaved} />}
     </div>
   )
 }
@@ -448,6 +454,247 @@ function EffectifTab({ token, model, onSaved }) {
         <SaveButton onClick={submit} saving={saving} saved={saved} />
       </div>
     </GlowCard>
+  )
+}
+
+function LaunchTimerTab({ token, model, onSaved }) {
+  const lt = model.launchTimer || {}
+  const [form, setForm] = useState({
+    objectifHeures: lt.objectifHeures || '',
+    groupeLancement: lt.groupeLancement || '',
+    agentMethode: lt.agentMethode || '',
+    mecanicien: lt.mecanicien || '',
+    electriciens: lt.electriciens || '',
+    agentQuality: lt.agentQuality || '',
+    chefChaine: lt.chefChaine || '',
+  })
+  const [savingConfig, setSavingConfig] = useState(false)
+  const [configSaved, setConfigSaved] = useState(false)
+  const [now, setNow] = useState(new Date())
+  const [starting, setStarting] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [showOverrunForm, setShowOverrunForm] = useState(false)
+  const [responsible, setResponsible] = useState('')
+  const [reasonCode, setReasonCode] = useState('')
+  const [reasonComment, setReasonComment] = useState('')
+  const [stopError, setStopError] = useState('')
+
+  // Tick every second only while the timer is actually running (started,
+  // not stopped) — this is what makes the countdown/overrun display live
+  // without polling the server every second.
+  useEffect(() => {
+    if (!lt.startedAt || lt.stoppedAt) return undefined
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [lt.startedAt, lt.stoppedAt])
+
+  const state = computeLaunchTimerState(lt, now)
+
+  async function saveConfig(e) {
+    e.preventDefault()
+    setSavingConfig(true)
+    try {
+      await api.methode.updateLaunchTimer(token, model.id, form)
+      setConfigSaved(true)
+      onSaved()
+      setTimeout(() => setConfigSaved(false), 2000)
+    } finally {
+      setSavingConfig(false)
+    }
+  }
+
+  async function start() {
+    setStarting(true)
+    try {
+      await api.methode.startLaunchTimer(token, model.id)
+      onSaved()
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  async function attemptStop() {
+    if (state.status === 'overrun_running') {
+      setShowOverrunForm(true)
+      return
+    }
+    setStopping(true)
+    try {
+      await api.methode.stopLaunchTimer(token, model.id, {})
+      onSaved()
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  async function confirmOverrunStop(e) {
+    e.preventDefault()
+    if (!responsible || !reasonCode) {
+      setStopError('اختر المسؤول والسبب قبل تأكيد الإيقاف.')
+      return
+    }
+    setStopping(true)
+    setStopError('')
+    try {
+      await api.methode.stopLaunchTimer(token, model.id, { responsible, reasonCode, reasonComment })
+      onSaved()
+    } catch {
+      setStopError('فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.')
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  // Dropdown options are the real person names entered above, each tagged
+  // with their role — not the bare role labels — so responsibility lands on
+  // an actual person, not a generic job title.
+  const teamOptions = [
+    { role: 'Agent méthode', name: lt.agentMethode },
+    { role: 'Mécanicien', name: lt.mecanicien },
+    { role: 'Électriciens', name: lt.electriciens },
+    { role: 'Agent Quality', name: lt.agentQuality },
+    { role: 'Chef de chaîne', name: lt.chefChaine },
+  ].filter((t) => t.name)
+
+  return (
+    <div className="space-y-4">
+      <GlowCard title="Temps de lancement — configuration">
+        <p className="mb-3 text-sm text-slate-400">
+          يُحدَّد من جديد لكل موديل/إطلاق — مو رقم ثابت. الحقول النصية توثيقية فقط (تُستخدم لاحقاً كخيارات "المسؤول"
+          عند أي تجاوز).
+        </p>
+        <form onSubmit={saveConfig} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <TextField
+            label="Objectif (heures)"
+            type="number"
+            value={form.objectifHeures}
+            onChange={(v) => setForm({ ...form, objectifHeures: v })}
+            hint="الوقت المستهدف لإنجاز الإطلاق، بالساعات"
+          />
+          <TextField label="Groupe de lancement" value={form.groupeLancement} onChange={(v) => setForm({ ...form, groupeLancement: v })} />
+          <TextField label="Agent méthode" value={form.agentMethode} onChange={(v) => setForm({ ...form, agentMethode: v })} />
+          <TextField label="Mécanicien" value={form.mecanicien} onChange={(v) => setForm({ ...form, mecanicien: v })} />
+          <TextField label="Électriciens" value={form.electriciens} onChange={(v) => setForm({ ...form, electriciens: v })} />
+          <TextField label="Agent Quality" value={form.agentQuality} onChange={(v) => setForm({ ...form, agentQuality: v })} />
+          <TextField label="Chef de chaîne" value={form.chefChaine} onChange={(v) => setForm({ ...form, chefChaine: v })} />
+          <SaveButton type="submit" saving={savingConfig} saved={configSaved} />
+        </form>
+      </GlowCard>
+
+      <GlowCard title="Compte à rebours">
+        {state.status === 'not_started' && (
+          <>
+            <p className="mb-3 text-sm text-slate-400">
+              لسه ما بدأ العداد. اضغط "▶️ Démarrer" لبدء العداد التنازلي من Objectif المحدد فوق.
+            </p>
+            <button
+              onClick={start}
+              disabled={starting || !form.objectifHeures || Number(form.objectifHeures) <= 0}
+              className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
+            >
+              {starting ? '...' : '▶️ Démarrer'}
+            </button>
+          </>
+        )}
+
+        {(state.status === 'running' || state.status === 'overrun_running') && (
+          <>
+            <div className="text-center">
+              <div
+                className={`font-display text-4xl font-bold ${
+                  state.status === 'overrun_running' ? 'text-status-bad' : 'text-turquoise glow-number'
+                }`}
+              >
+                {state.status === 'overrun_running' ? `+${formatDuration(state.overrunSeconds)}` : formatDuration(state.remainingSeconds)}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {state.status === 'overrun_running' ? '⚠️ تجاوز الهدف — جاري التشغيل' : 'جاري التشغيل'}
+              </div>
+            </div>
+
+            {!showOverrunForm && (
+              <button
+                onClick={attemptStop}
+                disabled={stopping}
+                className="mt-4 w-full rounded-md border border-status-bad/60 bg-status-bad/10 py-3.5 text-base font-medium text-status-bad active:bg-status-bad/20 disabled:opacity-50"
+              >
+                {stopping ? '...' : '⏹ Arrêter / Première pièce terminée'}
+              </button>
+            )}
+
+            {showOverrunForm && (
+              <form onSubmit={confirmOverrunStop} className="mt-4 space-y-3 rounded-md border border-amber bg-amber-soft p-3">
+                <p className="text-sm text-amber">تجاوزت الوقت المحدد — اختر المسؤول والسبب قبل إكمال الإيقاف.</p>
+                <label className="block">
+                  <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">المسؤول عن التأخير</span>
+                  <select
+                    value={responsible}
+                    onChange={(e) => setResponsible(e.target.value)}
+                    className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                  >
+                    <option value="">-- اختر --</option>
+                    {teamOptions.map((t) => (
+                      <option key={t.role} value={`${t.name} (${t.role})`}>
+                        {t.name} ({t.role})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">السبب</span>
+                  <select
+                    value={reasonCode}
+                    onChange={(e) => setReasonCode(e.target.value)}
+                    className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                  >
+                    <option value="">-- اختر --</option>
+                    {DELAY_REASONS.map((r) => (
+                      <option key={r.code} value={r.code}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">تعليق إضافي (اختياري)</span>
+                  <textarea
+                    value={reasonComment}
+                    onChange={(e) => setReasonComment(e.target.value)}
+                    rows={2}
+                    className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+                  />
+                </label>
+                {stopError && <div className="text-sm text-status-bad">{stopError}</div>}
+                <button
+                  type="submit"
+                  disabled={stopping}
+                  className="w-full rounded-md border border-status-bad bg-status-bad/10 py-3 text-sm font-medium text-status-bad active:bg-status-bad/20 disabled:opacity-50"
+                >
+                  {stopping ? '...' : 'تأكيد الإيقاف'}
+                </button>
+              </form>
+            )}
+          </>
+        )}
+
+        {state.status === 'stopped_on_target' && (
+          <div className="text-center">
+            <div className="font-display text-2xl font-bold text-status-good">🎯 Objectif atteint</div>
+            <div className="mt-1 text-sm text-slate-400">الوقت الفعلي: {formatDuration(state.elapsedSeconds)}</div>
+          </div>
+        )}
+
+        {state.status === 'stopped_overrun' && (
+          <div className="text-center">
+            <div className="font-display text-xl font-bold text-status-bad">⚠️ تجاوز الهدف بمقدار {formatDuration(state.overrunSeconds)}</div>
+            <div className="mt-1 text-sm text-slate-400">الوقت الفعلي: {formatDuration(state.elapsedSeconds)}</div>
+            <div className="mt-2 text-sm text-slate-300">المسؤول: {lt.responsible}</div>
+            <div className="text-sm text-slate-300">السبب: {DELAY_REASONS.find((r) => r.code === lt.reasonCode)?.label || lt.reasonCode}</div>
+            {lt.reasonComment && <div className="mt-1 text-xs text-slate-500">{lt.reasonComment}</div>}
+          </div>
+        )}
+      </GlowCard>
+    </div>
   )
 }
 

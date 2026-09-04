@@ -86,12 +86,37 @@ publicRouter.get('/chains', async (req, res) => {
 publicRouter.get('/models/:id', async (req, res) => {
   const model = await get('SELECT * FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
-  const gamme = await all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id])
-  const effectifRows = await all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id])
+  const [gamme, effectifRows, launchTimerRow] = await Promise.all([
+    all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id]),
+    all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
+    get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
+  ])
   const effectif = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of effectifRows) effectif[r.specialty] = r.required
-  res.json({ ...model, gamme, effectif })
+  res.json({ ...model, gamme, effectif, launchTimer: formatLaunchTimer(launchTimerRow) })
 })
+
+// Raw config + timestamps only — the ticking countdown/overrun display is
+// derived from these client-side (every second) using the same
+// computeLaunchTimerState() formula, not recomputed by the server on a
+// polling cadence that would make the seconds jump.
+function formatLaunchTimer(row) {
+  if (!row) return null
+  return {
+    objectifHeures: row.objectif_heures,
+    groupeLancement: row.groupe_lancement,
+    agentMethode: row.agent_methode,
+    mecanicien: row.mecanicien,
+    electriciens: row.electriciens,
+    agentQuality: row.agent_quality,
+    chefChaine: row.chef_chaine,
+    startedAt: row.started_at,
+    stoppedAt: row.stopped_at,
+    responsible: row.responsible,
+    reasonCode: row.reason_code,
+    reasonComment: row.reason_comment,
+  }
+}
 
 export async function fullDashboard(model) {
   // All 9 lookups below are independent (keyed only by model.id) and none
@@ -114,6 +139,7 @@ export async function fullDashboard(model) {
     retoucheTodayRow,
     retoucheCumulativeRow,
     qualityHourlyRows,
+    launchTimerRow,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -162,6 +188,7 @@ export async function fullDashboard(model) {
         model.chain_number,
         today,
       ]),
+      get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
     ])
 
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -325,6 +352,7 @@ export async function fullDashboard(model) {
     },
     etatDesPostes,
     effectifs,
+    launchTimer: formatLaunchTimer(launchTimerRow),
   }
 }
 

@@ -215,6 +215,41 @@ chain's own dashboard, never a separately cached leaderboard.
   meaningful cumulative Rendement while today alone doesn't have enough
   recorded hours yet, and vice versa; neither hides the other.
 
+### Temps de lancement — launch countdown with team + accountable overrun (Agent Méthode)
+
+A "Temps de lancement" tab on Agent Méthode's screen (`launch_timer` table,
+one row per model/launch) lets Méthode set an "Objectif (heures)" for a new
+launch, plus documentary team fields (Groupe de lancement, Agent méthode,
+Mécanicien, Électriciens, Agent Quality, Chef de chaîne — free text, not new
+calculation inputs). Only Agent Méthode can start or stop it.
+
+- **Nothing is stored except two timestamps**: `started_at` and
+  `stopped_at`. The running countdown, the red overrun flip, and the final
+  elapsed/overrun durations are all derived live from those two plus
+  Objectif (`computeLaunchTimerState()` in `server/src/calc.js`, mirrored
+  client-side in `client/src/lib/calc.js` for the per-second UI tick) —
+  never a separately stored "elapsed time" that could drift from the real
+  clock.
+- **▶️ Démarrer** starts the countdown. While the elapsed time is still
+  under Objectif it shows a normal (turquoise) countdown; once it passes
+  Objectif with no stop yet, it flips red and counts *up* from zero
+  (`+Xh Ymin` overtime) — still ticking live.
+- **⏹ Arrêter / Première pièce terminée**: if stopped before the overrun
+  flip, records "🎯 Objectif atteint" with the actual elapsed time, no
+  extra fields. If stopped after the flip, the person responsible (chosen
+  from the real names entered above, tagged with their role — e.g. "Ahmed
+  (Mécanicien)" — not a bare role label) and a reason (a fixed list:
+  parts shortage, machine breakdown, worker shortage, quality issue,
+  external stoppage, other — plus an optional free comment) are **required
+  by the server**, not just the UI — the stop request is rejected
+  (`responsible_and_reason_required` / `invalid_reason_code`) without them,
+  so this can never be skipped from a scripted or malformed request either.
+- The final result (elapsed time, target-met/exceeded status, and — on an
+  overrun — who's responsible and why) is shown permanently on the
+  "Identité du modèle" card on Home, visible to everyone, and the
+  responsible/reason are also written to the audit log
+  (`stop_launch_timer` action) for later BSCI/SMETA-style review.
+
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 
 The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,

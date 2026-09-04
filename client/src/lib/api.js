@@ -96,6 +96,9 @@ export const api = {
     updateGamme: (token, id, lines) => request(`/methode/models/${id}/gamme`, { method: 'PUT', body: { lines }, token }),
     updateEffectif: (token, id, effectif) => request(`/methode/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
     updateAttendance: (token, id, attendance) => request(`/methode/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
+    updateLaunchTimer: (token, id, config) => request(`/methode/models/${id}/launch-timer`, { method: 'PUT', body: config, token }),
+    startLaunchTimer: (token, id) => request(`/methode/models/${id}/launch-timer/start`, { method: 'POST', token }),
+    stopLaunchTimer: (token, id, payload) => request(`/methode/models/${id}/launch-timer/stop`, { method: 'POST', body: payload, token }),
   },
   production: {
     getHourly: (token, id, date) => request(`/production/models/${id}/hourly?date=${date}`, { token }),
