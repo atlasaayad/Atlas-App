@@ -54,12 +54,33 @@ export function computeLaunchTimerState({ objectifHeures, startedAt, stoppedAt }
   }
 }
 
-// "3661" -> "1h01min" / "125" -> "2min05" — compact, factory-floor-readable.
+// Objectif (heures) is stored/sent to the API as a decimal number of hours,
+// but entered/displayed as an alarm-clock-style HH:MM picker
+// (`<input type="time">`) — these two convert between the two
+// representations so nothing about the API needs to change.
+export function hoursToHHMM(decimalHours) {
+  const totalMinutes = Math.max(0, Math.round((Number(decimalHours) || 0) * 60))
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+export function hhmmToHours(hhmm) {
+  if (!hhmm) return 0
+  const [h, m] = hhmm.split(':').map(Number)
+  return (Number(h) || 0) + (Number(m) || 0) / 60
+}
+
+// "3661" -> "1:01:01" / "125" -> "02:05" — always includes seconds so a
+// live countdown visibly ticks every second. Dropping seconds once hours
+// are involved (an earlier version did this) makes a running timer look
+// frozen for up to 59 seconds at a stretch — exactly what reads as "the
+// countdown isn't working" even though it's ticking correctly underneath.
 export function formatDuration(totalSeconds) {
   const s = Math.max(0, Math.round(totalSeconds))
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
   const sec = s % 60
-  if (h > 0) return `${h}h${String(m).padStart(2, '0')}min`
-  return `${m}min${String(sec).padStart(2, '0')}`
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
 }
