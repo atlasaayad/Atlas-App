@@ -241,6 +241,12 @@ calculation inputs). Only Agent Méthode can start or stop it.
   (`+H:MM:SS` overtime) — still ticking live, seconds included at every
   scale (an earlier version dropped seconds once hours were involved,
   which made a running timer look frozen for up to 59 seconds at a time).
+  Clicking Démarrer always saves whatever Objectif/équipe is currently
+  typed first, then starts — the server rejects starting on an unsaved or
+  zero Objectif, so typing the time and going straight for Démarrer (a
+  natural workflow, without a separate "Enregistrer" click first) can
+  never silently fail; any genuine failure (e.g. a lost connection) now
+  shows a visible error instead of doing nothing.
 - **⏹ Arrêter / Première pièce terminée**: if stopped before the overrun
   flip, records "🎯 Objectif atteint" with the actual elapsed time, no
   extra fields. If stopped after the flip, the person responsible (chosen
