@@ -524,8 +524,17 @@ function LaunchTimerTab({ token, model, onSaved }) {
       await persistConfig()
       await api.methode.startLaunchTimer(token, model.id)
       onSaved()
-    } catch {
-      setStartError('تعذّر بدء العداد — تحقق من Objectif ومن الاتصال ثم أعد المحاولة.')
+    } catch (err) {
+      if (err?.data?.error === 'already_started') {
+        // Not a real failure — a duplicate tap or a previous attempt that
+        // actually succeeded server-side. Just refresh so the UI catches up
+        // to the real (already running) state instead of showing an error
+        // for something that already worked.
+        onSaved()
+      } else {
+        const code = err?.data?.error || err?.message || 'unknown_error'
+        setStartError(`تعذّر بدء العداد (${code}) — تحقق من الاتصال ثم أعد المحاولة.`)
+      }
     } finally {
       setStarting(false)
     }
