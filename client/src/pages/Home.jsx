@@ -9,6 +9,7 @@ import LiveIndicator from '../components/LiveIndicator'
 import EarlyWarningBanner from '../components/EarlyWarningBanner'
 import HistoriqueModal from '../components/HistoriqueModal'
 import DetailsFinaleModal from '../components/DetailsFinaleModal'
+import ClassementModal from '../components/ClassementModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS } from '../lib/constants'
@@ -18,6 +19,7 @@ export default function Home() {
   const [chainsLoaded, setChainsLoaded] = useState(false)
   const [chainNumber, setChainNumber] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
+  const [showClassement, setShowClassement] = useState(false)
 
   useEffect(() => {
     api.getChains().then((data) => {
@@ -58,7 +60,7 @@ export default function Home() {
             <LiveIndicator lastUpdated={lastUpdated} />
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <select
             value={chainNumber || ''}
             onChange={(e) => setChainNumber(Number(e.target.value))}
@@ -90,8 +92,16 @@ export default function Home() {
               </option>
             ))}
           </select>
+          <button
+            onClick={() => setShowClassement(true)}
+            className="rounded-md border border-turquoise/40 px-3 py-2 text-sm text-turquoise active:bg-turquoise/10"
+          >
+            🏆 Classement des chaînes
+          </button>
         </div>
       </div>
+
+      {showClassement && <ClassementModal onClose={() => setShowClassement(false)} />}
 
       <EarlyWarningBanner />
 

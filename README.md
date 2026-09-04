@@ -198,6 +198,23 @@ every dashboard read, never cached.
   recently is automatically what Rendement uses — no separate
   "which department wins" logic needed.
 
+### 🏆 Classement des chaînes (Home dashboard, public)
+
+A "🏆 Classement des chaînes" button next to the Chaîne/Module selectors on
+Home opens a modal (`ClassementModal.jsx`, `GET /api/chains/ranking`) ranking
+all 8 chains by today's Score_Rendement — reusing `fullDashboard()` per
+chain (run in parallel) so it's always the same live figures as each
+chain's own dashboard, never a separately cached leaderboard.
+
+- **Sort order**: chains with a real daily score first (best to worst),
+  then chains with an active model but not enough data today to compute one
+  (`score: null`), then chains with no active model at all — every one of
+  the 8 chains always appears, in that order, never silently dropped.
+- Each row shows both the daily score (the sort key) and the cumulative
+  one (since the model's `debut`) independently — a chain can have a
+  meaningful cumulative Rendement while today alone doesn't have enough
+  recorded hours yet, and vice versa; neither hides the other.
+
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 
 The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,

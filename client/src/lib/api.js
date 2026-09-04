@@ -74,6 +74,7 @@ export const api = {
   login: (deptKey, pin) => request(`/auth/${deptKey}/login`, { method: 'POST', body: { pin } }),
   getModels: () => request('/models'),
   getChains: () => request('/chains'),
+  getRanking: () => request('/chains/ranking'),
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),

@@ -340,6 +340,47 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
   res.json(await fullDashboard(model))
 })
 
+// 🏆 Classement des chaînes — every chain (1-8), ranked by today's
+// Score_Rendement. Reuses fullDashboard() per chain (run in parallel) so
+// this is always computed live from the same real-time figures shown on
+// each chain's own dashboard — no separate cached leaderboard state.
+publicRouter.get('/chains/ranking', async (req, res) => {
+  const active = await all('SELECT * FROM models WHERE active = 1')
+  const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
+
+  const entries = await Promise.all(
+    CHAIN_NUMBERS.map(async (chainNumber) => {
+      const model = byChain[chainNumber]
+      if (!model) return { chainNumber, model: null, rendement: null }
+      const dash = await fullDashboard(model)
+      return {
+        chainNumber,
+        model: { client: model.client, dessin: model.dessin },
+        rendement: { daily: dash.rendement.daily, cumulative: dash.rendement.cumulative },
+      }
+    })
+  )
+
+  // Sort key: chains with a real daily score first (best to worst), then
+  // chains with an active model but no score yet (not enough data to
+  // compute Rendement today), then chains with no active model at all —
+  // never silently dropped, always shown, always at the bottom in that order.
+  function tier(e) {
+    if (!e.model) return 2
+    if (e.rendement.daily.score === null) return 1
+    return 0
+  }
+  entries.sort((a, b) => {
+    const ta = tier(a)
+    const tb = tier(b)
+    if (ta !== tb) return ta - tb
+    if (ta === 0) return b.rendement.daily.score - a.rendement.daily.score
+    return a.chainNumber - b.chainNumber
+  })
+
+  res.json(entries.map((e, i) => ({ rank: i + 1, ...e })))
+})
+
 // Historique — everything computed live from production_history, nothing
 // assumed or hardcoded. recordsCount is the number of hourly records
 // actually stored for the window (not an assumed 9/day), so the average is

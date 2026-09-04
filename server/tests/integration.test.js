@@ -601,6 +601,46 @@ test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne a
   })
 })
 
+test('🏆 Classement des chaînes: كل السلاسل الثمانية تظهر دائماً، الفارغة بآخر الترتيب، والترتيب صحيح تنازلياً', async (t) => {
+  const res = await call('/chains/ranking')
+  assert.equal(res.status, 200)
+  const ranking = res.data
+
+  // كل السلاسل الثمانية موجودة بالضبط مرة وحدة، ومرقّمة 1..8 بالترتيب —
+  // ما فيه سلسلة مُستبعدة بصمت.
+  assert.equal(ranking.length, 8)
+  assert.deepEqual(ranking.map((e) => e.chainNumber).slice().sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.deepEqual(ranking.map((e) => e.rank), [1, 2, 3, 4, 5, 6, 7, 8])
+
+  // معيار الترتيب: سلاسل بها Score حقيقي اليوم (تنازلي فيما بينها) أولاً،
+  // ثم سلاسل بها موديل نشط لكن بدون بيانات كافية اليوم (score=null)، ثم
+  // السلاسل الفارغة (بدون موديل) بآخر الترتيب — أبداً ما ينعكس هذا الترتيب،
+  // بغض النظر عن الوقت الحالي أو حالة البيانات الحقيقية وقت الاختبار.
+  function tier(e) {
+    if (!e.model) return 2
+    if (e.rendement.daily.score === null) return 1
+    return 0
+  }
+  let prevTier = -1
+  let prevScore = Infinity
+  for (const e of ranking) {
+    const t = tier(e)
+    assert.ok(t >= prevTier, `الترتيب انعكس عند Chaîne ${e.chainNumber}: ${JSON.stringify(ranking.map((x) => [x.chainNumber, tier(x)]))}`)
+    if (t !== prevTier) prevScore = Infinity
+    if (t === 0) {
+      assert.ok(e.rendement.daily.score <= prevScore, `النتيجة يجب تكون تنازلية داخل نفس الفئة عند Chaîne ${e.chainNumber}`)
+      prevScore = e.rendement.daily.score
+    }
+    prevTier = t
+  }
+
+  // Chaîne 6 ما استُخدمت بأي اختبار آخر — يجب تظهر بوضوح model: null، مو مستبعدة.
+  const emptyEntry = ranking.find((e) => e.chainNumber === 6)
+  assert.ok(emptyEntry)
+  assert.equal(emptyEntry.model, null)
+  assert.equal(emptyEntry.rendement, null)
+})
+
 // The full /api/ask route can't be driven past the daily-limit check in this
 // environment (no real ANTHROPIC_API_KEY means it 503s before ever reaching
 // it), so this exercises the counting/limiting logic directly — it's the
