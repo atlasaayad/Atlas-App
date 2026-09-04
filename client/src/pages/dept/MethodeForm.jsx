@@ -481,6 +481,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
   const [reasonCode, setReasonCode] = useState('')
   const [reasonComment, setReasonComment] = useState('')
   const [stopError, setStopError] = useState('')
+  const [startError, setStartError] = useState('')
 
   // Tick every second only while the timer is actually running (started,
   // not stopped) — this is what makes the countdown/overrun display live
@@ -493,12 +494,16 @@ function LaunchTimerTab({ token, model, onSaved }) {
 
   const state = computeLaunchTimerState(lt, now)
 
+  function persistConfig() {
+    const { objectifTime, ...rest } = form
+    return api.methode.updateLaunchTimer(token, model.id, { ...rest, objectifHeures: hhmmToHours(objectifTime) })
+  }
+
   async function saveConfig(e) {
     e.preventDefault()
     setSavingConfig(true)
     try {
-      const { objectifTime, ...rest } = form
-      await api.methode.updateLaunchTimer(token, model.id, { ...rest, objectifHeures: hhmmToHours(objectifTime) })
+      await persistConfig()
       setConfigSaved(true)
       onSaved()
       setTimeout(() => setConfigSaved(false), 2000)
@@ -509,9 +514,18 @@ function LaunchTimerTab({ token, model, onSaved }) {
 
   async function start() {
     setStarting(true)
+    setStartError('')
     try {
+      // Persist whatever Objectif/équipe is currently typed before starting —
+      // the server is the source of truth for objectif_heures and rejects
+      // starting on an unsaved/zero value, so a user who types the time and
+      // goes straight for "Démarrer" (without a separate "Enregistrer" click
+      // first) must not silently fail.
+      await persistConfig()
       await api.methode.startLaunchTimer(token, model.id)
       onSaved()
+    } catch {
+      setStartError('تعذّر بدء العداد — تحقق من Objectif ومن الاتصال ثم أعد المحاولة.')
     } finally {
       setStarting(false)
     }
@@ -601,6 +615,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
             >
               {starting ? '...' : '▶️ Démarrer'}
             </button>
+            {startError && <p className="mt-2 text-sm text-status-bad">{startError}</p>}
           </>
         )}
 
