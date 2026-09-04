@@ -6,7 +6,7 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
 import { SPECIALTIES, MACHINES, DELAY_REASONS } from '../../lib/constants'
-import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration } from '../../lib/calc'
+import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration, hoursToHHMM, hhmmToHours } from '../../lib/calc'
 
 // Quick-pick suggestions for common operation names — still a free-text
 // field (garment operations vary too much to force a fixed list), but this
@@ -459,8 +459,11 @@ function EffectifTab({ token, model, onSaved }) {
 
 function LaunchTimerTab({ token, model, onSaved }) {
   const lt = model.launchTimer || {}
+  // Objectif is entered as an alarm-clock-style HH:MM picker
+  // (<input type="time">, a native wheel/clock UI on mobile) — converted to
+  // decimal hours only at save time; the API itself is unchanged.
   const [form, setForm] = useState({
-    objectifHeures: lt.objectifHeures || '',
+    objectifTime: lt.objectifHeures ? hoursToHHMM(lt.objectifHeures) : '',
     groupeLancement: lt.groupeLancement || '',
     agentMethode: lt.agentMethode || '',
     mecanicien: lt.mecanicien || '',
@@ -494,7 +497,8 @@ function LaunchTimerTab({ token, model, onSaved }) {
     e.preventDefault()
     setSavingConfig(true)
     try {
-      await api.methode.updateLaunchTimer(token, model.id, form)
+      const { objectifTime, ...rest } = form
+      await api.methode.updateLaunchTimer(token, model.id, { ...rest, objectifHeures: hhmmToHours(objectifTime) })
       setConfigSaved(true)
       onSaved()
       setTimeout(() => setConfigSaved(false), 2000)
@@ -564,13 +568,16 @@ function LaunchTimerTab({ token, model, onSaved }) {
           عند أي تجاوز).
         </p>
         <form onSubmit={saveConfig} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <TextField
-            label="Objectif (heures)"
-            type="number"
-            value={form.objectifHeures}
-            onChange={(v) => setForm({ ...form, objectifHeures: v })}
-            hint="الوقت المستهدف لإنجاز الإطلاق، بالساعات"
-          />
+          <label className="block">
+            <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Objectif (heures)</span>
+            <input
+              type="time"
+              value={form.objectifTime}
+              onChange={(e) => setForm({ ...form, objectifTime: e.target.value })}
+              className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+            />
+            <span className="mt-1 block text-xs text-slate-500">الوقت المستهدف لإنجاز الإطلاق — اختره مثل ضبط منبه (ساعة:دقيقة)</span>
+          </label>
           <TextField label="Groupe de lancement" value={form.groupeLancement} onChange={(v) => setForm({ ...form, groupeLancement: v })} />
           <TextField label="Agent méthode" value={form.agentMethode} onChange={(v) => setForm({ ...form, agentMethode: v })} />
           <TextField label="Mécanicien" value={form.mecanicien} onChange={(v) => setForm({ ...form, mecanicien: v })} />
@@ -589,7 +596,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
             </p>
             <button
               onClick={start}
-              disabled={starting || !form.objectifHeures || Number(form.objectifHeures) <= 0}
+              disabled={starting || hhmmToHours(form.objectifTime) <= 0}
               className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
             >
               {starting ? '...' : '▶️ Démarrer'}

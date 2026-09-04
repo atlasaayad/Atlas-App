@@ -230,10 +230,17 @@ calculation inputs). Only Agent Méthode can start or stop it.
   client-side in `client/src/lib/calc.js` for the per-second UI tick) —
   never a separately stored "elapsed time" that could drift from the real
   clock.
+- **Objectif is entered as an alarm-clock-style HH:MM picker**
+  (`<input type="time">` — a native wheel/clock UI on mobile), not a
+  decimal number of hours; `hoursToHHMM()`/`hhmmToHours()` in
+  `client/src/lib/calc.js` convert to/from the decimal-hours value the API
+  still stores and expects.
 - **▶️ Démarrer** starts the countdown. While the elapsed time is still
   under Objectif it shows a normal (turquoise) countdown; once it passes
   Objectif with no stop yet, it flips red and counts *up* from zero
-  (`+Xh Ymin` overtime) — still ticking live.
+  (`+H:MM:SS` overtime) — still ticking live, seconds included at every
+  scale (an earlier version dropped seconds once hours were involved,
+  which made a running timer look frozen for up to 59 seconds at a time).
 - **⏹ Arrêter / Première pièce terminée**: if stopped before the overrun
   flip, records "🎯 Objectif atteint" with the actual elapsed time, no
   extra fields. If stopped after the flip, the person responsible (chosen
