@@ -263,6 +263,71 @@ calculation inputs). Only Agent Méthode can start or stop it.
   responsible/reason are also written to the audit log
   (`stop_launch_timer` action) for later BSCI/SMETA-style review.
 
+### État des effectifs (bottom-nav tab, public)
+
+A fourth bottom-nav tab, between Départements and Ask Atlas — no PIN, same
+as Accueil/Ask Atlas — giving one central, always-current headcount view of
+the whole factory: every chain, Finale, Dépôt, and Personnel administratif,
+summed into one grand total (`GET /api/effectifs/overview`,
+`client/src/pages/EffectifsOverview.jsx`). Every section is collapsed by
+default (a chain/Finale's 8-13-specialty breakdown is one tap away via
+`components/Collapsible.jsx`) but its **subtotal is always visible**,
+collapsed or not — same for the grand total at the bottom.
+
+- **Per chain** (1-8): the 13 chain specialties (see the rename below) with
+  today's present count each, from the exact same `rh_attendance` row Agent
+  Méthode/RH's own "Présence" screens read/write — never a second copy. An
+  empty chain (no active model) still appears, subtotal 0, specialties
+  omitted — never silently dropped.
+- **Finale**: shown as ONE section here (not repeated per chain) — its own
+  8 specialties (`FINALE_SPECIALTIES`, entered per chain by the Finale
+  department itself, on a new "Effectif Finale" section of its own screen),
+  summed across every chain's Finale entry.
+- **Dépôt**: a single total (no specialty breakdown) — a new "Effectif
+  Dépôt" field on the Dépôt department's own screen, per chain, summed
+  across every chain here.
+- **Personnel administratif / Encadrement**: a genuinely new category,
+  entirely separate from production workers (office/supervisory staff) —
+  and the only one here that is company-wide rather than per-chain. RH is
+  the primary entry point, Patron a backup (`PersonnelAdminCard`, shown on
+  both screens) — both write to the same `personnel_admin_history` row for
+  a given date, so whichever department saves last wins, exactly like the
+  existing Méthode/RH "Présence" split. Supports going back and correcting
+  a previous day (same date-picker pattern as Quality's hourly entry) and
+  shows both "today" and a cumulative total (sum across every day ever
+  recorded) — only "today" feeds into the grand total below.
+- **Grand total**: chains + Finale + Dépôt + Personnel administratif
+  (today), all summed live from the same numbers each section shows —
+  never a separately cached figure that could drift.
+
+**Specialty rename (13 chain specialties)** — the old 15-code shorthand
+(introduced when effectifs were first built) is renamed to clear French
+names, with two changes beyond a plain rename, both carried over by a
+one-time idempotent migration in `server/src/db/index.js`
+(`migrateSpecialtyNames`) run on every cold start (a no-op once complete,
+since it only acts on rows still bearing an old code):
+
+| Old code | New name | Note |
+|---|---|---|
+| `301`, `502`, `504`, `516` | **Machinistes** | merged — 4 old specialties become 1, values summed |
+| `Stg` | **Machiniste stagiaire** | see assumption below |
+| — | **Stagiaire fer** | brand new, starts empty |
+| `Main` | Traçage | plain rename |
+| `Sp` | Machine spéciale | plain rename |
+| `M/sp` | Manuel spécial / Traçage spécial | plain rename |
+| `Control` | Contrôle chaîne | plain rename |
+| `Fer` | Repassage préparation | plain rename |
+| `Mach retouche` | Retouche | plain rename |
+| `Trns` | Transport | plain rename |
+| `Chef`, `Robot`, `Finition` | unchanged | same name, no action |
+
+**Assumption to flag**: the old `Stg` code didn't distinguish a machinist
+trainee from a fer (pressing) trainee, so its entire historical value moved
+to **Machiniste stagiaire**; **Stagiaire fer** starts at empty/zero rather
+than guessing a split. If real historical fer-trainee headcounts need to be
+reconstructed for a past period, that needs a manual, one-off correction —
+this migration cannot infer it from the old data.
+
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 
 The four "Bilan de la chaîne" circles (Total entré, Total sortie, Le reste,

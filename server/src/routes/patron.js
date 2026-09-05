@@ -2,9 +2,20 @@ import { Router } from 'express'
 import ExcelJS from 'exceljs'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { savePersonnelAdmin } from '../attendanceShared.js'
 
 export const patronRouter = Router()
 patronRouter.use(requireDept('patron'))
+
+// Personnel administratif / Encadrement — backup entry point (RH is
+// primary, routes/rh.js). Writes to the exact same personnel_admin_history
+// row for a given date, so whichever department saves last is authoritative.
+patronRouter.put('/personnel-admin', async (req, res) => {
+  const { date, total } = req.body || {}
+  if (!date) return res.status(400).json({ error: 'date_required' })
+  await savePersonnelAdmin({ deptKey: 'patron', date, total })
+  res.json({ ok: true })
+})
 
 // CPM (coût par minute) — a single factory-wide value, Patron-only. Stored
 // in the generic config table; never exposed to any other route (Ask Atlas,
@@ -43,7 +54,9 @@ const EXPORT_TABLES = [
   { sheet: 'Qualite Horaire', table: 'quality_history', orderBy: 'chain_number, date, slot_index' },
   { sheet: 'Temps de Lancement', table: 'launch_timer', orderBy: 'model_id' },
   { sheet: 'Finale', table: 'finale', orderBy: 'model_id' },
+  { sheet: 'Effectif Finale', table: 'finale_attendance', orderBy: 'model_id, specialty' },
   { sheet: 'Depot', table: 'depot', orderBy: 'model_id' },
+  { sheet: 'Personnel Administratif', table: 'personnel_admin_history', orderBy: 'date' },
   { sheet: 'Exports Logistics', table: 'logistics_exports', orderBy: 'model_id, date' },
   { sheet: 'Etat des Postes', table: 'poste_status', orderBy: 'model_id, dept_key' },
   { sheet: 'Finance Patron', table: 'patron_finance', orderBy: 'model_id' },

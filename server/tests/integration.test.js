@@ -12,6 +12,7 @@ import { runSeed } from '../src/db/seed.js'
 import { get, run, pool } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
 import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
+import { SPECIALTIES } from '../src/constants.js'
 
 let server
 let base
@@ -116,7 +117,7 @@ test('gamme/effectif → ND/VT/DT, sauvegarde production → reflet sur le dashb
     const effectif = await call(`/methode/models/${modelId}/effectif`, {
       method: 'PUT',
       token: methodeToken,
-      body: { effectif: { '301': 24 } },
+      body: { effectif: { Machinistes: 24 } },
     })
     assert.equal(effectif.status, 200)
     assert.equal(effectif.data.nd, 24)
@@ -522,11 +523,11 @@ test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne a
   assert.equal(gamme.status, 200)
   assert.equal(gamme.data.vt, 5)
 
-  await t.test('Agent Méthode entre 10 ouvriers présents (301) — nouvel endpoint, mêmes lignes rh_attendance que RH', async () => {
+  await t.test('Agent Méthode entre 10 ouvriers présents (Machinistes) — nouvel endpoint, mêmes lignes rh_attendance que RH', async () => {
     const put = await call(`/methode/models/${modelId}/attendance`, {
       method: 'PUT',
       token: methodeToken,
-      body: { attendance: { '301': 10 } },
+      body: { attendance: { Machinistes: 10 } },
     })
     assert.equal(put.status, 200)
     const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
@@ -537,7 +538,7 @@ test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne a
     const put = await call(`/rh/models/${modelId}/attendance`, {
       method: 'PUT',
       token: rhToken,
-      body: { attendance: { '301': 12 } },
+      body: { attendance: { Machinistes: 12 } },
     })
     assert.equal(put.status, 200)
     const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
@@ -548,7 +549,7 @@ test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne a
     await call(`/methode/models/${modelId}/attendance`, {
       method: 'PUT',
       token: methodeToken,
-      body: { attendance: { '301': 10 } },
+      body: { attendance: { Machinistes: 10 } },
     })
   })
 
@@ -817,4 +818,211 @@ test('اسأل أطلس: الحد اليومي يوقف الطلبات بعد ت
 
   const overLimit = await incrementDailyUsage()
   assert.equal(overLimit, DAILY_LIMIT + 1) // dépasse le plafond — la route renverrait 429 ici
+})
+
+test('État des effectifs: Finale/Dépôt/Personnel administratif se sauvegardent et se lisent correctement', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const finaleToken = await login('finale', '1313')
+  const depotToken = await login('depot', '1010')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const today = todayInFactoryTZ()
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_EFFECTIFS', qteTotale: 500, dessin: 'TEST-E', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('Finale: effectif par spécialité se sauvegarde et se lit via le dashboard', async () => {
+    const put = await call(`/finale/models/${modelId}/effectif`, {
+      method: 'PUT',
+      token: finaleToken,
+      body: { effectif: { 'Repassage Finale': 2, 'Contrôle Finale': 1, Machiniste: 3 } },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    const byName = Object.fromEntries(dashboard.data.finaleAttendance.map((e) => [e.specialty, e.present]))
+    assert.equal(byName['Repassage Finale'], 2)
+    assert.equal(byName['Contrôle Finale'], 1)
+    assert.equal(byName.Machiniste, 3)
+    assert.equal(byName.Stagiaire, 0) // jamais soumis — reste à 0, pas d'erreur
+  })
+
+  await t.test('Dépôt: effectif (un seul total, sans détail) se sauvegarde et se lit via le dashboard', async () => {
+    const put = await call(`/depot/models/${modelId}`, {
+      method: 'PUT',
+      token: depotToken,
+      body: { totalPieces: 250, effectifTotal: 4 },
+    })
+    assert.equal(put.status, 200)
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.depotTotal, 250)
+    assert.equal(dashboard.data.depotEffectif, 4)
+  })
+})
+
+test('Personnel administratif: RH (primaire) + Patron (secours) sur la même ligne, correction rétroactive, total cumulé', async (t) => {
+  const rhToken = await login('rh', '8888')
+  const patronToken = await login('patron', '3333')
+  const today = todayInFactoryTZ()
+  const pastDate = '2026-01-15' // une date antérieure, jamais touchée ailleurs dans cette suite
+
+  const beforeToday = await get('SELECT total FROM personnel_admin_history WHERE date = $1', [today])
+  const beforePast = await get('SELECT total FROM personnel_admin_history WHERE date = $1', [pastDate])
+
+  t.after(async () => {
+    if (beforeToday) await run('UPDATE personnel_admin_history SET total = $1 WHERE date = $2', [beforeToday.total, today])
+    else await run('DELETE FROM personnel_admin_history WHERE date = $1', [today])
+    if (beforePast) await run('UPDATE personnel_admin_history SET total = $1 WHERE date = $2', [beforePast.total, pastDate])
+    else await run('DELETE FROM personnel_admin_history WHERE date = $1', [pastDate])
+  })
+
+  await t.test("RH enregistre 20 aujourd'hui", async () => {
+    const put = await call('/rh/personnel-admin', { method: 'PUT', token: rhToken, body: { date: today, total: 20 } })
+    assert.equal(put.status, 200)
+    const read = await call(`/personnel-admin?date=${today}`)
+    assert.equal(read.data.total, 20)
+  })
+
+  await t.test("Patron écrase avec 25 — dernier enregistrement (peu importe le département) qui compte", async () => {
+    const put = await call('/patron/personnel-admin', { method: 'PUT', token: patronToken, body: { date: today, total: 25 } })
+    assert.equal(put.status, 200)
+    const read = await call(`/personnel-admin?date=${today}`)
+    assert.equal(read.data.total, 25)
+  })
+
+  await t.test('correction rétroactive sur une date passée + total cumulé = somme exacte des deux jours', async () => {
+    const put = await call('/rh/personnel-admin', { method: 'PUT', token: rhToken, body: { date: pastDate, total: 7 } })
+    assert.equal(put.status, 200)
+
+    const readPast = await call(`/personnel-admin?date=${pastDate}`)
+    assert.equal(readPast.data.total, 7)
+    // cumulativeTotal = somme de TOUS les jours enregistrés, pas seulement
+    // celui demandé — donc identique quelle que soit la date interrogée.
+    assert.equal(readPast.data.cumulativeTotal, 25 + 7)
+
+    const readToday = await call(`/personnel-admin?date=${today}`)
+    assert.equal(readToday.data.total, 25) // inchangé par la correction du jour passé
+    assert.equal(readToday.data.cumulativeTotal, 25 + 7)
+  })
+})
+
+test("État des effectifs: l'endpoint /effectifs/overview additionne correctement chaque section et le total général", async (t) => {
+  const TEST_CHAIN = 8
+  const EMPTY_CHAIN = 6 // jamais touché ailleurs dans cette suite — reste sans modèle actif
+  const methodeToken = await login('methode', '1111')
+  const finaleToken = await login('finale', '1313')
+  const depotToken = await login('depot', '1010')
+  const rhToken = await login('rh', '8888')
+  const today = todayInFactoryTZ()
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const beforePersonnel = await get('SELECT total FROM personnel_admin_history WHERE date = $1', [today])
+
+  const before = await call('/effectifs/overview')
+  assert.equal(before.status, 200)
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_OVERVIEW', qteTotale: 100, dessin: 'TEST-O', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+    if (beforePersonnel) await run('UPDATE personnel_admin_history SET total = $1 WHERE date = $2', [beforePersonnel.total, today])
+    else await run('DELETE FROM personnel_admin_history WHERE date = $1', [today])
+  })
+
+  // 13 valeurs connues, une par spécialité de chaîne — somme = 1+2+...+13 = 91.
+  const chainAttendance = {}
+  SPECIALTIES.forEach((sp, i) => (chainAttendance[sp] = i + 1))
+  const expectedChainSubtotal = Object.values(chainAttendance).reduce((s, v) => s + v, 0)
+  assert.equal(expectedChainSubtotal, 91)
+  const attPut = await call(`/methode/models/${modelId}/attendance`, {
+    method: 'PUT',
+    token: methodeToken,
+    body: { attendance: chainAttendance },
+  })
+  assert.equal(attPut.status, 200)
+
+  // Finale: 2 spécialités connues, somme = 5.
+  const finalePut = await call(`/finale/models/${modelId}/effectif`, {
+    method: 'PUT',
+    token: finaleToken,
+    body: { effectif: { 'Repassage Finale': 2, Machiniste: 3 } },
+  })
+  assert.equal(finalePut.status, 200)
+
+  // Dépôt: un seul total connu = 6.
+  const depotPut = await call(`/depot/models/${modelId}`, { method: 'PUT', token: depotToken, body: { totalPieces: 0, effectifTotal: 6 } })
+  assert.equal(depotPut.status, 200)
+
+  // Personnel administratif aujourd'hui = 9 (valeur connue, écrase toute valeur précédente).
+  const paPut = await call('/rh/personnel-admin', { method: 'PUT', token: rhToken, body: { date: today, total: 9 } })
+  assert.equal(paPut.status, 200)
+
+  const after = await call('/effectifs/overview')
+  assert.equal(after.status, 200)
+
+  await t.test('la chaîne testée: sous-total = somme exacte des 13 valeurs saisies', async () => {
+    const chainRow = after.data.chains.find((c) => c.chainNumber === TEST_CHAIN)
+    assert.ok(chainRow, 'la chaîne testée doit apparaître dans la réponse')
+    assert.equal(chainRow.subtotal, expectedChainSubtotal)
+    for (const [sp, val] of Object.entries(chainAttendance)) {
+      const row = chainRow.specialties.find((s) => s.specialty === sp)
+      assert.equal(row.present, val, `${sp}: attendu ${val}`)
+    }
+  })
+
+  await t.test('chaîne vide: apparaît avec sous-total 0 et aucun détail de spécialités — jamais exclue silencieusement', async () => {
+    const emptyRow = after.data.chains.find((c) => c.chainNumber === EMPTY_CHAIN)
+    assert.ok(emptyRow, 'la chaîne vide doit quand même apparaître')
+    assert.equal(emptyRow.model, null)
+    assert.equal(emptyRow.subtotal, 0)
+    assert.deepEqual(emptyRow.specialties, [])
+  })
+
+  await t.test("chainsTotal augmente exactement du sous-total de la chaîne testée (le reste des chaînes est inchangé)", async () => {
+    assert.equal(after.data.chainsTotal - before.data.chainsTotal, expectedChainSubtotal)
+  })
+
+  await t.test('Finale: le sous-total augmente exactement de 2 + 3 = 5', async () => {
+    assert.equal(after.data.finale.subtotal - before.data.finale.subtotal, 5)
+    const repassage = after.data.finale.specialties.find((s) => s.specialty === 'Repassage Finale')
+    assert.equal(repassage.present - (before.data.finale.specialties.find((s) => s.specialty === 'Repassage Finale')?.present || 0), 2)
+  })
+
+  await t.test('Dépôt: le total augmente exactement de 6', async () => {
+    assert.equal(after.data.depot.total - before.data.depot.total, 6)
+  })
+
+  await t.test("Personnel administratif aujourd'hui = 9 exactement (valeur connue, pas cumulée dans le total général)", async () => {
+    assert.equal(after.data.personnelAdmin.total, 9)
+  })
+
+  await t.test('Total général = somme exacte de toutes les sections ci-dessus — vérifié mathématiquement, pas approximé', async () => {
+    const expectedGrandTotal =
+      after.data.chainsTotal + after.data.finale.subtotal + after.data.depot.total + after.data.personnelAdmin.total
+    assert.equal(after.data.grandTotal, expectedGrandTotal)
+
+    // Et l'augmentation du total général depuis "before" correspond exactement
+    // à la somme de ce qui a été ajouté dans ce test (91 + 5 + 6 + Δpersonnel).
+    const personnelDelta = after.data.personnelAdmin.total - before.data.personnelAdmin.total
+    assert.equal(after.data.grandTotal - before.data.grandTotal, expectedChainSubtotal + 5 + 6 + personnelDelta)
+  })
 })

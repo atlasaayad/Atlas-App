@@ -1,4 +1,5 @@
 import pg from 'pg'
+import { SPECIALTY_MIGRATION_MAP } from '../constants.js'
 
 const { Pool } = pg
 
@@ -38,7 +39,7 @@ let schemaReady = null
 // DATABASE_URL surfaces as a normal request error instead of crashing the
 // whole function on load.
 export function ensureSchema() {
-  if (!schemaReady) schemaReady = run(SCHEMA_SQL)
+  if (!schemaReady) schemaReady = run(SCHEMA_SQL).then(migrateSpecialtyNames)
   return schemaReady
 }
 
@@ -303,7 +304,83 @@ CREATE TABLE IF NOT EXISTS launch_timer (
   reason_comment TEXT,
   updated_at TEXT
 );
+
+-- Finale's own per-specialty headcount — same shape as rh_attendance
+-- (current live snapshot per chain's active model), but a separate table
+-- since Finale's job roles (FINALE_SPECIALTIES) are entirely different from
+-- the 13 chain specialties. No historical table: "État des effectifs" only
+-- ever needs today's live total, not a backdated trail, for Finale.
+CREATE TABLE IF NOT EXISTS finale_attendance (
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  specialty TEXT NOT NULL,
+  present INTEGER DEFAULT 0,
+  updated_at TEXT,
+  PRIMARY KEY (model_id, specialty)
+);
+
+ALTER TABLE depot ADD COLUMN IF NOT EXISTS effectif_total INTEGER DEFAULT 0;
+
+-- Personnel administratif / Encadrement — a single company-wide headcount
+-- (not per chain/model, unlike everything else in this file), entered by RH
+-- (primary) or Patron (backup): whichever saves a given date last is what
+-- reads back, exactly like rh_attendance's RH/Méthode split. One permanent
+-- row per calendar day (never overwritten across days) is the sole source
+-- of truth — "today" is just today's row, "cumulative" is the sum across
+-- every recorded day — same architecture as production_history/
+-- quality_history, no separate "live" table to drift out of sync.
+CREATE TABLE IF NOT EXISTS personnel_admin_history (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL UNIQUE,
+  total INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT
+);
 `
+
+// One-time (per old specialty code), idempotent specialty rename/merge
+// migration — see SPECIALTY_MIGRATION_MAP in constants.js for the full old→
+// new mapping. Idempotent because each step only acts on rows still bearing
+// the OLD code: once migrated (and deleted), a repeat run finds nothing to
+// do for that code. Applied identically to effectif_requis and
+// rh_attendance (current values, keyed by model_id) and to
+// rh_attendance_history (the permanent per-day record, keyed by chain_number
+// + date) — a merge (e.g. 301/502/504/516 -> Machinistes) sums the values
+// per group instead of overwriting, so no headcount is lost when several old
+// codes collapse into one new specialty.
+async function migrateSpecialtyNames() {
+  for (const [oldName, newName] of Object.entries(SPECIALTY_MIGRATION_MAP)) {
+    await run(
+      `INSERT INTO effectif_requis (model_id, specialty, required)
+       SELECT model_id, $2, SUM(required) FROM effectif_requis WHERE specialty = $1 GROUP BY model_id
+       ON CONFLICT (model_id, specialty) DO UPDATE SET required = effectif_requis.required + excluded.required`,
+      [oldName, newName]
+    )
+    await run('DELETE FROM effectif_requis WHERE specialty = $1', [oldName])
+
+    await run(
+      `INSERT INTO rh_attendance (model_id, specialty, present, updated_at)
+       SELECT model_id, $2, SUM(present), MAX(updated_at) FROM rh_attendance WHERE specialty = $1 GROUP BY model_id
+       ON CONFLICT (model_id, specialty) DO UPDATE SET
+         present = rh_attendance.present + excluded.present,
+         updated_at = GREATEST(rh_attendance.updated_at, excluded.updated_at)`,
+      [oldName, newName]
+    )
+    await run('DELETE FROM rh_attendance WHERE specialty = $1', [oldName])
+
+    await run(
+      `INSERT INTO rh_attendance_history (id, model_id, chain_number, specialty, date, present, created_at, updated_at)
+       SELECT 'rah_mig_' || chain_number || '_' || date || '_' || $2, MAX(model_id), chain_number, $2, date,
+              SUM(present), MIN(created_at), MAX(updated_at)
+       FROM rh_attendance_history WHERE specialty = $1 GROUP BY chain_number, date
+       ON CONFLICT (chain_number, specialty, date) DO UPDATE SET
+         present = rh_attendance_history.present + excluded.present,
+         model_id = excluded.model_id,
+         updated_at = excluded.updated_at`,
+      [oldName, newName]
+    )
+    await run('DELETE FROM rh_attendance_history WHERE specialty = $1', [oldName])
+  }
+}
 
 export async function logAudit({ deptKey, modelId, action, details }) {
   await run(

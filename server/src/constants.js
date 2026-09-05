@@ -16,9 +16,43 @@ export const DEPARTMENTS = [
 // Departments whose only input is a generic "État du poste %" slider + note.
 export const GENERIC_POSTE_DEPARTMENTS = ['coupe', 'magasin', 'mecanicien', 'echantillon']
 
+// Renamed from the old 15-code shorthand (301/502/504/516/Main/Sp/M-sp/
+// Control/Stg/Fer/"Mach retouche"/Trns) to clear French names. 301/502/504/
+// 516 merged into one "Machinistes" specialty (their values summed); the old
+// "Stg" code split conceptually into two new specialties, but since it never
+// distinguished machinist vs. fer trainees, its historical values all moved
+// to "Machiniste stagiaire" — "Stagiaire fer" starts empty from this
+// deploy's data. See the DB migration in db/index.js and README "État des
+// effectifs" for the full mapping and this assumption.
 export const SPECIALTIES = [
-  '301', '502', '504', '516', 'Main', 'Sp', 'M/sp', 'Finition', 'Control', 'Stg', 'Fer',
-  'Mach retouche', 'Trns', 'Chef', 'Robot',
+  'Machinistes', 'Machiniste stagiaire', 'Repassage préparation', 'Stagiaire fer', 'Traçage',
+  'Transport', 'Chef', 'Robot', 'Machine spéciale', 'Manuel spécial / Traçage spécial',
+  'Contrôle chaîne', 'Retouche', 'Finition',
+]
+
+// Old (pre-rename) specialty code -> new name, used once by the DB migration
+// in db/index.js to carry historical effectif_requis/rh_attendance(_history)
+// values over to the new names without losing or double-counting anything.
+export const SPECIALTY_MIGRATION_MAP = {
+  '301': 'Machinistes',
+  '502': 'Machinistes',
+  '504': 'Machinistes',
+  '516': 'Machinistes',
+  Stg: 'Machiniste stagiaire',
+  Main: 'Traçage',
+  Sp: 'Machine spéciale',
+  'M/sp': 'Manuel spécial / Traçage spécial',
+  Control: 'Contrôle chaîne',
+  Fer: 'Repassage préparation',
+  'Mach retouche': 'Retouche',
+  Trns: 'Transport',
+}
+
+// Finale's own headcount specialties — separate from the 13 chain
+// specialties above (Finale is a distinct finishing stage with different
+// job roles), entered per chain by the Finale department itself.
+export const FINALE_SPECIALTIES = [
+  'Repassage Finale', 'Contrôle Finale', 'Stagiaire', 'Main', 'Transport', 'Nettoyage', 'Mesure', 'Machiniste',
 ]
 
 export const MACHINES = ['301', '502', '504', '516', 'robot', 'fer', 'main', 'sp', 'rz/stg']

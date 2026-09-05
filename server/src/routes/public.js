@@ -1,7 +1,16 @@
 import { Router } from 'express'
 import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
-import { DEPARTMENTS, CHAIN_NUMBERS, HOURLY_SLOTS, SPECIALTIES, GENERIC_POSTE_DEPARTMENTS, WORK_HOURS_PER_DAY } from '../constants.js'
+import {
+  DEPARTMENTS,
+  CHAIN_NUMBERS,
+  HOURLY_SLOTS,
+  SPECIALTIES,
+  FINALE_SPECIALTIES,
+  GENERIC_POSTE_DEPARTMENTS,
+  WORK_HOURS_PER_DAY,
+} from '../constants.js'
+import { getPersonnelAdmin } from '../attendanceShared.js'
 import {
   computeObjectifJour,
   prodAMaintenant,
@@ -140,6 +149,7 @@ export async function fullDashboard(model) {
     retoucheCumulativeRow,
     qualityHourlyRows,
     launchTimerRow,
+    finaleAttendanceRows,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -189,6 +199,7 @@ export async function fullDashboard(model) {
         today,
       ]),
       get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
+      all('SELECT specialty, present FROM finale_attendance WHERE model_id = $1', [model.id]),
     ])
 
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -280,7 +291,10 @@ export async function fullDashboard(model) {
     moyenne_prod_repassage_final: 0,
     moyenne_prod_controle_final: 0,
   }
-  const depot = depotRow || { total_pieces: 0 }
+  const depot = depotRow || { total_pieces: 0, effectif_total: 0 }
+  const finaleAttendanceMap = Object.fromEntries(FINALE_SPECIALTIES.map((s) => [s, 0]))
+  for (const r of finaleAttendanceRows) finaleAttendanceMap[r.specialty] = r.present
+  const finaleAttendance = FINALE_SPECIALTIES.map((s) => ({ specialty: s, present: finaleAttendanceMap[s] || 0 }))
   const exports = exportRows.map((e) => ({ ...e, client: model.client, mod: model.dessin }))
 
   const posteMap = Object.fromEntries(postes.map((p) => [p.dept_key, p]))
@@ -336,6 +350,8 @@ export async function fullDashboard(model) {
       moyenneProdControleFinal: finale.moyenne_prod_controle_final,
     },
     depotTotal: depot.total_pieces,
+    depotEffectif: depot.effectif_total,
+    finaleAttendance,
     exports,
     objectifAtteintPct,
     quality: {
@@ -407,6 +423,73 @@ publicRouter.get('/chains/ranking', async (req, res) => {
   })
 
   res.json(entries.map((e, i) => ({ rank: i + 1, ...e })))
+})
+
+// Personnel administratif — read side, shared by RH's/Patron's own entry
+// screens and the "État des effectifs" overview page below. Write side is
+// gated per-department (routes/rh.js primary, routes/patron.js backup).
+publicRouter.get('/personnel-admin', async (req, res) => {
+  const date = req.query.date || todayInFactoryTZ()
+  res.json(await getPersonnelAdmin(date))
+})
+
+// État des effectifs — a company-wide headcount overview: every chain's 13
+// specialties + subtotal, Finale's 8 specialties + subtotal (summed across
+// every chain's Finale entry — Finale is shown as ONE section here, not
+// repeated per chain), Dépôt's single total (summed across every chain's
+// Dépôt entry), Personnel administratif's today figure, and a grand total
+// that is the sum of all of the above. Everything here is "right now" — the
+// same live rh_attendance/finale_attendance/depot snapshot every
+// department's own screen reads from, never a separately cached number that
+// could drift. An empty chain (no active model) still appears, subtotal 0,
+// with no specialty breakdown — never silently dropped.
+publicRouter.get('/effectifs/overview', async (req, res) => {
+  const active = await all('SELECT * FROM models WHERE active = 1')
+  const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
+
+  const [rhRows, finaleRows, depotRows, personnelAdmin] = await Promise.all([
+    active.length
+      ? all(`SELECT model_id, specialty, present FROM rh_attendance WHERE model_id = ANY($1)`, [active.map((m) => m.id)])
+      : [],
+    active.length
+      ? all(`SELECT model_id, specialty, present FROM finale_attendance WHERE model_id = ANY($1)`, [active.map((m) => m.id)])
+      : [],
+    active.length ? all(`SELECT model_id, effectif_total FROM depot WHERE model_id = ANY($1)`, [active.map((m) => m.id)]) : [],
+    getPersonnelAdmin(todayInFactoryTZ()),
+  ])
+
+  const rhByModel = {}
+  for (const r of rhRows) (rhByModel[r.model_id] ??= {})[r.specialty] = r.present
+
+  const chains = CHAIN_NUMBERS.map((chainNumber) => {
+    const model = byChain[chainNumber]
+    if (!model) {
+      return { chainNumber, model: null, specialties: [], subtotal: 0 }
+    }
+    const present = rhByModel[model.id] || {}
+    const specialties = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0 }))
+    const subtotal = specialties.reduce((sum, s) => sum + s.present, 0)
+    return { chainNumber, model: { client: model.client, dessin: model.dessin }, specialties, subtotal }
+  })
+  const chainsTotal = chains.reduce((sum, c) => sum + c.subtotal, 0)
+
+  const finaleTotals = Object.fromEntries(FINALE_SPECIALTIES.map((s) => [s, 0]))
+  for (const r of finaleRows) finaleTotals[r.specialty] = (finaleTotals[r.specialty] || 0) + r.present
+  const finaleSpecialties = FINALE_SPECIALTIES.map((s) => ({ specialty: s, present: finaleTotals[s] || 0 }))
+  const finaleSubtotal = finaleSpecialties.reduce((sum, s) => sum + s.present, 0)
+
+  const depotTotal = depotRows.reduce((sum, r) => sum + (r.effectif_total || 0), 0)
+
+  const grandTotal = chainsTotal + finaleSubtotal + depotTotal + personnelAdmin.total
+
+  res.json({
+    chains,
+    chainsTotal,
+    finale: { specialties: finaleSpecialties, subtotal: finaleSubtotal },
+    depot: { total: depotTotal },
+    personnelAdmin,
+    grandTotal,
+  })
 })
 
 // Historique — everything computed live from production_history, nothing

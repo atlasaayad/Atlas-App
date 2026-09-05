@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 const tabs = [
   { to: '/', label: 'Accueil', icon: '🏠', end: true },
   { to: '/departements', label: 'Départements', icon: '🗂️', end: false },
+  { to: '/effectifs', label: 'État des effectifs', icon: '👥', end: false },
   { to: '/ask', label: 'Ask Atlas', icon: '💬', end: false },
 ]
 
