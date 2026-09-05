@@ -75,6 +75,8 @@ export const api = {
   getModels: () => request('/models'),
   getChains: () => request('/chains'),
   getRanking: () => request('/chains/ranking'),
+  getPersonnelAdmin: (date) => request(`/personnel-admin?date=${date}`),
+  getEffectifsOverview: () => request('/effectifs/overview'),
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
@@ -108,6 +110,7 @@ export const api = {
   },
   rh: {
     updateAttendance: (token, id, attendance) => request(`/rh/models/${id}/attendance`, { method: 'PUT', body: { attendance }, token }),
+    updatePersonnelAdmin: (token, date, total) => request('/rh/personnel-admin', { method: 'PUT', body: { date, total }, token }),
   },
   quality: {
     updateReprises: (token, id, reprises) => request(`/quality/models/${id}`, { method: 'PUT', body: { reprises }, token }),
@@ -117,9 +120,11 @@ export const api = {
   },
   finale: {
     update: (token, id, payload) => request(`/finale/models/${id}`, { method: 'PUT', body: payload, token }),
+    updateEffectif: (token, id, effectif) => request(`/finale/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
   },
   depot: {
-    update: (token, id, totalPieces) => request(`/depot/models/${id}`, { method: 'PUT', body: { totalPieces }, token }),
+    update: (token, id, totalPieces, effectifTotal) =>
+      request(`/depot/models/${id}`, { method: 'PUT', body: { totalPieces, effectifTotal }, token }),
   },
   logistics: {
     addExport: (token, id, payload) => request(`/logistics/models/${id}/exports`, { method: 'POST', body: payload, token }),
@@ -134,6 +139,7 @@ export const api = {
     getAuditLog: (token) => request('/patron/audit-log', { token }),
     getCpm: (token) => request('/patron/cpm', { token }),
     updateCpm: (token, cpm) => request('/patron/cpm', { method: 'PUT', body: { cpm }, token }),
+    updatePersonnelAdmin: (token, date, total) => request('/patron/personnel-admin', { method: 'PUT', body: { date, total }, token }),
     exportData: async (token) => {
       const res = await fetch(`${BASE}/patron/export`, { headers: { Authorization: `Bearer ${token}` } })
       if (!res.ok) throw new Error(`export_failed_${res.status}`)

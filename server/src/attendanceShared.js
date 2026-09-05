@@ -38,3 +38,32 @@ export async function saveAttendance({ deptKey, id, attendance }) {
 
   await logAudit({ deptKey, modelId: id, action: 'update_attendance', details: attendance })
 }
+
+// Personnel administratif / Encadrement — a single company-wide headcount
+// (not tied to any chain/model), entered by RH (primary) or Patron (backup)
+// via an identical route on each department's own screen. Both write to the
+// exact same personnel_admin_history row for a given date, so whichever
+// department saves last is what reads back — same no-reconciliation-needed
+// pattern as saveAttendance() above. Can target any past date (not just
+// today), so a department can go back and correct a previous day's total.
+export async function savePersonnelAdmin({ deptKey, date, total }) {
+  const now = new Date().toISOString()
+  const safeTotal = Math.max(0, Number(total) || 0)
+  await run(
+    `INSERT INTO personnel_admin_history (id, date, total, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)
+     ON CONFLICT (date) DO UPDATE SET total = excluded.total, updated_at = excluded.updated_at`,
+    [`pah_${nanoid(10)}`, date, safeTotal, now]
+  )
+  await logAudit({ deptKey, action: 'update_personnel_admin', details: { date, total: safeTotal } })
+}
+
+// Read helper shared by RH's/Patron's own screens and the public overview
+// endpoint: today's (or any date's) total, plus the cumulative sum across
+// every day ever recorded — mirrors Quality's "today + cumulative" split.
+export async function getPersonnelAdmin(date) {
+  const [dayRow, cumulativeRow] = await Promise.all([
+    get('SELECT total FROM personnel_admin_history WHERE date = $1', [date]),
+    get('SELECT COALESCE(SUM(total), 0) AS total FROM personnel_admin_history'),
+  ])
+  return { date, total: dayRow?.total ?? 0, cumulativeTotal: Number(cumulativeRow.total) }
+}

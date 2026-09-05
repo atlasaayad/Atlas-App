@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
+import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { FINALE_SPECIALTIES } from '../../lib/constants'
 
 const GROUPS = [
   {
@@ -42,11 +44,15 @@ export default function FinaleForm({ token, chainNumber }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
+  const [effectif, setEffectif] = useState({})
+  const [savingEffectif, setSavingEffectif] = useState(false)
+  const [effectifSaved, setEffectifSaved] = useState(false)
 
   useEffect(() => {
     if (dashboard) {
       setEnCours(dashboard.finaleEnCours)
       setDetails(dashboard.finaleDetails)
+      setEffectif(Object.fromEntries(dashboard.finaleAttendance.map((e) => [e.specialty, e.present])))
     }
   }, [dashboard])
 
@@ -65,6 +71,18 @@ export default function FinaleForm({ token, chainNumber }) {
       setTimeout(() => setSaved(false), 2000)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function submitEffectif() {
+    setSavingEffectif(true)
+    try {
+      await api.finale.updateEffectif(token, modelId, effectif)
+      setEffectifSaved(true)
+      refresh()
+      setTimeout(() => setEffectifSaved(false), 2000)
+    } finally {
+      setSavingEffectif(false)
     }
   }
 
@@ -122,6 +140,28 @@ export default function FinaleForm({ token, chainNumber }) {
       >
         {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
       </button>
+
+      <GlowCard title="Effectif Finale">
+        <p className="mb-3 text-sm text-slate-400">
+          عدد العمال الحاضرين اليوم بمرحلة Finale لكل تخصص — يظهر بمجموع Finale بشاشة "État des effectifs".
+        </p>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+          {FINALE_SPECIALTIES.map((sp) => (
+            <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+              <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={999} />
+              {voiceMode && <VoiceMicButton label={sp} onConfirm={(n) => setEffectif({ ...effectif, [sp]: n })} />}
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={submitEffectif}
+          disabled={savingEffectif}
+          className="mt-4 w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
+        >
+          {savingEffectif ? 'Enregistrement…' : effectifSaved ? 'Enregistré ✓' : 'Enregistrer'}
+        </button>
+      </GlowCard>
     </form>
   )
 }

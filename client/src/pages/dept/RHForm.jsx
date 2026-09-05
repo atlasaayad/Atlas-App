@@ -5,6 +5,7 @@ import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import AuditReportCard from '../../components/AuditReportCard'
+import PersonnelAdminCard from '../../components/PersonnelAdminCard'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 import { SPECIALTIES } from '../../lib/constants'
@@ -22,9 +23,6 @@ export default function RHForm({ token, chainNumber }) {
     }
   }, [dashboard])
 
-  if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!modelId) return <NoModel chainNumber={chainNumber} />
-
   async function submit(e) {
     e.preventDefault()
     setSaving(true)
@@ -38,8 +36,23 @@ export default function RHForm({ token, chainNumber }) {
     }
   }
 
+  // Personnel administratif is company-wide, not tied to any chain/model, so
+  // it renders regardless of whether the currently-picked chain has an
+  // active model — unlike the per-chain attendance section below it.
+  if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
+  if (!modelId) {
+    return (
+      <div className="space-y-4">
+        <PersonnelAdminCard token={token} updateFn={api.rh.updatePersonnelAdmin} />
+        <NoModel chainNumber={chainNumber} />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
+      <PersonnelAdminCard token={token} updateFn={api.rh.updatePersonnelAdmin} />
+
       <GlowCard title="Présence par spécialité">
         <p className="mb-4 text-sm text-slate-400">
           عدد العمال الحاضرين اليوم لكل تخصص. استخدم <span className="text-turquoise">+</span> و

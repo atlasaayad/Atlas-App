@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs'
 import { get, run, ensureSchema, logAudit } from './index.js'
-import { DEPARTMENTS, SPECIALTIES } from '../constants.js'
+import { DEPARTMENTS, SPECIALTIES, FINALE_SPECIALTIES } from '../constants.js'
 import { computeVTMinutes, computeDT, todayInFactoryTZ } from '../calc.js'
 
 // Default 4-digit PINs, one per department. Override per-deployment via env
@@ -77,8 +77,9 @@ async function seedDemoModel() {
   }
 
   const effectifs = {
-    '301': 2, '502': 2, '504': 1, '516': 2, Main: 4, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 2,
-    'Mach retouche': 1, Trns: 1, Chef: 1, Robot: 1,
+    Machinistes: 7, 'Machiniste stagiaire': 1, 'Stagiaire fer': 0, 'Repassage préparation': 2, Traçage: 4,
+    Transport: 1, Chef: 1, Robot: 1, 'Machine spéciale': 2, 'Manuel spécial / Traçage spécial': 1,
+    'Contrôle chaîne': 1, Retouche: 1, Finition: 2,
   }
   let nd = 0
   for (const spec of SPECIALTIES) {
@@ -108,8 +109,9 @@ async function seedDemoModel() {
   )
 
   const presentDemo = {
-    '301': 2, '502': 1, '504': 1, '516': 2, Main: 3, Sp: 2, 'M/sp': 1, Finition: 2, Control: 1, Stg: 1, Fer: 1,
-    'Mach retouche': 1, Trns: 0, Chef: 1, Robot: 1,
+    Machinistes: 6, 'Machiniste stagiaire': 1, 'Stagiaire fer': 0, 'Repassage préparation': 1, Traçage: 3,
+    Transport: 0, Chef: 1, Robot: 1, 'Machine spéciale': 2, 'Manuel spécial / Traçage spécial': 1,
+    'Contrôle chaîne': 1, Retouche: 1, Finition: 2,
   }
   for (const spec of SPECIALTIES) {
     await run('INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)', [
@@ -140,7 +142,31 @@ async function seedDemoModel() {
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [modelId, 96, 8, 210, 3, 22, 15, 12, 45, 38, 40, now]
   )
-  await run(`INSERT INTO depot (model_id, total_pieces, updated_at) VALUES ($1, $2, $3)`, [modelId, 780, now])
+  await run(
+    `INSERT INTO depot (model_id, total_pieces, effectif_total, updated_at) VALUES ($1, $2, $3, $4)`,
+    [modelId, 780, 3, now]
+  )
+
+  const finaleEffectifDemo = {
+    'Repassage Finale': 2, 'Contrôle Finale': 2, Stagiaire: 1, Main: 1, Transport: 1, Nettoyage: 1, Mesure: 1, Machiniste: 3,
+  }
+  for (const spec of FINALE_SPECIALTIES) {
+    await run('INSERT INTO finale_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)', [
+      modelId,
+      spec,
+      finaleEffectifDemo[spec] || 0,
+      now,
+    ])
+  }
+
+  // Personnel administratif — company-wide, not tied to any model. Today's
+  // row (used live everywhere) plus one from a few days back, so the
+  // "cumulative" figure has more than a single day to actually sum.
+  await run(
+    `INSERT INTO personnel_admin_history (id, date, total, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)
+     ON CONFLICT (date) DO UPDATE SET total = excluded.total, updated_at = excluded.updated_at`,
+    ['pah_demo_today', today, 18, now]
+  )
 
   await run(
     `INSERT INTO logistics_exports (id, model_id, description, quantite, date, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,

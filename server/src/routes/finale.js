@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { FINALE_SPECIALTIES } from '../constants.js'
 
 export const finaleRouter = Router()
 finaleRouter.use(requireDept('finale'))
@@ -57,5 +58,26 @@ finaleRouter.put('/models/:id', async (req, res) => {
     ]
   )
   await logAudit({ deptKey: 'finale', modelId: id, action: 'update_finale', details: { enCours, ...details } })
+  res.json({ ok: true })
+})
+
+// Finale's own headcount, per specialty (FINALE_SPECIALTIES) — feeds the
+// "État des effectifs" overview page's Finale section, summed across every
+// chain's Finale entry there. Current live snapshot only, same as
+// rh_attendance — no backdating for this one.
+finaleRouter.put('/models/:id/effectif', async (req, res) => {
+  const { id } = req.params
+  const effectif = req.body?.effectif || {}
+  const now = new Date().toISOString()
+  for (const spec of FINALE_SPECIALTIES) {
+    if (!(spec in effectif)) continue
+    const present = Math.max(0, Number(effectif[spec]) || 0)
+    await run(
+      `INSERT INTO finale_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (model_id, specialty) DO UPDATE SET present = excluded.present, updated_at = excluded.updated_at`,
+      [id, spec, present, now]
+    )
+  }
+  await logAudit({ deptKey: 'finale', modelId: id, action: 'update_finale_effectif', details: effectif })
   res.json({ ok: true })
 })

@@ -4,6 +4,7 @@ import { CompanyProvider, useCompany } from './lib/CompanyContext'
 import Home from './pages/Home'
 import Departments from './pages/Departments'
 import DeptGate from './pages/DeptGate'
+import EffectifsOverview from './pages/EffectifsOverview'
 import Ask from './pages/Ask'
 import PredictApp from './predict/PredictApp'
 
@@ -31,6 +32,7 @@ function FactoryApp() {
             <Route path="/" element={<Home />} />
             <Route path="/departements" element={<Departments />} />
             <Route path="/departements/:deptKey" element={<DeptGate />} />
+            <Route path="/effectifs" element={<EffectifsOverview />} />
             <Route path="/ask" element={<Ask />} />
           </Routes>
         </main>

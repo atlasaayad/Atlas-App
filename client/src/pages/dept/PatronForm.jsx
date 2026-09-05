@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import AuditReportCard from '../../components/AuditReportCard'
 import DevisCard from '../../components/DevisCard'
+import PersonnelAdminCard from '../../components/PersonnelAdminCard'
 import { api } from '../../lib/api'
 import { DEPARTMENT_META } from '../../lib/constants'
 
@@ -24,6 +25,7 @@ export default function PatronForm({ token }) {
       <div className="flex gap-2">
         {[
           ['finances', 'Finances'],
+          ['personnel', 'Personnel administratif'],
           ['journal', 'Journal des modifications'],
         ].map(([key, label]) => (
           <button
@@ -62,6 +64,8 @@ export default function PatronForm({ token }) {
         </div>
       )}
 
+      {tab === 'personnel' && <PersonnelAdminCard token={token} updateFn={api.patron.updatePersonnelAdmin} />}
+
       {tab === 'journal' && <AuditLogTab token={token} />}
     </div>
   )
@@ -77,7 +81,9 @@ const ACTION_LABELS = {
   update_attendance: 'Présence RH mise à jour',
   update_quality: 'Qualité mise à jour',
   update_finale: 'Finale mise à jour',
+  update_finale_effectif: 'Effectif Finale mis à jour',
   update_depot: 'Dépôt mis à jour',
+  update_personnel_admin: 'Personnel administratif mis à jour',
   add_export: 'Expédition ajoutée',
   delete_export: 'Expédition supprimée',
   update_poste_status: "État du poste mis à jour",
