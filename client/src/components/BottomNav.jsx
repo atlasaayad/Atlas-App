@@ -3,7 +3,10 @@ import { NavLink } from 'react-router-dom'
 const tabs = [
   { to: '/', label: 'Accueil', icon: '🏠', end: true },
   { to: '/departements', label: 'Départements', icon: '🗂️', end: false },
-  { to: '/effectifs', label: 'État des effectifs', icon: '👥', end: false },
+  // 👥 (busts in silhouette) renders as a flat solid-color glyph in this
+  // font, visually heavier/inconsistent next to the other three tabs'
+  // detailed illustrated-style emoji — 🧑‍🤝‍🧑 matches their style.
+  { to: '/effectifs', label: 'État des effectifs', icon: '🧑‍🤝‍🧑', end: false },
   { to: '/ask', label: 'Ask Atlas', icon: '💬', end: false },
 ]
 
@@ -23,7 +26,7 @@ export default function BottomNav() {
             }
           >
             <span className="text-xl leading-none">{tab.icon}</span>
-            {tab.label}
+            <span className="whitespace-nowrap">{tab.label}</span>
           </NavLink>
         ))}
       </div>
