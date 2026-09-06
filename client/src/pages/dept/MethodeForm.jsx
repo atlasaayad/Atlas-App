@@ -134,6 +134,7 @@ function EditModel({ token, model, dashboard, onSaved }) {
           ['effectif', 'Effectif'],
           ['presence', 'Présence'],
           ['lancement', 'Temps de lancement'],
+          ['variantes', 'Couleurs / Variantes'],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -166,6 +167,7 @@ function EditModel({ token, model, dashboard, onSaved }) {
       {tab === 'effectif' && <EffectifTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'presence' && <PresenceTab token={token} model={model} dashboard={dashboard} onSaved={onSaved} />}
       {tab === 'lancement' && <LaunchTimerTab token={token} model={model} onSaved={onSaved} />}
+      {tab === 'variantes' && <VariantesTab token={token} model={model} dashboard={dashboard} onSaved={onSaved} />}
     </div>
   )
 }
@@ -287,6 +289,119 @@ function IdentiteTab({ token, model, onSaved }) {
         <SaveButton type="submit" saving={saving} saved={saved} />
       </form>
     </GlowCard>
+  )
+}
+
+// Couleur/Variante — a second (third, ...) color of the exact same model.
+// A variant always uses the model's own gamme/VT/DT/effectif (see the
+// "models" table comment server-side) — this tab only ever asks for the
+// color's own name and its own Qté totale, never operations/time again.
+// `dashboard.colors` is [root, ...variants] — colors.slice(1) is the
+// existing variant list, each with its own live totalSortie already
+// computed by fullDashboard().
+function VariantesTab({ token, model, dashboard, onSaved }) {
+  const variants = dashboard?.colors?.slice(1) || []
+  const [label, setLabel] = useState('')
+  const [qteTotale, setQteTotale] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  async function submitNew(e) {
+    e.preventDefault()
+    if (!label) return
+    setSaving(true)
+    try {
+      await api.methode.addVariant(token, model.id, label, Number(qteTotale) || 0)
+      setLabel('')
+      setQteTotale('')
+      setSaved(true)
+      onSaved()
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <GlowCard title="Ajouter une variante de couleur">
+        <p className="mb-3 text-sm text-slate-400">
+          نفس الموديل (نفس الغامة، نفس VT/DT) بلون/رقم مرجعي مختلف — ما تحتاج تعيد إدخال العمليات. اكتب فقط اسم/رقم
+          اللون والكمية المستهدفة الخاصة فيه (جزء من الطلبية الكلية للموديل).
+        </p>
+        <form onSubmit={submitNew} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <TextField label="Couleur / référence" value={label} onChange={setLabel} required hint='مثال: "800" أو "Bleu"' />
+          <TextField
+            label="Qté totale (cette couleur)"
+            type="number"
+            value={qteTotale}
+            onChange={setQteTotale}
+            hint="الكمية المستهدفة الخاصة بهذا اللون فقط"
+          />
+          <SaveButton type="submit" saving={saving} saved={saved} />
+        </form>
+      </GlowCard>
+
+      <GlowCard title="Variantes actives">
+        {variants.length === 0 ? (
+          <p className="text-sm text-slate-500">لا يوجد لون/متغير إضافي بعد لهذا الموديل.</p>
+        ) : (
+          <div className="space-y-2.5">
+            {variants.map((v) => (
+              <VariantRow key={v.id} token={token} modelId={model.id} variant={v} onSaved={onSaved} />
+            ))}
+          </div>
+        )}
+      </GlowCard>
+    </div>
+  )
+}
+
+function VariantRow({ token, modelId, variant, onSaved }) {
+  const [editing, setEditing] = useState(false)
+  const [label, setLabel] = useState(variant.label || '')
+  const [qteTotale, setQteTotale] = useState(variant.qteTotale || 0)
+  const [saving, setSaving] = useState(false)
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api.methode.updateVariant(token, modelId, variant.id, label, Number(qteTotale) || 0)
+      setEditing(false)
+      onSaved()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-wrap items-end gap-2.5 rounded-md border border-turquoise/40 bg-navy-900/40 p-3">
+        <TextField label="Couleur / référence" value={label} onChange={setLabel} />
+        <TextField label="Qté totale" type="number" value={qteTotale} onChange={setQteTotale} />
+        <button
+          onClick={save}
+          disabled={saving}
+          className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-4 text-sm font-medium text-turquoise disabled:opacity-50"
+        >
+          {saving ? '...' : 'Enregistrer'}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-slate-800 bg-navy-900/40 p-3">
+      <div>
+        <div className="text-sm font-medium text-slate-200">{variant.label}</div>
+        <div className="font-mono text-xs text-slate-500">
+          {variant.totalSortie} / {variant.qteTotale} pièces — reste {variant.leReste}
+        </div>
+      </div>
+      <button onClick={() => setEditing(true)} className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-400">
+        Modifier
+      </button>
+    </div>
   )
 }
 

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import bcrypt from 'bcryptjs'
 import { app } from '../src/app.js'
 import { runSeed } from '../src/db/seed.js'
-import { get, run, pool } from '../src/db/index.js'
+import { get, run, all, pool } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
 import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
 import { SPECIALTIES } from '../src/constants.js'
@@ -1024,5 +1024,146 @@ test("État des effectifs: l'endpoint /effectifs/overview additionne correctemen
     // à la somme de ce qui a été ajouté dans ce test (91 + 5 + 6 + Δpersonnel).
     const personnelDelta = after.data.personnelAdmin.total - before.data.personnelAdmin.total
     assert.equal(after.data.grandTotal - before.data.grandTotal, expectedChainSubtotal + 5 + 6 + personnelDelta)
+  })
+})
+
+test('Couleur/Variante: variante hérite VT/DT sans ressaisie, deux couleurs saisissent la même heure séparément, total combiné exact', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const today = todayInFactoryTZ()
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_VARIANTE', qteTotale: 1000, dessin: 'TEST-V', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  const rootId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [rootId]) // cascades to the variant too
+    await run('DELETE FROM audit_log WHERE model_id = $1', [rootId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  // Gamme totalisant 300s de TPS → SAM (VT) = 5 minutes exactement — le
+  // root seul a un vrai VT/DT, la variante n'en saisit jamais.
+  const gamme = await call(`/methode/models/${rootId}/gamme`, {
+    method: 'PUT',
+    token: methodeToken,
+    body: { lines: [{ operation: 'A', machine: 'x', tps: 300 }] },
+  })
+  assert.equal(gamme.status, 200)
+  assert.equal(gamme.data.vt, 5)
+
+  await t.test("un modèle normal (sans variante) a colors = [lui-même] seul, comportement inchangé", async () => {
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.colors.length, 1)
+    assert.equal(dash.data.colors[0].id, rootId)
+    assert.equal(dash.data.colors[0].label, null)
+  })
+
+  let variantId
+  await t.test("ajouter une variante de couleur ('800', qté 300) hérite VT/DT du root sans ressaisie", async () => {
+    const variant = await call(`/methode/models/${rootId}/variants`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { label: '800', qteTotale: 300 },
+    })
+    assert.equal(variant.status, 201)
+    variantId = variant.data.id
+
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    // Le root garde exactement son propre VT/DT (jamais recalculé à cause
+    // d'une variante) — c'est la variante qui n'en a simplement jamais.
+    assert.equal(dash.data.vt, 5)
+    assert.equal(dash.data.colors.length, 2)
+    const colorEntry = dash.data.colors.find((c) => c.id === variantId)
+    assert.equal(colorEntry.label, '800')
+    assert.equal(colorEntry.qteTotale, 300)
+    assert.equal(colorEntry.totalSortie, 0) // rien produit encore pour cette couleur
+  })
+
+  await t.test('deux couleurs saisissent la même heure séparément (5 pièces couleur racine + 10 pièces couleur 800)', async () => {
+    const putRoot = await call(`/production/models/${rootId}/hourly/4`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 5, date: today },
+    })
+    assert.equal(putRoot.status, 200)
+
+    const putVariant = await call(`/production/models/${rootId}/hourly/4`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 10, date: today, targetModelId: variantId },
+    })
+    assert.equal(putVariant.status, 200)
+
+    // Les deux lignes existent bien séparément en base (aucune n'a écrasé l'autre).
+    const rows = await all(
+      'SELECT model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2 AND slot_index = 4',
+      [TEST_CHAIN, today]
+    )
+    assert.equal(rows.length, 2)
+    const byModel = Object.fromEntries(rows.map((r) => [r.model_id, r.qty]))
+    assert.equal(byModel[rootId], 5)
+    assert.equal(byModel[variantId], 10)
+  })
+
+  await t.test("l'entrée hourly de Agent Production renvoie un byModel par couleur pour cette heure", async () => {
+    const hourly = await call(`/production/models/${rootId}/hourly?date=${today}`, { token: productionToken })
+    assert.equal(hourly.status, 200)
+    assert.equal(hourly.data.variants.length, 1)
+    assert.equal(hourly.data.variants[0].id, variantId)
+    const slot4 = hourly.data.hourly.find((s) => s.index === 4)
+    assert.equal(slot4.qty, 15) // 5 + 10 combiné
+    const byModel = Object.fromEntries(slot4.byModel.map((c) => [c.modelId, c.qty]))
+    assert.equal(byModel[rootId], 5)
+    assert.equal(byModel[variantId], 10)
+  })
+
+  await t.test('le total combiné (Prod à maintenant / hourly) = somme exacte des deux couleurs pour cette heure', async () => {
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    const slot4 = dash.data.hourly.find((s) => s.index === 4)
+    assert.equal(slot4.qty, 15)
+    assert.equal(dash.data.prodAMaintenant, 15) // rien d'autre saisi cette journée sur ce test
+
+    // Le "Le reste" combiné utilise Qté totale racine + variante (1000 + 300),
+    // moins le total sortie combiné (15) — pas seulement le Qté totale racine.
+    assert.equal(dash.data.qteTotaleCombined, 1300)
+    assert.equal(dash.data.bilan.totalSortie, 15)
+    assert.equal(dash.data.bilan.leReste, 1300 - 15)
+
+    // Chaque couleur garde son PROPRE total, jamais combiné avec l'autre.
+    const rootColor = dash.data.colors.find((c) => c.id === rootId)
+    const variantColor = dash.data.colors.find((c) => c.id === variantId)
+    assert.equal(rootColor.totalSortie, 5)
+    assert.equal(variantColor.totalSortie, 10)
+  })
+
+  await t.test("modifier le label/qté d'une variante existante", async () => {
+    const put = await call(`/methode/models/${rootId}/variants/${variantId}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { label: '681', qteTotale: 500 },
+    })
+    assert.equal(put.status, 200)
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    const colorEntry = dash.data.colors.find((c) => c.id === variantId)
+    assert.equal(colorEntry.label, '681')
+    assert.equal(colorEntry.qteTotale, 500)
+  })
+
+  await t.test('une variante ne peut pas elle-même avoir de sous-variante (pas de nesting)', async () => {
+    const nested = await call(`/methode/models/${variantId}/variants`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { label: 'nested', qteTotale: 1 },
+    })
+    assert.equal(nested.status, 400)
+    assert.equal(nested.data.error, 'cannot_nest_variants')
   })
 })

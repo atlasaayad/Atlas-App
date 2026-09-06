@@ -39,7 +39,9 @@ let schemaReady = null
 // DATABASE_URL surfaces as a normal request error instead of crashing the
 // whole function on load.
 export function ensureSchema() {
-  if (!schemaReady) schemaReady = run(SCHEMA_SQL).then(migrateSpecialtyNames)
+  if (!schemaReady) {
+    schemaReady = run(SCHEMA_SQL).then(migrateSpecialtyNames).then(migrateProductionHistoryUniqueKey)
+  }
   return schemaReady
 }
 
@@ -110,6 +112,16 @@ CREATE TABLE IF NOT EXISTS models (
   created_at TEXT,
   updated_at TEXT
 );
+-- Couleur/Variante support: a variant is a normal models row (its own
+-- qte_totale + production_totals + production_history entries) except it
+-- carries parent_model_id — never re-enters gamme/effectif, since VT/DT/ND
+-- are the shared line's, not per-color; a variant only ever exists to give
+-- Agent Production a second (third, ...) model_id to log the same hour's
+-- output against for a different color. Only a root model (parent_model_id
+-- IS NULL) can itself have variants — no nesting. ON DELETE CASCADE so
+-- deleting a root also removes its variants, same as any other child row.
+ALTER TABLE models ADD COLUMN IF NOT EXISTS parent_model_id TEXT REFERENCES models(id) ON DELETE CASCADE;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS variant_label TEXT;
 
 CREATE TABLE IF NOT EXISTS gamme_lines (
   id TEXT PRIMARY KEY,
@@ -143,6 +155,12 @@ CREATE TABLE IF NOT EXISTS production_totals (
 -- there is never a second "current" copy that could drift out of sync.
 -- (An earlier hourly_production table played that live-snapshot role;
 -- it's retired in favor of always reading this one.)
+-- Unique key includes model_id (not just chain_number, date, slot_index) so
+-- a Couleur/Variante chain can log a real second entry for the very same
+-- hour — one row per color, e.g. 5 pieces of color "800" and 10 of color
+-- "681" at the same hour — instead of one color's save overwriting the
+-- other's. See migrateProductionHistoryUniqueKey() below for how an
+-- existing (pre-variant) 3-column constraint is widened to 4 in place.
 CREATE TABLE IF NOT EXISTS production_history (
   id TEXT PRIMARY KEY,
   model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
@@ -151,8 +169,7 @@ CREATE TABLE IF NOT EXISTS production_history (
   slot_index INTEGER NOT NULL,
   qty INTEGER DEFAULT 0,
   created_at TEXT,
-  updated_at TEXT,
-  UNIQUE (chain_number, date, slot_index)
+  updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_production_history_chain_date ON production_history (chain_number, date);
 
@@ -380,6 +397,37 @@ async function migrateSpecialtyNames() {
     )
     await run('DELETE FROM rh_attendance_history WHERE specialty = $1', [oldName])
   }
+}
+
+// Widens production_history's unique key from (chain_number, date,
+// slot_index) to (chain_number, date, slot_index, model_id) — needed so a
+// Couleur/Variante chain can log a real second row for the same hour (one
+// per color) instead of one color's save overwriting another's. Idempotent:
+// drops whichever pre-existing UNIQUE constraint isn't already the new
+// 4-column one (a fresh database has none to drop — CREATE TABLE above no
+// longer declares one inline), then adds the 4-column one only if it
+// isn't already there. Safe to widen unconditionally: existing rows were
+// never in conflict under the old, narrower key, so they can't conflict
+// under a wider one either.
+async function migrateProductionHistoryUniqueKey() {
+  await run(`
+    DO $$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = 'production_history'::regclass AND contype = 'u'
+          AND conname <> 'production_history_unique_slot'
+      LOOP
+        EXECUTE 'ALTER TABLE production_history DROP CONSTRAINT ' || quote_ident(r.conname);
+      END LOOP;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'production_history_unique_slot') THEN
+        ALTER TABLE production_history ADD CONSTRAINT production_history_unique_slot
+          UNIQUE (chain_number, date, slot_index, model_id);
+      END IF;
+    END $$;
+  `)
 }
 
 export async function logAudit({ deptKey, modelId, action, details }) {
