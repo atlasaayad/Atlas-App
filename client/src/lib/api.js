@@ -101,11 +101,15 @@ export const api = {
     updateLaunchTimer: (token, id, config) => request(`/methode/models/${id}/launch-timer`, { method: 'PUT', body: config, token }),
     startLaunchTimer: (token, id) => request(`/methode/models/${id}/launch-timer/start`, { method: 'POST', token }),
     stopLaunchTimer: (token, id, payload) => request(`/methode/models/${id}/launch-timer/stop`, { method: 'POST', body: payload, token }),
+    addVariant: (token, id, label, qteTotale) =>
+      request(`/methode/models/${id}/variants`, { method: 'POST', body: { label, qteTotale }, token }),
+    updateVariant: (token, id, variantId, label, qteTotale) =>
+      request(`/methode/models/${id}/variants/${variantId}`, { method: 'PUT', body: { label, qteTotale }, token }),
   },
   production: {
     getHourly: (token, id, date) => request(`/production/models/${id}/hourly?date=${date}`, { token }),
-    updateHourly: (token, id, slotIndex, qty, date) =>
-      request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty, date }, token }),
+    updateHourly: (token, id, slotIndex, qty, date, targetModelId) =>
+      request(`/production/models/${id}/hourly/${slotIndex}`, { method: 'PUT', body: { qty, date, targetModelId }, token }),
     updateTotals: (token, id, totalEntree) => request(`/production/models/${id}/totals`, { method: 'PUT', body: { totalEntree }, token }),
   },
   rh: {

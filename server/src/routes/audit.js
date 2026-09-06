@@ -27,7 +27,7 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
     return res.status(400).json({ error: 'invalid_range' })
   }
 
-  const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1', [chainNumber])
+  const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL', [chainNumber])
 
   const requiredRows = model
     ? await all('SELECT specialty, required FROM effectif_requis WHERE model_id = $1', [model.id])

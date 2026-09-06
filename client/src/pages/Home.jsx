@@ -143,6 +143,29 @@ function LoadingSpinner() {
 function DashboardBody({ data }) {
   const [showHistorique, setShowHistorique] = useState(false)
   const [showDetailsFinale, setShowDetailsFinale] = useState(false)
+  // Couleur/Variante — null means "combined" (every color summed, the
+  // default); otherwise the id of whichever color's own hourly/bilan the
+  // user picked to view alone. Reset whenever the underlying model changes
+  // (chain switch, or a brand-new model on the same chain) so a stale
+  // selection from a previous model never lingers.
+  const [selectedColorId, setSelectedColorId] = useState(null)
+  useEffect(() => {
+    setSelectedColorId(null)
+  }, [data.id])
+
+  const colors = data.colors || []
+  const hasVariants = colors.length > 1
+  const selectedColor = selectedColorId ? colors.find((c) => c.id === selectedColorId) : null
+  const displayedHourly = selectedColor ? selectedColor.hourly : data.hourly
+  const displayedBilan = selectedColor
+    ? {
+        totalEntree: selectedColor.totalEntree,
+        totalSortie: selectedColor.totalSortie,
+        leReste: selectedColor.leReste,
+        enCours: selectedColor.totalEntree - selectedColor.totalSortie,
+      }
+    : data.bilan
+
   const today = new Intl.DateTimeFormat('fr-FR', {
     timeZone: 'Africa/Casablanca',
     weekday: 'short',
@@ -168,6 +191,34 @@ function DashboardBody({ data }) {
           </div>
         </div>
         {data.launchTimer?.startedAt && <LaunchTimerStatus launchTimer={data.launchTimer} />}
+        {hasVariants && (
+          <div className="mt-3 border-t border-slate-800 pt-3">
+            <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">Couleurs / Variantes actives</div>
+            <div className="flex flex-wrap gap-2">
+              <ColorPill label="Tous (combiné)" active={!selectedColorId} onClick={() => setSelectedColorId(null)} />
+              {colors.map((c) => (
+                <ColorPill
+                  key={c.id}
+                  label={c.label || 'Défaut'}
+                  active={selectedColorId === c.id}
+                  onClick={() => setSelectedColorId(c.id)}
+                />
+              ))}
+            </div>
+            <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {colors
+                .filter((c) => c.label)
+                .map((c) => (
+                  <div key={c.id} className="flex items-center justify-between rounded-md border border-slate-800 bg-navy-900/40 px-3 py-2 text-sm">
+                    <span className="text-slate-300">{c.label}</span>
+                    <span className="font-mono text-xs text-slate-500">
+                      <span className="text-turquoise">{c.totalSortie}</span> / {c.qteTotale}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
       </GlowCard>
 
       {/* 2. Hourly chart + side stats — Objectif/heure and Objectif atteint live in the header, modest size */}
@@ -188,7 +239,7 @@ function DashboardBody({ data }) {
               </button>
             </div>
           </div>
-          <HourlyBarChart hourly={data.hourly} />
+          <HourlyBarChart hourly={displayedHourly} />
           {showHistorique && (
             <HistoriqueModal chainNumber={data.chainNumber} onClose={() => setShowHistorique(false)} />
           )}
@@ -216,12 +267,12 @@ function DashboardBody({ data }) {
       </div>
 
       {/* 3. Bilan de la chaîne */}
-      <GlowCard title="Bilan de la chaîne">
+      <GlowCard title={selectedColor ? `Bilan — ${selectedColor.label || 'Défaut'}` : 'Bilan de la chaîne'}>
         <div className="flex flex-wrap justify-around gap-4">
-          <StatCircle label="Total entré" value={data.bilan.totalEntree} size="lg" />
-          <StatCircle label="Total sortie" value={data.bilan.totalSortie} size="lg" />
-          <StatCircle label="Le reste" value={data.bilan.leReste} size="lg" />
-          <StatCircle label="En cours" value={data.bilan.enCours} size="lg" />
+          <StatCircle label="Total entré" value={displayedBilan.totalEntree} size="lg" />
+          <StatCircle label="Total sortie" value={displayedBilan.totalSortie} size="lg" />
+          <StatCircle label="Le reste" value={displayedBilan.leReste} size="lg" />
+          <StatCircle label="En cours" value={displayedBilan.enCours} size="lg" />
         </div>
       </GlowCard>
 
@@ -365,6 +416,19 @@ function HeaderMetric({ label, value }) {
       <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
       <div className="font-mono text-base font-semibold text-turquoise">{value}</div>
     </div>
+  )
+}
+
+function ColorPill({ label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium ${
+        active ? 'border-turquoise bg-turquoise/10 text-turquoise' : 'border-slate-700 text-slate-400'
+      }`}
+    >
+      {label}
+    </button>
   )
 }
 

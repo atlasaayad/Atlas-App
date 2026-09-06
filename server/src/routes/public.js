@@ -51,13 +51,13 @@ publicRouter.post('/auth/:deptKey/login', async (req, res) => {
 
 publicRouter.get('/models', async (req, res) => {
   const rows = await all(
-    'SELECT id, client, dessin, chain_number, active FROM models WHERE active = 1 ORDER BY chain_number'
+    'SELECT id, client, dessin, chain_number, active FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
   )
   res.json(rows)
 })
 
 publicRouter.get('/chains', async (req, res) => {
-  const active = await all('SELECT id, client, dessin, chain_number FROM models WHERE active = 1')
+  const active = await all('SELECT id, client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL')
   const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
 
   // "Most recent real activity today" per chain, so the client can default
@@ -127,17 +127,66 @@ function formatLaunchTimer(row) {
   }
 }
 
+// One color's own numbers — its own hourly (today), its own whole-life
+// totalSortie (from `debut` through today), its own totalEntree, and its
+// own remaining-vs-target. Used for every entry in fullDashboard()'s
+// `colors` array (the root itself included) — never combined with any
+// other color, unlike every other figure in fullDashboard(), which is the
+// chain-wide combined total across all colors.
+async function computeColorBreakdown(colorModel, debut, today, dt) {
+  const [hourlyRows, cumulativeRow, totalsRow] = await Promise.all([
+    all('SELECT slot_index, qty FROM production_history WHERE model_id = $1 AND date = $2', [colorModel.id, today]),
+    get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE model_id = $1 AND date >= $2 AND date <= $3', [
+      colorModel.id,
+      debut || today,
+      today,
+    ]),
+    get('SELECT total_entree FROM production_totals WHERE model_id = $1', [colorModel.id]),
+  ])
+  const hourlyMap = Object.fromEntries(hourlyRows.map((r) => [r.slot_index, r.qty]))
+  // pct mirrors the combined hourly's own calculation (qty ÷ the shared
+  // DT), so this color's bar reads as its own contribution toward the
+  // hour's shared target — the same HourlyBarChart component renders
+  // either array unmodified.
+  const hourly = HOURLY_SLOTS.map((s) => {
+    const qty = hourlyMap[s.index] || 0
+    return { ...s, qty, pct: dt > 0 ? Math.round((qty / dt) * 100) : 0 }
+  })
+  const totalSortie = Number(cumulativeRow.total)
+  return {
+    id: colorModel.id,
+    label: colorModel.variant_label || null,
+    qteTotale: colorModel.qte_totale || 0,
+    totalEntree: totalsRow?.total_entree || 0,
+    totalSortie,
+    leReste: Math.max((colorModel.qte_totale || 0) - totalSortie, 0),
+    hourly,
+  }
+}
+
 export async function fullDashboard(model) {
-  // All 9 lookups below are independent (keyed only by model.id) and none
-  // depends on another's result, so they're fired together instead of
-  // awaited one at a time — on a real network hop to Postgres (Neon), 9
-  // sequential round trips vs. 1 parallel batch is the difference between a
-  // dashboard load that visibly hangs and one that doesn't.
   const today = todayInFactoryTZ()
+
+  // Couleur/Variante — a root model (parent_model_id IS NULL) may have one
+  // or more active variants sharing its chain_number, each with its own
+  // qte_totale/production_totals/production_history entries (see the
+  // "models" table comment in db/index.js). A variant itself never has
+  // variants, so this is empty when `model` is itself a variant.
+  const variantRows = model.parent_model_id
+    ? []
+    : await all('SELECT * FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [model.id])
+  const colorModels = [model, ...variantRows]
+  const colorModelIds = colorModels.map((m) => m.id)
+
+  // All lookups below are independent (keyed only by model.id/chain_number)
+  // and none depends on another's result, so they're fired together instead
+  // of awaited one at a time — on a real network hop to Postgres (Neon),
+  // sequential round trips vs. one parallel batch is the difference between
+  // a dashboard load that visibly hangs and one that doesn't.
   const [
     effectifRows,
     hourlyRows,
-    totalsRow,
+    totalsRows,
     rhRows,
     qualityRow,
     finaleRow,
@@ -150,30 +199,36 @@ export async function fullDashboard(model) {
     qualityHourlyRows,
     launchTimerRow,
     finaleAttendanceRows,
+    colorData,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
       // source of truth for hourly production, today included (see the
-      // comment on that table). A correction Agent Production makes to
-      // today's hours, via the date picker or otherwise, lands here and is
-      // reflected on this dashboard on the very next read.
+      // comment on that table). Chain-scoped (not model-scoped), so once a
+      // Couleur/Variante chain has more than one color logging the same
+      // hour, this naturally returns one row per color — summed below into
+      // the chain's combined total, exactly as before when there was only
+      // ever one row per hour.
       all('SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2', [
         model.chain_number,
         today,
       ]),
-      get('SELECT * FROM production_totals WHERE model_id = $1', [model.id]),
+      // "Total entré" (Bilan de la chaîne) is the combined figure across
+      // every color sharing this chain — a plain SUM across 1 row when there
+      // are no variants, so this is unchanged in the common case.
+      all('SELECT total_entree FROM production_totals WHERE model_id = ANY($1)', [colorModelIds]),
       all('SELECT * FROM rh_attendance WHERE model_id = $1', [model.id]),
       get('SELECT * FROM quality WHERE model_id = $1', [model.id]),
       get('SELECT * FROM finale WHERE model_id = $1', [model.id]),
       get('SELECT * FROM depot WHERE model_id = $1', [model.id]),
       all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id]),
       all('SELECT * FROM poste_status WHERE model_id = $1', [model.id]),
-      // "Total sortie" (below) is the chain's whole-life output for THIS
-      // model, so it sums production_history across every day from the
-      // model's Début through today — not just today. Bounding by Début
-      // (rather than summing all of the chain's history unconditionally)
-      // keeps a previous, unrelated model that used to run on this same
-      // chain_number out of the current model's total.
+      // "Total sortie" (below) is the chain's whole-life output — combined
+      // across every color — so it sums production_history across every day
+      // from Début through today, not just today. Bounding by Début (rather
+      // than summing all of the chain's history unconditionally) keeps a
+      // previous, unrelated model that used to run on this same chain_number
+      // out of the current model's total.
       get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
         model.chain_number,
         model.debut || today,
@@ -181,7 +236,9 @@ export async function fullDashboard(model) {
       ]),
       // Qualité% (below) is computed from these two "Pièces retouche" sums
       // against the production sums above — today's and whole-life — never
-      // stored anywhere itself (see computeQualityPct() in calc.js).
+      // stored anywhere itself (see computeQualityPct() in calc.js). Quality
+      // reports retouche per chain/hour, never per color, so this stays
+      // exactly as before regardless of how many colors are active.
       get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date = $2', [
         model.chain_number,
         today,
@@ -200,19 +257,30 @@ export async function fullDashboard(model) {
       ]),
       get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
       all('SELECT specialty, present FROM finale_attendance WHERE model_id = $1', [model.id]),
+      // Per-color breakdown (own hourly/totals, never combined with any
+      // other color) — root is always colorData[0], so "no variants" means
+      // this is a single-element array and the client can treat it as
+      // optional. See computeColorBreakdown() below.
+      Promise.all(colorModels.map((m) => computeColorBreakdown(m, model.debut, today, model.dt))),
     ])
 
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of effectifRows) effectifRequis[r.specialty] = r.required
 
-  const hourlyMap = Object.fromEntries(hourlyRows.map((r) => [r.slot_index, r.qty]))
+  // Summed (not overwritten) per slot — with a Couleur/Variante chain, two
+  // or more rows can now share the same slot_index (one per color); this is
+  // what turns "5 pieces of color 800 + 10 of color 681 at hour 5" into a
+  // correct combined 15 for the chain's own hourly bar/Objectif/Rendement,
+  // without changing any of the calculations themselves.
+  const hourlyMap = {}
+  for (const r of hourlyRows) hourlyMap[r.slot_index] = (hourlyMap[r.slot_index] || 0) + r.qty
   const hourly = HOURLY_SLOTS.map((s) => ({
     ...s,
     qty: hourlyMap[s.index] || 0,
     pct: model.dt > 0 ? Math.round(((hourlyMap[s.index] || 0) / model.dt) * 100) : 0,
   }))
 
-  const totals = totalsRow || { total_entree: 0 }
+  const totalEntreeCombined = totalsRows.reduce((sum, r) => sum + (r.total_entree || 0), 0)
   const demande = Math.round(computeObjectifJour(model.dt))
   const produit = prodAMaintenant(hourlyMap)
   const restant = Math.max(demande - produit, 0)
@@ -224,14 +292,17 @@ export async function fullDashboard(model) {
   // target) field, and must keep doing so unchanged.
   const totalSortie = Number(cumulativeRow.total)
   // En cours = what's been fed into the chain so far minus what's come out
-  // so far — both whole-life figures now, so this is what's still
-  // mid-process on the line since Début.
-  const enCours = totals.total_entree - totalSortie
-  // Le reste (Bilan de la chaîne) = how much of the WHOLE order is still
-  // left to produce, based on the corrected whole-life Total sortie above —
-  // distinct from the daily "Restant" field (demande - produit) elsewhere
-  // on Home, which stays about today's target.
-  const leResteCommande = Math.max((model.qte_totale || 0) - totalSortie, 0)
+  // so far — both whole-life, combined-across-colors figures now, so this
+  // is what's still mid-process on the line since Début.
+  const enCours = totalEntreeCombined - totalSortie
+  // Le reste (Bilan de la chaîne) = how much of the WHOLE order (this
+  // model's own Qté totale plus every variant's own — each variant's qty is
+  // a portion of the same overall order, not on top of it) is still left to
+  // produce, based on the combined whole-life Total sortie above — distinct
+  // from the daily "Restant" field (demande - produit) elsewhere on Home,
+  // which stays about today's target.
+  const qteTotaleCombined = (model.qte_totale || 0) + variantRows.reduce((s, v) => s + (v.qte_totale || 0), 0)
+  const leResteCommande = Math.max(qteTotaleCombined - totalSortie, 0)
 
   const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
   for (const r of rhRows) present[r.specialty] = r.present
@@ -332,11 +403,19 @@ export async function fullDashboard(model) {
     produit,
     restant,
     bilan: {
-      totalEntree: totals.total_entree,
+      totalEntree: totalEntreeCombined,
       totalSortie,
       leReste: leResteCommande,
       enCours,
     },
+    // Couleur/Variante — colors[0] is always the model itself (root), each
+    // with its OWN qty/totals (never combined with the others), for Home's
+    // optional "view a single color" toggle. A model with no active
+    // variants gets a single-element array here — the client only needs to
+    // check colors.length > 1 to decide whether to show anything extra at
+    // all, so a normal model's Home experience is unaffected.
+    qteTotaleCombined,
+    colors: colorData,
     finaleEnCours: finale.en_cours,
     finaleDetails: {
       pieceRetouche: finale.piece_retouche,
@@ -379,7 +458,7 @@ publicRouter.get('/models/:id/dashboard', async (req, res) => {
 })
 
 publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
-  const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1', [Number(req.params.chainNumber)])
+  const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL', [Number(req.params.chainNumber)])
   if (!model) return res.status(404).json({ error: 'no_active_model' })
   res.json(await fullDashboard(model))
 })
@@ -389,7 +468,7 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
 // this is always computed live from the same real-time figures shown on
 // each chain's own dashboard — no separate cached leaderboard state.
 publicRouter.get('/chains/ranking', async (req, res) => {
-  const active = await all('SELECT * FROM models WHERE active = 1')
+  const active = await all('SELECT * FROM models WHERE active = 1 AND parent_model_id IS NULL')
   const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
 
   const entries = await Promise.all(
@@ -444,7 +523,7 @@ publicRouter.get('/personnel-admin', async (req, res) => {
 // could drift. An empty chain (no active model) still appears, subtotal 0,
 // with no specialty breakdown — never silently dropped.
 publicRouter.get('/effectifs/overview', async (req, res) => {
-  const active = await all('SELECT * FROM models WHERE active = 1')
+  const active = await all('SELECT * FROM models WHERE active = 1 AND parent_model_id IS NULL')
   const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
 
   const [rhRows, finaleRows, depotRows, personnelAdmin] = await Promise.all([

@@ -12,7 +12,7 @@ export const earlyWarningRouter = Router()
 earlyWarningRouter.get('/early-warnings', async (req, res) => {
   const today = todayInFactoryTZ()
   const activeModels = await all(
-    'SELECT client, dessin, chain_number FROM models WHERE active = 1 ORDER BY chain_number'
+    'SELECT client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
   )
 
   // One query per active chain, all fired together — a sequential loop here

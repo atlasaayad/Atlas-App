@@ -34,7 +34,7 @@ const SYSTEM_PROMPT = `أنت "أطلس"، مساعد ذكي داخل تطبيق
 
 async function buildContext(chainNumber) {
   const active = await all(
-    'SELECT id, client, dessin, chain_number FROM models WHERE active = 1 ORDER BY chain_number'
+    'SELECT id, client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
   )
   const chainsSummary = []
   for (const n of CHAIN_NUMBERS) {
@@ -48,7 +48,7 @@ async function buildContext(chainNumber) {
 
   let focusedChain = null
   if (chainNumber) {
-    const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1', [chainNumber])
+    const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL', [chainNumber])
     if (model) {
       const dashboard = await fullDashboard(model)
       // Strip fields that don't matter for Q&A and keep the payload small —

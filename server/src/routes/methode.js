@@ -53,7 +53,16 @@ methodeRouter.post('/models', async (req, res) => {
   const now = new Date().toISOString()
   const id = `mdl_${nanoid(10)}`
 
-  await run('UPDATE models SET active = 0 WHERE chain_number = $1 AND active = 1', [chainNumber])
+  // Deactivates whatever root model was running on this chain AND any of
+  // its Couleur/Variante variants — a variant can never outlive its parent.
+  // The subquery sees the pre-update state (a single UPDATE statement), so
+  // this correctly captures "the old root" before it's flipped to active=0.
+  await run(
+    `UPDATE models SET active = 0
+     WHERE (chain_number = $1 AND active = 1 AND parent_model_id IS NULL)
+        OR parent_model_id IN (SELECT id FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL)`,
+    [chainNumber]
+  )
   await run(
     `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9)`,
@@ -76,6 +85,51 @@ methodeRouter.post('/models', async (req, res) => {
 
   await logAudit({ deptKey: 'methode', modelId: id, action: 'create_model', details: { client, chainNumber } })
   res.status(201).json({ id })
+})
+
+// Couleur/Variante — a second (third, ...) color of the exact same model,
+// same gamme/VT/DT/effectif (the manufacturing process and shared line
+// don't change per color), own Qté totale + own production_totals/
+// production_history entries. Only a root model (parent_model_id IS NULL)
+// can have variants — no nesting. Gamme/effectif are never copied onto the
+// variant row: nothing ever reads them from a variant, since VT/DT/ND stay
+// the root's alone (see the "models" table comment in db/index.js).
+methodeRouter.post('/models/:id/variants', async (req, res) => {
+  const parent = await get('SELECT id, client, dessin, chain_number, parent_model_id FROM models WHERE id = $1', [req.params.id])
+  if (!parent) return res.status(404).json({ error: 'not_found' })
+  if (parent.parent_model_id) return res.status(400).json({ error: 'cannot_nest_variants' })
+
+  const { label, qteTotale } = req.body || {}
+  if (!label) return res.status(400).json({ error: 'label_required' })
+
+  const now = new Date().toISOString()
+  const id = `mdl_${nanoid(10)}`
+  await run(
+    `INSERT INTO models (id, client, qte_totale, dessin, chain_number, active, parent_model_id, variant_label, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $8)`,
+    [id, parent.client, Number(qteTotale) || 0, parent.dessin, parent.chain_number, parent.id, label, now]
+  )
+  await run('INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, 0, 0, $2)', [id, now])
+
+  await logAudit({ deptKey: 'methode', modelId: id, action: 'create_variant', details: { parentModelId: parent.id, label, qteTotale } })
+  res.status(201).json({ id })
+})
+
+// Edit a variant's own label/Qté totale — never its gamme/effectif (there is
+// none to edit; it has always used the parent's).
+methodeRouter.put('/models/:id/variants/:variantId', async (req, res) => {
+  const variant = await get('SELECT id FROM models WHERE id = $1 AND parent_model_id = $2', [req.params.variantId, req.params.id])
+  if (!variant) return res.status(404).json({ error: 'not_found' })
+  const { label, qteTotale } = req.body || {}
+  if (!label) return res.status(400).json({ error: 'label_required' })
+  await run('UPDATE models SET variant_label = $1, qte_totale = $2, updated_at = $3 WHERE id = $4', [
+    label,
+    Number(qteTotale) || 0,
+    new Date().toISOString(),
+    req.params.variantId,
+  ])
+  await logAudit({ deptKey: 'methode', modelId: req.params.variantId, action: 'update_variant', details: { label, qteTotale } })
+  res.json({ ok: true })
 })
 
 methodeRouter.put('/models/:id', async (req, res) => {

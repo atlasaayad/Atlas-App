@@ -263,6 +263,50 @@ calculation inputs). Only Agent Méthode can start or stop it.
   responsible/reason are also written to the audit log
   (`stop_launch_timer` action) for later BSCI/SMETA-style review.
 
+### Couleur/Variante — multiple colors of the same model (Agent Méthode + Agent Production)
+
+A rare but real scenario: the exact same model (same design, same gamme) is
+manufactured in more than one color, each with its own reference number
+(e.g. model "8500/795/800" and a second color "8500/795/681" — same piece,
+different color/reference) — sometimes both colors are produced in the same
+hour on the same chain.
+
+- **Adding a variant** — a new "Couleurs / Variantes" tab on Agent Méthode's
+  screen (`POST /methode/models/:id/variants`) asks only for the color's own
+  name/reference and its own Qté totale (a portion of the same overall
+  order, not on top of it) — **never gamme/effectif again**: a variant is a
+  normal `models` row with `parent_model_id` set, but it never gets its own
+  `gamme_lines`/`effectif_requis` — VT/DT/ND stay the root's alone, since the
+  manufacturing process and the shared line don't change per color. Only a
+  root model can have variants (no nesting); creating a brand-new model on a
+  chain deactivates the old root **and** all of its variants together — a
+  variant never outlives its parent.
+- **Hourly entry (Agent Production)** — when a chain's model has active
+  variants, its "Production par heure" screen shows one input per color for
+  every hour (root labeled "Défaut" + each variant) instead of one combined
+  field, so two colors can both log a real, separate qty for the very same
+  hour (`targetModelId` in the PUT body — defaults to the root itself, so a
+  normal model's request is unchanged). `production_history`'s unique key
+  was widened from `(chain_number, date, slot_index)` to include `model_id`
+  (an idempotent migration in `db/index.js`) to make this possible — two
+  rows can now share an hour, one per color, instead of one overwriting the
+  other.
+- **Home dashboard** — every combined figure (hourly bar chart, Prod à
+  maintenant, Objectif atteint%, Rendement, Qualité%, Bilan de la chaîne)
+  is the sum across every color sharing the chain, computed by summing
+  `production_history` rows per slot instead of assuming one row per hour —
+  the calculations themselves are unchanged, only what they sum over. The
+  Identité card additionally shows a small list of active colors (name,
+  target qty, actual output so far) with a pill selector ("Tous (combiné)"
+  + one per color) that swaps the hourly chart and "Bilan de la chaîne"
+  circles to show a single color's own numbers alone — never its Rendement/
+  Qualité%/Objectif%, which stay chain-wide (shared workforce/gamme, so they
+  don't split meaningfully per color).
+- **A model with no variants is completely unaffected** — `fullDashboard()`
+  always returns a `colors` array (root itself included), just a
+  single-element one when there's nothing else, so the client only shows
+  anything extra when `colors.length > 1`.
+
 ### État des effectifs (bottom-nav tab, public)
 
 A fourth bottom-nav tab, between Départements and Ask Atlas — no PIN, same

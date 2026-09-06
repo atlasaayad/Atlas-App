@@ -12,6 +12,11 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 // A specific day's hourly slots (defaults to today) — lets Agent Production
 // load a previous day's entries for review/correction, not just today's.
+// Couleur/Variante: when the chain's model has active variants, each slot
+// also carries a byModel breakdown (one entry per color, keyed by model_id)
+// so the client can render one input per color instead of one combined
+// number — omitted entirely when there are no variants, so a normal
+// (single-color) model's response shape is completely unchanged.
 productionRouter.get('/models/:id/hourly', async (req, res) => {
   const model = await get('SELECT chain_number FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
@@ -19,13 +24,39 @@ productionRouter.get('/models/:id/hourly', async (req, res) => {
   const date = String(req.query.date || todayInFactoryTZ())
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
 
-  const rows = await all(
-    'SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2',
-    [model.chain_number, date]
-  )
-  const hourlyMap = Object.fromEntries(rows.map((r) => [r.slot_index, r.qty]))
-  const hourly = HOURLY_SLOTS.map((s) => ({ ...s, qty: hourlyMap[s.index] || 0 }))
-  res.json({ date, hourly })
+  const [rows, variantRows] = await Promise.all([
+    all('SELECT slot_index, model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2', [
+      model.chain_number,
+      date,
+    ]),
+    all('SELECT id, variant_label FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [req.params.id]),
+  ])
+
+  const variants = variantRows.map((v) => ({ id: v.id, label: v.variant_label }))
+  const hasVariants = variants.length > 0
+
+  const hourlyMap = {}
+  const byModelMap = {} // slot_index -> { model_id: qty }
+  for (const r of rows) {
+    hourlyMap[r.slot_index] = (hourlyMap[r.slot_index] || 0) + r.qty
+    if (hasVariants) {
+      byModelMap[r.slot_index] ??= {}
+      byModelMap[r.slot_index][r.model_id] = r.qty
+    }
+  }
+
+  const hourly = HOURLY_SLOTS.map((s) => {
+    const base = { ...s, qty: hourlyMap[s.index] || 0 }
+    if (!hasVariants) return base
+    const present = byModelMap[s.index] || {}
+    return {
+      ...base,
+      byModel: [{ modelId: req.params.id, label: null, qty: present[req.params.id] || 0 }].concat(
+        variants.map((v) => ({ modelId: v.id, label: v.label, qty: present[v.id] || 0 }))
+      ),
+    }
+  })
+  res.json({ date, hourly, variants })
 })
 
 // Every hourly entry — today's or a previous day's — is written straight to
@@ -42,6 +73,17 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
 
   const model = await get('SELECT chain_number, debut FROM models WHERE id = $1', [id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+
+  // Couleur/Variante: an entry can target a specific color (targetModelId =
+  // that variant's id) instead of the chain's root model — this is what
+  // lets two colors both log a real, separate qty for the very same hour.
+  // Defaults to the root itself, so a normal (single-color) model's request
+  // is completely unchanged.
+  const targetModelId = req.body?.targetModelId || id
+  if (targetModelId !== id) {
+    const variant = await get('SELECT id FROM models WHERE id = $1 AND parent_model_id = $2', [targetModelId, id])
+    if (!variant) return res.status(400).json({ error: 'invalid_target_model' })
+  }
 
   const today = todayInFactoryTZ()
   const date = String(req.body?.date || today)
@@ -64,11 +106,16 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
     run(
       `INSERT INTO production_history (id, model_id, chain_number, date, slot_index, qty, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-       ON CONFLICT (chain_number, date, slot_index)
-         DO UPDATE SET qty = excluded.qty, model_id = excluded.model_id, updated_at = excluded.updated_at`,
-      [`ph_${nanoid(10)}`, id, model.chain_number, date, idx, qty, now]
+       ON CONFLICT (chain_number, date, slot_index, model_id)
+         DO UPDATE SET qty = excluded.qty, updated_at = excluded.updated_at`,
+      [`ph_${nanoid(10)}`, targetModelId, model.chain_number, date, idx, qty, now]
     ),
-    logAudit({ deptKey: 'production', modelId: id, action: 'update_hourly', details: { slotIndex: idx, qty, date, isBackdated } }),
+    logAudit({
+      deptKey: 'production',
+      modelId: targetModelId,
+      action: 'update_hourly',
+      details: { slotIndex: idx, qty, date, isBackdated },
+    }),
   ])
   res.json({ ok: true, date, isBackdated })
 })
