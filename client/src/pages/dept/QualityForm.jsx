@@ -16,6 +16,8 @@ export default function QualityForm({ token, chainNumber }) {
   const [dateError, setDateError] = useState('')
   const [hourlySlots, setHourlySlots] = useState([])
   const [hourlyLoading, setHourlyLoading] = useState(false)
+  const [hourlyError, setHourlyError] = useState(false)
+  const [retryTick, setRetryTick] = useState(0)
   const [savingSlot, setSavingSlot] = useState(null)
   const [savedSlots, setSavedSlots] = useState({})
   const [slotErrors, setSlotErrors] = useState({})
@@ -36,17 +38,28 @@ export default function QualityForm({ token, chainNumber }) {
     if (!modelId) return
     let cancelled = false
     setHourlyLoading(true)
-    api.quality.getHourly(token, modelId, selectedDate).then((r) => {
-      if (cancelled) return
-      setHourlySlots(r.hourly)
-      setSavedSlots({})
-      setSlotErrors({})
-      setHourlyLoading(false)
-    })
+    setHourlyError(false)
+    api.quality
+      .getHourly(token, modelId, selectedDate)
+      .then((r) => {
+        if (cancelled) return
+        setHourlySlots(r.hourly)
+        setSavedSlots({})
+        setSlotErrors({})
+        setHourlyLoading(false)
+      })
+      .catch(() => {
+        // Without this, a failed/timed-out request left `hourlyLoading` stuck
+        // at true forever — the spinner never resolves and there's no way to
+        // retry short of leaving and re-entering the page.
+        if (cancelled) return
+        setHourlyError(true)
+        setHourlyLoading(false)
+      })
     return () => {
       cancelled = true
     }
-  }, [modelId, selectedDate, token])
+  }, [modelId, selectedDate, token, retryTick])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
   if (!modelId) return <NoModel chainNumber={chainNumber} />
@@ -149,6 +162,16 @@ export default function QualityForm({ token, chainNumber }) {
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
             Chargement…
+          </div>
+        ) : hourlyError ? (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <span className="text-sm text-status-bad">فشل تحميل بيانات الساعات — تحقق من الاتصال.</span>
+            <button
+              onClick={() => setRetryTick((t) => t + 1)}
+              className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
+            >
+              إعادة المحاولة
+            </button>
           </div>
         ) : (
           <div className="space-y-2.5">

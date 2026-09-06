@@ -408,6 +408,15 @@ in-progress cue. Server-side, the hourly-slot and totals PUT routes
 `production_totals` write and the audit-log write in parallel instead of
 sequentially, since neither depends on the other's result.
 
+The same guarantee used to have a gap on the *read* side: the hourly-slots
+load in Agent Production and Agent Quality (`ProductionForm.jsx` /
+`QualityForm.jsx`) had no `.catch()` on the initial fetch, so a failed or
+timed-out request (a slow factory connection, a serverless cold start) left
+the "Chargement…" spinner spinning forever with no error and no way to
+retry short of leaving the page. Both now catch the failure, stop the
+spinner, and show "فشل تحميل بيانات الساعات — تحقق من الاتصال." with an
+"إعادة المحاولة" (retry) button that re-fires the same request.
+
 ### Early Warning Agent (Home dashboard, public)
 
 Proactive alert banner (`EarlyWarningBanner` component, `GET
