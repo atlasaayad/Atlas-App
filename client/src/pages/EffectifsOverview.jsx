@@ -37,25 +37,24 @@ export default function EffectifsOverview() {
         <div className="text-xs text-slate-500">صورة شاملة لكل عمال ومسؤولي الشركة بمكان واحد — محدّثة الآن</div>
       </div>
 
-      {data.chains.map((chain) => (
-        <Collapsible
-          key={chain.chainNumber}
-          title={
-            <>
-              Chaîne {chain.chainNumber}
-              {chain.model && <span className="text-slate-500"> — {chain.model.client} ({chain.model.dessin})</span>}
-            </>
-          }
-          subtitle={!chain.model ? 'لا يوجد نشاط' : undefined}
-          right={<Subtotal value={chain.subtotal} />}
-        >
-          {chain.specialties.length === 0 ? (
-            <div className="text-sm text-slate-600">لا يوجد موديل نشط بهذه السلسلة حالياً.</div>
-          ) : (
+      {data.chains
+        .filter((chain) => chain.model)
+        .map((chain) => (
+          <Collapsible
+            key={chain.chainNumber}
+            title={
+              <>
+                Chaîne {chain.chainNumber}
+                <span className="text-slate-500"> — {chain.model.client} ({chain.model.dessin})</span>
+              </>
+            }
+            right={<Subtotal value={chain.subtotal} />}
+          >
             <SpecialtyGrid rows={chain.specialties} />
-          )}
-        </Collapsible>
-      ))}
+          </Collapsible>
+        ))}
+
+      <EmptyChainsGroup chains={data.chains.filter((chain) => !chain.model)} />
 
       <Collapsible title="Finale" right={<Subtotal value={data.finale.subtotal} />}>
         <SpecialtyGrid rows={data.finale.specialties} />
@@ -97,6 +96,30 @@ export default function EffectifsOverview() {
         </div>
       </GlowCard>
     </div>
+  )
+}
+
+// Chains with no active model carry zero information (always "لا يوجد نشاط
+// / 0") — showing each as its own full-width row buries the handful of real
+// numbers (Finale/Dépôt/Personnel admin) under a wall of identical empty
+// rows. Grouped into one collapsed line by default; still one tap away, not
+// hidden data, same interaction pattern as every other section here.
+function EmptyChainsGroup({ chains }) {
+  if (chains.length === 0) return null
+  const label = chains.length === 1 ? 'سلسلة واحدة فارغة' : `${chains.length} سلاسل فارغة`
+  return (
+    <Collapsible title={label} subtitle="بلا موديل نشط حالياً — اضغط لعرضها" right={<Subtotal value={0} />}>
+      <div className="flex flex-wrap gap-2">
+        {chains.map((chain) => (
+          <span
+            key={chain.chainNumber}
+            className="rounded-md border border-slate-700/70 bg-navy-900/50 px-3 py-1.5 text-xs text-slate-500"
+          >
+            Chaîne {chain.chainNumber}
+          </span>
+        ))}
+      </div>
+    </Collapsible>
   )
 }
 

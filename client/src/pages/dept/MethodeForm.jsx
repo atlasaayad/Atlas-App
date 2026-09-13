@@ -123,24 +123,38 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
   )
 }
 
+// Effectif (fixed target headcount) and Présence (today's actual attendance)
+// otherwise look near-identical — same 13-row stepper layout — and a mix-up
+// between them corrupts ND/DT/Rendement for the whole chain. Each gets its
+// own icon + accent color (🎯 violet "target" vs 📅 sky "daily"), carried
+// through the tab button, its card's colored badge, and (Présence only) the
+// mismatch warning below — three reinforcing cues instead of reading text.
+const TABS = [
+  ['identite', 'Identité', null],
+  ['gamme', 'Gamme de montage', null],
+  ['effectif', '🎯 Effectif', 'target'],
+  ['presence', '📅 Présence', 'daily'],
+  ['lancement', 'Temps de lancement', null],
+  ['variantes', 'Couleurs / Variantes', null],
+]
+
+const TAB_ACCENT_CLASSES = {
+  target: 'border-target bg-target/10 text-target',
+  daily: 'border-daily bg-daily/10 text-daily',
+  default: 'border-turquoise bg-turquoise/10 text-turquoise',
+}
+
 function EditModel({ token, model, dashboard, onSaved }) {
   const [tab, setTab] = useState('identite')
   return (
     <div className="space-y-4">
       <div className="flex gap-2 overflow-x-auto">
-        {[
-          ['identite', 'Identité'],
-          ['gamme', 'Gamme de montage'],
-          ['effectif', 'Effectif'],
-          ['presence', 'Présence'],
-          ['lancement', 'Temps de lancement'],
-          ['variantes', 'Couleurs / Variantes'],
-        ].map(([key, label]) => (
+        {TABS.map(([key, label, accent]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
             className={`whitespace-nowrap rounded-md border px-4 py-2.5 text-sm font-medium ${
-              tab === key ? 'border-turquoise bg-turquoise/10 text-turquoise' : 'border-slate-700 text-slate-400'
+              tab === key ? TAB_ACCENT_CLASSES[accent || 'default'] : 'border-slate-700 text-slate-400'
             }`}
           >
             {label}
@@ -194,10 +208,13 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
 
   return (
     <GlowCard>
+      <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-daily bg-daily/10 px-3 py-1 text-xs font-medium text-daily">
+        📅 يتغيّر كل يوم — الحضور الفعلي اليوم فقط
+      </div>
       <p className="mb-3 text-sm text-slate-400">
-        عدد العمال الحاضرين فعلياً اليوم لكل تخصص — يُستخدم لحساب Rendement (كفاءة الإنتاج). Agent Méthode هو
-        المسؤول الأساسي عن هذا الرقم الآن (بدل RH وحده سابقاً)؛ RH لسه يقدر يعدّله من شاشته كنسخة احتياطية — آخر
-        تحديث من أي القسمين هو المُعتمد.
+        <b className="text-slate-300">Présence</b> — عدد العمال الحاضرين فعلياً اليوم لكل تخصص — يُستخدم لحساب
+        Rendement (كفاءة الإنتاج). Agent Méthode هو المسؤول الأساسي عن هذا الرقم الآن (بدل RH وحده سابقاً)؛ RH لسه
+        يقدر يعدّله من شاشته كنسخة احتياطية — آخر تحديث من أي القسمين هو المُعتمد.
       </p>
       {dashboard && (
         <div className="mb-3 text-sm text-slate-400">
@@ -211,15 +228,27 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
         {SPECIALTIES.map((sp) => {
           const required = model.effectif?.[sp] ?? 0
+          const value = attendance[sp] ?? 0
+          // Not an error (real over-staffing happens) — just a nudge for the
+          // one scenario this tab exists to prevent: typing Effectif's
+          // target number into Présence (or vice versa) without noticing.
+          // Requires both a large ratio AND a large absolute gap so it never
+          // fires over small, everyday numbers (e.g. 1 required vs 2 present).
+          const suspicious = required > 0 && value > required * 2 && value - required >= 3
           return (
             <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
               <Stepper
                 label={`${sp} / ${required} مطلوب`}
-                value={attendance[sp] ?? 0}
+                value={value}
                 onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
                 max={999}
               />
               {voiceMode && <VoiceMicButton label={sp} onConfirm={(n) => setAttendance({ ...attendance, [sp]: n })} />}
+              {suspicious && (
+                <div className="px-1.5 text-center text-[10px] leading-tight text-amber">
+                  ⚠️ أعلى من المطلوب ({required}) بكثير — تأكد إنك بتبويب Présence
+                </div>
+              )}
             </div>
           )
         })}
@@ -547,9 +576,12 @@ function EffectifTab({ token, model, onSaved }) {
 
   return (
     <GlowCard>
+      <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-target bg-target/10 px-3 py-1 text-xs font-medium text-target">
+        🎯 ثابت طول عمر الموديل — ما يتغيّر يومياً
+      </div>
       <p className="mb-3 text-sm text-slate-400">
-        عدد العمال المطلوبين لكل تخصص (301, 502, 504, 516, Main, Sp, M/sp, Finition, Control, Stg, Fer). المجموع
-        (ND) يُحسب تلقائياً وتُستخدم لحساب DT.
+        <b className="text-slate-300">Effectif</b> — عدد العمال المطلوبين لكل تخصص (301, 502, 504, 516, Main, Sp,
+        M/sp, Finition, Control, Stg, Fer). المجموع (ND) يُحسب تلقائياً وتُستخدم لحساب DT.
       </p>
       <div className="mb-3 text-sm text-slate-400">
         ND total: <span className="font-mono text-turquoise">{nd}</span>
