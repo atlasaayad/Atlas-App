@@ -200,7 +200,7 @@ every dashboard read, never cached.
 
 ### 🏆 Classement des chaînes (Home dashboard, public)
 
-A "🏆 Classement des chaînes" button next to the Chaîne/Module selectors on
+A "🏆 Classement des chaînes" button next to the Chaîne selector on
 Home opens a modal (`ClassementModal.jsx`, `GET /api/chains/ranking`) ranking
 all 8 chains by today's Score_Rendement — reusing `fullDashboard()` per
 chain (run in parallel) so it's always the same live figures as each
@@ -318,6 +318,12 @@ default (a chain/Finale's 8-13-specialty breakdown is one tap away via
 `components/Collapsible.jsx`) but its **subtotal is always visible**,
 collapsed or not — same for the grand total at the bottom.
 
+Chains with no active model are additionally grouped into a single "N
+سلاسل فارغة" row (still one tap away via the same `Collapsible`) instead of
+each rendering its own full-width "لا يوجد نشاط / 0" line — on a factory
+running only 1 of its 8 chains, that used to mean 7 identical empty rows
+before the first real number (Finale/Dépôt/Personnel admin) appeared.
+
 - **Per chain** (1-8): the 13 chain specialties (see the rename below) with
   today's present count each, from the exact same `rh_attendance` row Agent
   Méthode/RH's own "Présence" screens read/write — never a second copy. An
@@ -371,6 +377,38 @@ to **Machiniste stagiaire**; **Stagiaire fer** starts at empty/zero rather
 than guessing a split. If real historical fer-trainee headcounts need to be
 reconstructed for a past period, that needs a manual, one-off correction —
 this migration cannot infer it from the old data.
+
+### UX audit fixes — Effectif/Présence, Home selector
+
+Three fixes from a field UX review (a fresh-eyes walkthrough of every
+screen), applied to the highest-impact findings:
+
+- **Effectif vs Présence, visually distinguished (Agent Méthode).** Both
+  tabs render the exact same 13-specialty stepper grid — the only
+  difference used to be a few words of label text, which meant a real risk
+  of entering today's headcount (Présence) into the fixed target field
+  (Effectif) or vice versa, silently corrupting ND/DT/Rendement for the
+  whole chain. Each tab now gets its own color identity end to end: 🎯
+  Effectif is violet (`tailwind.config.js` → `target`, "fixed target, does
+  not change day to day"), 📅 Présence is sky blue (`daily`, "changes every
+  day") — carried through the tab button itself, a colored badge at the top
+  of each tab's card, and (Présence only) a soft inline warning — not a
+  blocker, since real over-staffing happens — when a specialty's entered
+  attendance is both more than double AND at least 3 above its Effectif
+  target, the one shape of mistake this exists to catch. RH's own
+  attendance screen has the identical look-alike risk but was left
+  unchanged — out of scope for this pass.
+- **"N سلاسل فارغة" grouping** — see État des effectifs above; same
+  underlying finding (a repeated empty state drowning out real numbers),
+  applied there too.
+- **Chaîne + Module merged into one selector (Home dashboard).** The two
+  dropdowns both ever did the same thing — a chain has at most one active
+  model, so picking either was only ever picking a chain — just labeled
+  differently (one by chain number, one by dessin). Merged into the single
+  "Chaîne" selector, whose option label now carries everything either list
+  showed alone: chain number, client, and dessin together
+  (`Chaîne 1 — Zara Home (DSN-2451)`). No functionality lost — there is no
+  scenario where a model can be selected independently of its chain.
 
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 

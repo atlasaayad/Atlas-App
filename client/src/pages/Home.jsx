@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import GlowCard from '../components/GlowCard'
 import StatCircle from '../components/StatCircle'
 import HourlyBarChart from '../components/HourlyBarChart'
@@ -50,8 +50,6 @@ export default function Home() {
     if (data) setLastUpdated(Date.now())
   }, [data])
 
-  const moduleOptions = useMemo(() => chains.filter((c) => c.model), [chains])
-
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -62,6 +60,12 @@ export default function Home() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {/* One selector, not two — "Chaîne" and "Module" used to be separate
+              dropdowns that both just called setChainNumber (a chain has at
+              most one active model, so picking either was ever only ever
+              picking a chain). Merged into a single option that carries
+              everything either list showed alone: chain number, client AND
+              dessin together. */}
           <select
             value={chainNumber || ''}
             onChange={(e) => setChainNumber(Number(e.target.value))}
@@ -74,24 +78,10 @@ export default function Home() {
               const info = chains.find((c) => c.chainNumber === n)
               return (
                 <option key={n} value={n} disabled={!info?.model}>
-                  Chaîne {n} {info?.model ? `— ${info.model.client}` : '(vide)'}
+                  Chaîne {n} {info?.model ? `— ${info.model.client} (${info.model.dessin})` : '(vide)'}
                 </option>
               )
             })}
-          </select>
-          <select
-            value={chainNumber || ''}
-            onChange={(e) => setChainNumber(Number(e.target.value))}
-            className="rounded-md border border-turquoise/30 bg-navy-800 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
-          >
-            <option value="" disabled>
-              Module
-            </option>
-            {moduleOptions.map((c) => (
-              <option key={c.chainNumber} value={c.chainNumber}>
-                {c.model.dessin} — {c.model.client}
-              </option>
-            ))}
           </select>
           <button
             onClick={() => setShowClassement(true)}
@@ -111,9 +101,9 @@ export default function Home() {
       {chainsLoaded && !chainNumber && (
         <GlowCard>
           <div className="py-10 text-center text-slate-400">
-            {moduleOptions.length > 0
-              ? "لا يوجد نشاط مسجل اليوم على أي سلسلة بعد. اختر سلسلة أو موديل من القائمة فوق."
-              : 'Aucune chaîne active pour le moment. Sélectionnez un module ou une chaîne.'}
+            {chains.some((c) => c.model)
+              ? 'لا يوجد نشاط مسجل اليوم على أي سلسلة بعد. اختر سلسلة من القائمة فوق.'
+              : 'Aucune chaîne active pour le moment. Sélectionnez une chaîne.'}
           </div>
         </GlowCard>
       )}

@@ -28,6 +28,19 @@ export default {
           DEFAULT: '#F59E0B',
           soft: 'rgba(245,158,11,0.12)',
         },
+        // Agent Méthode's "Effectif" (fixed target headcount) vs "Présence"
+        // (today's actual attendance) render near-identically otherwise —
+        // these two exist only to give each tab its own unmistakable color
+        // identity, distinct from the brand accent and from every semantic
+        // status color above (good/warn/bad/amber).
+        target: {
+          DEFAULT: '#A78BFA',
+          soft: 'rgba(167,139,250,0.12)',
+        },
+        daily: {
+          DEFAULT: '#38BDF8',
+          soft: 'rgba(56,189,248,0.12)',
+        },
       },
       fontFamily: {
         display: ['"Space Grotesk"', 'sans-serif'],
