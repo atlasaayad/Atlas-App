@@ -40,7 +40,10 @@ let schemaReady = null
 // whole function on load.
 export function ensureSchema() {
   if (!schemaReady) {
-    schemaReady = run(SCHEMA_SQL).then(migrateSpecialtyNames).then(migrateProductionHistoryUniqueKey)
+    schemaReady = run(SCHEMA_SQL)
+      .then(migrateSpecialtyNames)
+      .then(migrateProductionHistoryUniqueKey)
+      .then(migrateQualityHistoryUniqueKey)
   }
   return schemaReady
 }
@@ -213,7 +216,9 @@ CREATE TABLE IF NOT EXISTS quality (
 -- this table's piece_retouche against Agent Production's real qty for the
 -- same chain/date/slot (see computeQualityPct() in calc.js and
 -- fullDashboard() in routes/public.js). "percentage" above is legacy from
--- the old manual-slider Quality screen and is no longer written to.
+-- the old manual-slider Quality screen and is no longer written to. No
+-- inline UNIQUE here — see migrateQualityHistoryUniqueKey() below for the
+-- same 3-to-4-column widening as production_history.
 CREATE TABLE IF NOT EXISTS quality_history (
   id TEXT PRIMARY KEY,
   model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
@@ -222,8 +227,7 @@ CREATE TABLE IF NOT EXISTS quality_history (
   slot_index INTEGER NOT NULL,
   piece_retouche INTEGER DEFAULT 0,
   created_at TEXT,
-  updated_at TEXT,
-  UNIQUE (chain_number, date, slot_index)
+  updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_quality_history_chain_date ON quality_history (chain_number, date);
 
@@ -424,6 +428,32 @@ async function migrateProductionHistoryUniqueKey() {
 
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'production_history_unique_slot') THEN
         ALTER TABLE production_history ADD CONSTRAINT production_history_unique_slot
+          UNIQUE (chain_number, date, slot_index, model_id);
+      END IF;
+    END $$;
+  `)
+}
+
+// Same widening as migrateProductionHistoryUniqueKey() above, for
+// quality_history — needed so "Pièces retouche" can be logged per colour
+// on a Couleur/Variante chain (one row per model_id at the same hour)
+// instead of one colour's save silently overwriting another's, and so the
+// per-colour reads below don't collide on the old 3-column key either.
+async function migrateQualityHistoryUniqueKey() {
+  await run(`
+    DO $$
+    DECLARE r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = 'quality_history'::regclass AND contype = 'u'
+          AND conname <> 'quality_history_unique_slot'
+      LOOP
+        EXECUTE 'ALTER TABLE quality_history DROP CONSTRAINT ' || quote_ident(r.conname);
+      END LOOP;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'quality_history_unique_slot') THEN
+        ALTER TABLE quality_history ADD CONSTRAINT quality_history_unique_slot
           UNIQUE (chain_number, date, slot_index, model_id);
       END IF;
     END $$;

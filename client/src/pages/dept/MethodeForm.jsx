@@ -7,6 +7,7 @@ import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
 import { SPECIALTIES, MACHINES, DELAY_REASONS } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration, hoursToHHMM, hhmmToHours } from '../../lib/calc'
+import { todayInFactoryTZ } from '../../lib/date'
 
 // Quick-pick suggestions for common operation names — still a free-text
 // field (garment operations vary too much to force a fixed list), but this
@@ -187,17 +188,61 @@ function EditModel({ token, model, dashboard, onSaved }) {
 }
 
 function PresenceTab({ token, model, dashboard, onSaved }) {
-  const [attendance, setAttendance] = useState(
-    Object.fromEntries(SPECIALTIES.map((sp) => [sp, dashboard?.effectifs.find((e) => e.specialty === sp)?.present ?? 0]))
-  )
+  const TODAY = todayInFactoryTZ()
+  const [selectedDate, setSelectedDate] = useState(TODAY)
+  const [dateError, setDateError] = useState('')
+  const [attendance, setAttendance] = useState({})
+  const [attendanceLoading, setAttendanceLoading] = useState(false)
+  const [attendanceError, setAttendanceError] = useState(false)
+  const [retryTick, setRetryTick] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
 
+  const minDate = model.debut || null
+
+  // Load the selected day's Présence — today's or any previous day's —
+  // straight from rh_attendance_history, so this tab always shows exactly
+  // what's really saved for that date (same pattern as Agent Production's
+  // and Quality's hourly entry).
+  useEffect(() => {
+    let cancelled = false
+    setAttendanceLoading(true)
+    setAttendanceError(false)
+    api.methode
+      .getAttendance(token, model.id, selectedDate)
+      .then((r) => {
+        if (cancelled) return
+        setAttendance(r.attendance)
+        setAttendanceLoading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAttendanceError(true)
+        setAttendanceLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token, model.id, selectedDate, retryTick])
+
+  function handleDateChange(value) {
+    if (value > TODAY) {
+      setDateError('ما تقدر تدخل بيانات لتاريخ مستقبلي.')
+      return
+    }
+    if (minDate && value < minDate) {
+      setDateError(`ما تقدر تدخل بيانات قبل تاريخ بداية الموديل (${minDate}).`)
+      return
+    }
+    setDateError('')
+    setSelectedDate(value)
+  }
+
   async function submit() {
     setSaving(true)
     try {
-      await api.methode.updateAttendance(token, model.id, attendance)
+      await api.methode.updateAttendance(token, model.id, attendance, selectedDate)
       setSaved(true)
       onSaved()
       setTimeout(() => setSaved(false), 2000)
@@ -206,15 +251,18 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
     }
   }
 
+  const isBackdated = selectedDate !== TODAY
+
   return (
     <GlowCard>
       <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-daily bg-daily/10 px-3 py-1 text-xs font-medium text-daily">
-        📅 يتغيّر كل يوم — الحضور الفعلي اليوم فقط
+        📅 يتغيّر كل يوم — حضور اليوم اللي تختاره تحت
       </div>
       <p className="mb-3 text-sm text-slate-400">
-        <b className="text-slate-300">Présence</b> — عدد العمال الحاضرين فعلياً اليوم لكل تخصص — يُستخدم لحساب
-        Rendement (كفاءة الإنتاج). Agent Méthode هو المسؤول الأساسي عن هذا الرقم الآن (بدل RH وحده سابقاً)؛ RH لسه
-        يقدر يعدّله من شاشته كنسخة احتياطية — آخر تحديث من أي القسمين هو المُعتمد.
+        <b className="text-slate-300">Présence</b> — عدد العمال الحاضرين فعلياً لكل تخصص باليوم المحدد — يُستخدم
+        لحساب Rendement (كفاءة الإنتاج) عن يوم اليوم تحديداً. Agent Méthode هو المسؤول الأساسي عن هذا الرقم الآن
+        (بدل RH وحده سابقاً)؛ RH لسه يقدر يعدّله من شاشته كنسخة احتياطية — آخر تحديث ليوم اليوم من أي القسمين هو
+        المُعتمد.
       </p>
       {dashboard && (
         <div className="mb-3 text-sm text-slate-400">
@@ -224,37 +272,74 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
           </span>
         </div>
       )}
+
+      <label className="mb-3 block max-w-xs">
+        <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">التاريخ</span>
+        <input
+          type="date"
+          value={selectedDate}
+          min={minDate || undefined}
+          max={TODAY}
+          onChange={(e) => handleDateChange(e.target.value)}
+          className="h-11 w-full rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+        />
+      </label>
+      {dateError && <div className="mb-3 text-sm text-status-bad">{dateError}</div>}
+      {!dateError && isBackdated && (
+        <div className="mb-3 rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
+          ⚠️ تعدّل بيانات يوم سابق ({selectedDate}) — أي حفظ هنا يُسجَّل بأثر رجعي بسجل التعديلات، ولا يغيّر حضور
+          اليوم الحقيقي (Rendement اليوم فوق يبقى كما هو).
+        </div>
+      )}
+
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {SPECIALTIES.map((sp) => {
-          const required = model.effectif?.[sp] ?? 0
-          const value = attendance[sp] ?? 0
-          // Not an error (real over-staffing happens) — just a nudge for the
-          // one scenario this tab exists to prevent: typing Effectif's
-          // target number into Présence (or vice versa) without noticing.
-          // Requires both a large ratio AND a large absolute gap so it never
-          // fires over small, everyday numbers (e.g. 1 required vs 2 present).
-          const suspicious = required > 0 && value > required * 2 && value - required >= 3
-          return (
-            <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
-              <Stepper
-                label={`${sp} / ${required} مطلوب`}
-                value={value}
-                onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
-                max={999}
-              />
-              {voiceMode && <VoiceMicButton label={sp} onConfirm={(n) => setAttendance({ ...attendance, [sp]: n })} />}
-              {suspicious && (
-                <div className="px-1.5 text-center text-[10px] leading-tight text-amber">
-                  ⚠️ أعلى من المطلوب ({required}) بكثير — تأكد إنك بتبويب Présence
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+      {attendanceLoading ? (
+        <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+          Chargement…
+        </div>
+      ) : attendanceError ? (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <span className="text-sm text-status-bad">فشل تحميل بيانات الحضور — تحقق من الاتصال.</span>
+          <button
+            onClick={() => setRetryTick((t) => t + 1)}
+            className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+          {SPECIALTIES.map((sp) => {
+            const required = model.effectif?.[sp] ?? 0
+            const value = attendance[sp] ?? 0
+            // Not an error (real over-staffing happens) — just a nudge for the
+            // one scenario this tab exists to prevent: typing Effectif's
+            // target number into Présence (or vice versa) without noticing.
+            // Requires both a large ratio AND a large absolute gap so it never
+            // fires over small, everyday numbers (e.g. 1 required vs 2 present).
+            const suspicious = required > 0 && value > required * 2 && value - required >= 3
+            return (
+              <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
+                <Stepper
+                  label={`${sp} / ${required} مطلوب`}
+                  value={value}
+                  onChange={(v) => setAttendance({ ...attendance, [sp]: v })}
+                  max={999}
+                />
+                {voiceMode && <VoiceMicButton label={sp} onConfirm={(n) => setAttendance({ ...attendance, [sp]: n })} />}
+                {suspicious && (
+                  <div className="px-1.5 text-center text-[10px] leading-tight text-amber">
+                    ⚠️ أعلى من المطلوب ({required}) بكثير — تأكد إنك بتبويب Présence
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
       <div className="mt-4">
-        <SaveButton onClick={submit} saving={saving} saved={saved} />
+        <SaveButton onClick={submit} saving={saving || attendanceLoading || attendanceError} saved={saved} />
       </div>
     </GlowCard>
   )

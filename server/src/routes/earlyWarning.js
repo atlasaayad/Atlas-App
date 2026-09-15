@@ -12,19 +12,30 @@ export const earlyWarningRouter = Router()
 earlyWarningRouter.get('/early-warnings', async (req, res) => {
   const today = todayInFactoryTZ()
   const activeModels = await all(
-    'SELECT client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
+    'SELECT id, client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
   )
 
   // One query per active chain, all fired together — a sequential loop here
   // would mean the whole banner (and the Home page load that includes it)
-  // gets slower every time a new chain becomes active.
+  // gets slower every time a new chain becomes active. Restricted to this
+  // model's own colour family (itself + its active Couleur/Variante
+  // variants) via the subquery — chain_number alone would also pick up a
+  // previous, now-inactive model's leftover rows on the same chain (see the
+  // identical fix in fullDashboard(), routes/public.js). Summed by slot
+  // (not just returned raw) so two colours logging the same hour combine
+  // into one entry, matching every other chain-wide hourly figure.
   const rowsByModel = await Promise.all(
-    activeModels.map((model) =>
-      all(
-        'SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2 ORDER BY slot_index ASC',
-        [model.chain_number, today]
+    activeModels.map(async (model) => {
+      const rows = await all(
+        `SELECT slot_index, qty FROM production_history
+         WHERE chain_number = $1 AND date = $2
+           AND model_id IN (SELECT id FROM models WHERE id = $3 OR parent_model_id = $3)`,
+        [model.chain_number, today, model.id]
       )
-    )
+      const bySlot = new Map()
+      for (const r of rows) bySlot.set(r.slot_index, (bySlot.get(r.slot_index) || 0) + r.qty)
+      return [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([slotIndex, qty]) => ({ slot_index: slotIndex, qty }))
+    })
   )
 
   const warnings = []

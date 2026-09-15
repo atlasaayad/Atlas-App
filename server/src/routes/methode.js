@@ -3,8 +3,8 @@ import { nanoid } from 'nanoid'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
 import { SPECIALTIES, DELAY_REASONS } from '../constants.js'
-import { computeVTMinutes, computeDT, computeLaunchTimerState } from '../calc.js'
-import { saveAttendance } from '../attendanceShared.js'
+import { computeVTMinutes, computeDT, computeLaunchTimerState, todayInFactoryTZ } from '../calc.js'
+import { saveAttendance, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -184,11 +184,31 @@ methodeRouter.put('/models/:id/effectif', async (req, res) => {
 // Actual daily headcount present, per specialty — for the Rendement_Production%
 // calculation (see fullDashboard() in routes/public.js). Agent Méthode is now
 // the primary owner of this figure (previously RH-only); RH keeps the same
-// endpoint as a backup — both write the exact same rh_attendance rows, so
-// whichever department saves most recently is automatically what's used.
+// endpoint as a backup — both write to the exact same rh_attendance_history
+// row for the given date, so whichever department saves most recently for
+// that date is automatically what's used. A specific date can be targeted
+// (same backdating pattern as Agent Production's/Quality's hourly entry) —
+// see saveAttendance() in attendanceShared.js for exactly what a backdated
+// save does and doesn't touch.
 methodeRouter.put('/models/:id/attendance', async (req, res) => {
-  await saveAttendance({ deptKey: 'methode', id: req.params.id, attendance: req.body?.attendance || {} })
-  res.json({ ok: true })
+  const result = await saveAttendance({
+    deptKey: 'methode',
+    id: req.params.id,
+    attendance: req.body?.attendance || {},
+    date: req.body?.date,
+  })
+  if (!result.ok) return res.status(result.error === 'not_found' ? 404 : 400).json({ error: result.error })
+  res.json(result)
+})
+
+// A specific day's Présence per specialty — today's or any previous day's.
+methodeRouter.get('/models/:id/attendance', async (req, res) => {
+  const model = await get('SELECT chain_number FROM models WHERE id = $1', [req.params.id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+  const date = String(req.query.date || todayInFactoryTZ())
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
+  const attendance = await getAttendanceForDate(model.chain_number, date)
+  res.json({ date, attendance })
 })
 
 const DELAY_REASON_CODES = new Set(DELAY_REASONS.map((r) => r.code))

@@ -204,14 +204,20 @@ export async function fullDashboard(model) {
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
       // source of truth for hourly production, today included (see the
-      // comment on that table). Chain-scoped (not model-scoped), so once a
-      // Couleur/Variante chain has more than one color logging the same
-      // hour, this naturally returns one row per color — summed below into
-      // the chain's combined total, exactly as before when there was only
-      // ever one row per hour.
-      all('SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2', [
+      // comment on that table). Restricted to this model's own colour
+      // family (model_id = ANY(colorModelIds): the root plus its active
+      // Couleur/Variante variants) — chain_number alone isn't enough to
+      // identify "this model's own production", since a chain can be
+      // reassigned to a brand-new model at any time and the old (now
+      // inactive) model's rows stay in this same table forever, sharing the
+      // same chain_number. Once a Couleur/Variante chain has more than one
+      // color logging the same hour, this naturally returns one row per
+      // color — summed below into the chain's combined total, exactly as
+      // before when there was only ever one row per hour.
+      all('SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2 AND model_id = ANY($3)', [
         model.chain_number,
         today,
+        colorModelIds,
       ]),
       // "Total entré" (Bilan de la chaîne) is the combined figure across
       // every color sharing this chain — a plain SUM across 1 row when there
@@ -225,35 +231,42 @@ export async function fullDashboard(model) {
       all('SELECT * FROM poste_status WHERE model_id = $1', [model.id]),
       // "Total sortie" (below) is the chain's whole-life output — combined
       // across every color — so it sums production_history across every day
-      // from Début through today, not just today. Bounding by Début (rather
-      // than summing all of the chain's history unconditionally) keeps a
-      // previous, unrelated model that used to run on this same chain_number
-      // out of the current model's total.
-      get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
+      // from Début through today, not just today. Bounding by Début alone
+      // is NOT enough to keep a previous, unrelated model that used to run
+      // on this same chain_number out of the current model's total (its
+      // rows can easily fall inside that same date range too) — model_id =
+      // ANY(colorModelIds) is what actually excludes it.
+      get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3 AND model_id = ANY($4)', [
         model.chain_number,
         model.debut || today,
         today,
+        colorModelIds,
       ]),
       // Qualité% (below) is computed from these two "Pièces retouche" sums
       // against the production sums above — today's and whole-life — never
       // stored anywhere itself (see computeQualityPct() in calc.js). Quality
-      // reports retouche per chain/hour, never per color, so this stays
-      // exactly as before regardless of how many colors are active.
-      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date = $2', [
+      // reports retouche per chain/hour, never per color (quality_history
+      // has no per-color dimension — see the Couleur/Variante README note),
+      // but still needs the same model_id scoping as production above to
+      // stay out of a previous, unrelated model's retouche counts.
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date = $2 AND model_id = ANY($3)', [
         model.chain_number,
         today,
+        colorModelIds,
       ]),
-      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date >= $2 AND date <= $3', [
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date >= $2 AND date <= $3 AND model_id = ANY($4)', [
         model.chain_number,
         model.debut || today,
         today,
+        colorModelIds,
       ]),
       // Per-slot (not summed) today's "Pièces retouche" — needed to compute
       // Qualité% for just the single most-recently-recorded hour, for the
       // "hourly" Rendement level below.
-      all('SELECT slot_index, piece_retouche FROM quality_history WHERE chain_number = $1 AND date = $2', [
+      all('SELECT slot_index, piece_retouche FROM quality_history WHERE chain_number = $1 AND date = $2 AND model_id = ANY($3)', [
         model.chain_number,
         today,
+        colorModelIds,
       ]),
       get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
       all('SELECT specialty, present FROM finale_attendance WHERE model_id = $1', [model.id]),
