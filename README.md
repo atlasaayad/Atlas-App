@@ -290,7 +290,8 @@ hour on the same chain.
   was widened from `(chain_number, date, slot_index)` to include `model_id`
   (an idempotent migration in `db/index.js`) to make this possible — two
   rows can now share an hour, one per color, instead of one overwriting the
-  other.
+  other. Quality's own hourly screen ("Pièces retouche") got the identical
+  widening and `targetModelId` support — see "Field-tested bug fixes" below.
 - **Home dashboard** — every combined figure (hourly bar chart, Prod à
   maintenant, Objectif atteint%, Rendement, Qualité%, Bilan de la chaîne)
   is the sum across every color sharing the chain, computed by summing
@@ -409,6 +410,68 @@ screen), applied to the highest-impact findings:
   showed alone: chain number, client, and dessin together
   (`Chaîne 1 — Zara Home (DSN-2451)`). No functionality lost — there is no
   scenario where a model can be selected independently of its chain.
+
+### Field-tested bug fixes — chain reassignment, Présence backdating, Quality per-colour
+
+Found by actually entering a real week of factory data end to end (through
+the real UI/API, not synthetic seeding) and checking every resulting number
+by hand:
+
+- **A chain's live figures no longer leak a previous model's data.**
+  Reassigning a chain to a brand-new model — an order finishing and a new
+  one starting on the same chain, completely ordinary factory operation —
+  used to leave the *old*, now-inactive model's `production_history`/
+  `quality_history` rows bleeding into the *new* model's "today" hourly bar,
+  Total sortie, Objectif atteint %, Rendement, and 🏆 Classement, because
+  every one of those queries filtered by `chain_number`/`date` alone, with
+  nothing to say which model actually owns a given row. Visible consequence
+  when this was found: "Objectif atteint 802%" and a negative "En cours" on
+  a chain that had produced nothing yet that day. Fixed everywhere it
+  occurred — `fullDashboard()` (`routes/public.js`), the early-warning
+  banner (`routes/earlyWarning.js`), and Agent Production's/Quality's own
+  `GET /hourly` screens (`routes/production.js`, `routes/quality.js`) — by
+  scoping every one of these chain-wide reads to the model's own colour
+  family (itself + its active Couleur/Variante variants) instead of every
+  row ever logged against that chain number. `POST /methode/models`'s own
+  chain-reassignment behavior (deactivate whatever was active, insert the
+  new model) is unchanged and still the intended way to start a new
+  model — there just isn't a client UI button for it yet (only reachable
+  when a chain has no active model at all, via `CreateModelForm`); the
+  fix protects correctness regardless of how a reassignment happens.
+  Historical, arbitrary-date-range reports (`📅 Historique`, the BSCI/SMETA
+  audit export) are deliberately left chain-scoped, not model-scoped — those
+  are meant to span a model change within the picked range, not exclude it.
+- **Présence (Agent Méthode/RH) can now be corrected for a past day.**
+  `saveAttendance()` (`attendanceShared.js`) previously had no `date`
+  parameter at all — every save always landed on the real server "today",
+  no matter which day was actually intended, unlike Agent Production's/
+  Quality's hourly entry (both already had a working date picker). Both
+  Présence tabs now carry the exact same date-picker/backdating-banner
+  pattern. A specific date can be targeted: `rh_attendance_history` (the
+  permanent record, same architecture as `production_history`) always
+  writes to that date, but the LIVE `rh_attendance` snapshot — what
+  Rendement/Home/État des effectifs/Classement all read as "today's"
+  headcount — is only touched when the target date is actually today, so a
+  backdated correction can never silently change what "today" reads as. A
+  new `GET /models/:id/attendance?date=` (on both `methode.js` and `rh.js`)
+  reads a specific day's 13 specialty values back from
+  `rh_attendance_history`, the same "get for date X" shape Production's and
+  Quality's own hourly endpoints already use.
+- **Quality can log "Pièces retouche" separately per colour.** On a
+  Couleur/Variante chain, `quality_history`'s unique key had no `model_id`
+  (`(chain_number, date, slot_index)` only), so two colours reporting
+  retouche for the same hour didn't just risk one overwriting the other —
+  there was no way to represent both values at all. Widened to
+  `(chain_number, date, slot_index, model_id)` the same way
+  `production_history` already was for Couleur/Variante (see
+  `migrateQualityHistoryUniqueKey()`, `db/index.js`). Quality's hourly PUT
+  now takes the same `targetModelId` as Agent Production's, and its GET now
+  returns the same `byModel` breakdown shape — each colour's own qty,
+  pieceRetouche, and Qualité%, alongside the correct chain-wide combined
+  figures (previously wrong too: the qty lookup used `Object.fromEntries()`
+  over possibly-multiple rows per slot, which silently kept only the last
+  one and dropped the rest — a second, compounding bug in the same code
+  path, same root cause pattern as the chain-reassignment leak above).
 
 ### Bilan de la chaîne — whole-life totals (Home dashboard)
 

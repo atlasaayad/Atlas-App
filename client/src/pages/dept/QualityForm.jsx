@@ -100,6 +100,43 @@ export default function QualityForm({ token, chainNumber }) {
     }
   }
 
+  // Couleur/Variante: same hour, one input per color (root included) — each
+  // saved as its own quality_history row via targetModelId, so two colors
+  // can both log a real "Pièces retouche" for the very same hour instead of
+  // one overwriting the other (mirrors Agent Production's own updateColorSlot/
+  // saveColorSlot). Keyed by "slotIndex:colorModelId", completely separate
+  // from the single-input state above (used only when the model has no
+  // variants), so a normal model's behavior is untouched.
+  function updateColorSlot(idx, colorModelId, value) {
+    setHourlySlots((prev) =>
+      prev.map((s) =>
+        s.index === idx
+          ? { ...s, byModel: s.byModel.map((c) => (c.modelId === colorModelId ? { ...c, pieceRetouche: value } : c)) }
+          : s
+      )
+    )
+    const key = `${idx}:${colorModelId}`
+    setSavedSlots((s) => ({ ...s, [key]: false }))
+    setSlotErrors((s) => ({ ...s, [key]: false }))
+  }
+
+  async function saveColorSlot(idx, colorModelId) {
+    const slot = hourlySlots.find((s) => s.index === idx)
+    const color = slot?.byModel.find((c) => c.modelId === colorModelId)
+    const key = `${idx}:${colorModelId}`
+    setSavingSlot(key)
+    setSlotErrors((s) => ({ ...s, [key]: false }))
+    try {
+      await api.quality.updateHourly(token, modelId, idx, Number(color?.pieceRetouche) || 0, selectedDate, colorModelId)
+      setSavedSlots((s) => ({ ...s, [key]: true }))
+      refresh()
+    } catch (err) {
+      setSlotErrors((s) => ({ ...s, [key]: err.timedOut ? 'timeout' : true }))
+    } finally {
+      setSavingSlot(null)
+    }
+  }
+
   async function saveReprises(e) {
     e.preventDefault()
     setSavingReprises(true)
@@ -175,7 +212,19 @@ export default function QualityForm({ token, chainNumber }) {
           </div>
         ) : (
           <div className="space-y-2.5">
-            {hourlySlots.map((slot) => (
+            {hourlySlots.map((slot) =>
+              slot.byModel ? (
+                <ColorSlotRow
+                  key={slot.index}
+                  slot={slot}
+                  voiceMode={voiceMode}
+                  savingSlot={savingSlot}
+                  savedSlots={savedSlots}
+                  slotErrors={slotErrors}
+                  onChange={updateColorSlot}
+                  onSave={saveColorSlot}
+                />
+              ) : (
               <div key={slot.index}>
                 <div className="flex items-center gap-2.5">
                   <span className="w-24 shrink-0 font-mono text-xs text-slate-400">{slot.label}</span>
@@ -229,7 +278,8 @@ export default function QualityForm({ token, chainNumber }) {
                   </div>
                 )}
               </div>
-            ))}
+              )
+            )}
             <div className="flex items-center gap-2.5 pt-1 text-[10px] uppercase tracking-wide text-slate-600">
               <span className="w-24 shrink-0">الساعة</span>
               <span className="w-16 shrink-0 text-center">إنتاج</span>
@@ -270,6 +320,77 @@ export default function QualityForm({ token, chainNumber }) {
           <div className="mt-2 text-sm text-status-bad">فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.</div>
         )}
       </GlowCard>
+    </div>
+  )
+}
+
+// One hour, one input per color (root — label "Défaut" — plus every active
+// variant) — lets Quality log a real, separate "Pièces retouche" for each
+// color at the very same hour, with its own computed Qualité%, instead of
+// one save overwriting the other (mirrors Agent Production's own
+// ColorSlotRow).
+function ColorSlotRow({ slot, voiceMode, savingSlot, savedSlots, slotErrors, onChange, onSave }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-navy-900/30 p-2.5">
+      <div className="mb-2 font-mono text-xs text-slate-400">{slot.label}</div>
+      <div className="space-y-2">
+        {slot.byModel.map((color) => {
+          const key = `${slot.index}:${color.modelId}`
+          return (
+            <div key={color.modelId}>
+              <div className="flex items-center gap-2.5">
+                <span className="w-20 shrink-0 truncate text-xs text-slate-500">{color.label || 'Défaut'}</span>
+                <div className="w-14 shrink-0 text-center font-mono text-xs text-slate-500" title="إنتاج الساعة لهذا اللون (Agent Production)">
+                  {color.qty}
+                </div>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={color.pieceRetouche || ''}
+                  onChange={(e) => onChange(slot.index, color.modelId, e.target.value)}
+                  className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+                />
+                {voiceMode && <VoiceMicButton label={color.label || 'Défaut'} onConfirm={(n) => onChange(slot.index, color.modelId, n)} />}
+                <button
+                  onClick={() => onSave(slot.index, color.modelId)}
+                  disabled={savingSlot === key}
+                  className={`flex h-11 shrink-0 items-center justify-center gap-1.5 rounded border px-4 text-sm font-medium disabled:opacity-50 ${
+                    savedSlots[key]
+                      ? 'border-turquoise bg-turquoise text-navy-950 active:bg-turquoise/80'
+                      : 'border-turquoise/50 text-turquoise active:bg-turquoise/10'
+                  }`}
+                >
+                  {savingSlot === key ? (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+                  ) : savedSlots[key] ? (
+                    'Modifier ✓'
+                  ) : (
+                    'OK'
+                  )}
+                </button>
+                <div className="w-14 shrink-0 text-center font-mono text-xs text-turquoise">
+                  {(() => {
+                    // Computed live from the row's current values, same as
+                    // the single-color branch above — updates instantly on
+                    // every keystroke instead of showing a stale percentage
+                    // from before the edit.
+                    const pct = computeQualityPct(color.qty, color.pieceRetouche)
+                    return pct === null ? '—' : `${pct}%`
+                  })()}
+                </div>
+              </div>
+              {slotErrors[key] === 'timeout' && (
+                <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
+                  انتهت مهلة الاتصال — الشبكة بطيئة جداً أو مقطوعة. تحقق من الاتصال وحاول مرة ثانية.
+                </div>
+              )}
+              {slotErrors[key] === true && (
+                <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.</div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

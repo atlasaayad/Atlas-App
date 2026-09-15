@@ -1167,3 +1167,318 @@ test('Couleur/Variante: variante hérite VT/DT sans ressaisie, deux couleurs sai
     assert.equal(nested.data.error, 'cannot_nest_variants')
   })
 })
+
+// Bug found during a real week-long data-entry exercise: reassigning a chain
+// to a brand-new model (a chain finishing one order and starting another —
+// completely ordinary factory operation) used to leak the OLD, now-inactive
+// model's production_history/quality_history rows into the new model's live
+// figures, because fullDashboard()'s chain-wide queries filtered only by
+// chain_number/date, never by which model actually owns those rows.
+test("changement de modèle sur une chaîne déjà utilisée: aucune contamination par l'ancien modèle inactif", async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+  const today = todayInFactoryTZ()
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  const oldModel = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_OLD', qteTotale: 500, dessin: 'TEST-OLD', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(oldModel.status, 201)
+  const oldId = oldModel.data.id
+
+  let newId
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [oldId])
+    if (newId) await run('DELETE FROM models WHERE id = $1', [newId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [oldId])
+    if (newId) await run('DELETE FROM audit_log WHERE model_id = $1', [newId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  // The old model logs real production/quality today, before it's replaced.
+  await call(`/production/models/${oldId}/hourly/0`, {
+    method: 'PUT',
+    token: productionToken,
+    body: { qty: 500, date: today },
+  })
+  await call(`/quality/models/${oldId}/hourly/0`, {
+    method: 'PUT',
+    token: qualityToken,
+    body: { pieceRetouche: 50, date: today },
+  })
+  await call(`/production/models/${oldId}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 1000 } })
+
+  // A brand-new model replaces it on the exact same chain, same day.
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_NEW', qteTotale: 300, dessin: 'TEST-NEW', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  newId = created.data.id
+
+  await t.test("le nouveau modèle démarre à zéro — rien de l'ancien modèle ne fuite dans son heure du jour", async () => {
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.id, newId)
+    assert.ok(dash.data.hourly.every((h) => h.qty === 0))
+    assert.equal(dash.data.bilan.totalSortie, 0)
+    assert.equal(dash.data.objectifAtteintPct, 0)
+    assert.equal(dash.data.quality.pieceRetoucheToday, 0)
+    assert.equal(dash.data.quality.pieceRetoucheCumulative, 0)
+  })
+
+  // The dashboard isn't the only place this leaked from — Agent Production's
+  // and Quality's OWN hourly-entry screens (GET /hourly, what a worker
+  // actually sees when opening the tab) had the exact same unscoped
+  // chain_number+date query, independent of fullDashboard()'s.
+  await t.test("l'écran Agent Production lui-même (GET /hourly) ne montre pas non plus les données de l'ancien modèle", async () => {
+    const hourly = await call(`/production/models/${newId}/hourly?date=${today}`, { token: productionToken })
+    assert.ok(hourly.data.hourly.every((h) => h.qty === 0))
+  })
+
+  await t.test("l'écran Quality lui-même (GET /hourly) ne montre pas non plus les données de l'ancien modèle", async () => {
+    const hourly = await call(`/quality/models/${newId}/hourly?date=${today}`, { token: qualityToken })
+    assert.ok(hourly.data.hourly.every((h) => h.qty === 0 && h.pieceRetouche === 0))
+  })
+
+  await t.test("la propre production du nouveau modèle s'affiche correctement, toujours sans mélange avec l'ancien", async () => {
+    await call(`/production/models/${newId}/hourly/1`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 20, date: today },
+    })
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.hourly.find((h) => h.index === 0).qty, 0) // l'ancien slot reste à 0
+    assert.equal(dash.data.hourly.find((h) => h.index === 1).qty, 20) // exactement ce que CE modèle a saisi
+    assert.equal(dash.data.bilan.totalSortie, 20)
+  })
+
+  await t.test("l'ancien modèle (toujours interrogeable directement par id) garde ses propres chiffres intacts", async () => {
+    const oldDash = await call(`/models/${oldId}/dashboard`)
+    assert.equal(oldDash.data.hourly.find((h) => h.index === 0).qty, 500)
+    assert.equal(oldDash.data.bilan.totalSortie, 500)
+  })
+})
+
+// Bug found in the same exercise: Présence (rh_attendance/rh_attendance_history)
+// had no date parameter at all — every save landed on "today" regardless of
+// intent, unlike Agent Production's/Quality's hourly entry which both support
+// a real date picker. saveAttendance() now takes an explicit date: the
+// permanent history row always targets it, but the LIVE rh_attendance
+// snapshot (what Rendement/Home/Classement read) is only touched when that
+// date is actually today.
+test('Présence (Agent Méthode/RH): correction rétroactive par date, sans jamais modifier le direct du jour', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const rhToken = await login('rh', '8888')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  function daysAgo(n) {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - n)
+    return d.toISOString().slice(0, 10)
+  }
+  const today = todayInFactoryTZ()
+  const yesterday = daysAgo(1)
+  const debut = daysAgo(5)
+  const beforeDebut = daysAgo(6)
+  const tomorrow = daysAgo(-1)
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_PRESENCE_DATE', qteTotale: 1000, dessin: 'TEST-PD', chainNumber: TEST_CHAIN, debut },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    await run('DELETE FROM rh_attendance_history WHERE chain_number = $1 AND date IN ($2, $3)', [TEST_CHAIN, yesterday, today])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test("aucune donnée pour hier pour l'instant → tout à zéro", async () => {
+    const res = await call(`/methode/models/${modelId}/attendance?date=${yesterday}`, { token: methodeToken })
+    assert.equal(res.status, 200)
+    assert.equal(res.data.date, yesterday)
+    assert.ok(SPECIALTIES.every((sp) => res.data.attendance[sp] === 0))
+  })
+
+  await t.test("sauvegarde pour hier: acceptée, marquée rétroactive, réellement enregistrée — et NE touche PAS le direct du jour", async () => {
+    const put = await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { Machinistes: 15 }, date: yesterday },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.date, yesterday)
+    assert.equal(put.data.isBackdated, true)
+
+    const reloaded = await call(`/methode/models/${modelId}/attendance?date=${yesterday}`, { token: methodeToken })
+    assert.equal(reloaded.data.attendance.Machinistes, 15)
+
+    // Le direct du jour (ce que Rendement/Home lisent) reste à zéro — une
+    // correction rétroactive ne doit jamais changer "aujourd'hui" en silence.
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 0)
+    const todayAttendance = await call(`/methode/models/${modelId}/attendance?date=${today}`, { token: methodeToken })
+    assert.ok(SPECIALTIES.every((sp) => todayAttendance.data.attendance[sp] === 0))
+  })
+
+  await t.test("sauvegarde pour aujourd'hui: non rétroactive, et reflétée immédiatement sur le direct", async () => {
+    const put = await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { Machinistes: 12 }, date: today },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.isBackdated, false)
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 12)
+
+    // Hier reste inchangé (15) — les deux dates sont indépendantes.
+    const yesterdayAttendance = await call(`/methode/models/${modelId}/attendance?date=${yesterday}`, { token: methodeToken })
+    assert.equal(yesterdayAttendance.data.attendance.Machinistes, 15)
+  })
+
+  await t.test('RH utilise exactement le même mécanisme (endpoint séparé, même stockage)', async () => {
+    const put = await call(`/rh/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: rhToken,
+      body: { attendance: { Machinistes: 20 }, date: yesterday },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.isBackdated, true)
+    const reloaded = await call(`/rh/models/${modelId}/attendance?date=${yesterday}`, { token: rhToken })
+    assert.equal(reloaded.data.attendance.Machinistes, 20)
+    // Toujours sans toucher au direct du jour (resté à 12 du subtest précédent).
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.data.ouvriers.presents, 12)
+  })
+
+  await t.test('rejette une date future', async () => {
+    const put = await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { Machinistes: 1 }, date: tomorrow },
+    })
+    assert.equal(put.status, 400)
+    assert.equal(put.data.error, 'date_in_future')
+  })
+
+  await t.test('rejette une date avant Début du modèle', async () => {
+    const put = await call(`/methode/models/${modelId}/attendance`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { attendance: { Machinistes: 1 }, date: beforeDebut },
+    })
+    assert.equal(put.status, 400)
+    assert.equal(put.data.error, 'date_before_debut')
+  })
+})
+
+// Bug found in the same exercise: quality_history's unique key had no
+// model_id, so a Couleur/Variante chain with two colours reporting "Pièces
+// retouche" for the SAME hour silently overwrote one colour's row with the
+// other's — and GET /quality/models/:id/hourly built its qty lookup with
+// Object.fromEntries() (last row wins), so even Agent Production's correct,
+// separate qty per colour got collapsed to just one colour's number.
+test('Quality: deux couleurs saisissent "Pièces retouche" à la même heure séparément, Qualité% correct par couleur et combiné', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+  const today = todayInFactoryTZ()
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_QCOLOR', qteTotale: 1000, dessin: 'TEST-QC', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(created.status, 201)
+  const rootId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [rootId]) // cascades to the variant too
+    await run('DELETE FROM audit_log WHERE model_id = $1', [rootId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  const variant = await call(`/methode/models/${rootId}/variants`, {
+    method: 'POST',
+    token: methodeToken,
+    body: { label: '800', qteTotale: 300 },
+  })
+  assert.equal(variant.status, 201)
+  const variantId = variant.data.id
+
+  // Production for both colours at the same hour (slot 4): root=5, variant=10.
+  await call(`/production/models/${rootId}/hourly/4`, { method: 'PUT', token: productionToken, body: { qty: 5, date: today } })
+  await call(`/production/models/${rootId}/hourly/4`, {
+    method: 'PUT',
+    token: productionToken,
+    body: { qty: 10, date: today, targetModelId: variantId },
+  })
+
+  await t.test('Quality peut saisir "Pièces retouche" séparément pour chaque couleur, sans écraser l\'autre', async () => {
+    const putRoot = await call(`/quality/models/${rootId}/hourly/4`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 1, date: today },
+    })
+    assert.equal(putRoot.status, 200)
+    const putVariant = await call(`/quality/models/${rootId}/hourly/4`, {
+      method: 'PUT',
+      token: qualityToken,
+      body: { pieceRetouche: 2, date: today, targetModelId: variantId },
+    })
+    assert.equal(putVariant.status, 200)
+
+    const rows = await all(
+      'SELECT model_id, piece_retouche FROM quality_history WHERE chain_number = $1 AND date = $2 AND slot_index = 4',
+      [TEST_CHAIN, today]
+    )
+    assert.equal(rows.length, 2) // les deux lignes existent, aucune n'a écrasé l'autre
+    const byModel = Object.fromEntries(rows.map((r) => [r.model_id, r.piece_retouche]))
+    assert.equal(byModel[rootId], 1)
+    assert.equal(byModel[variantId], 2)
+  })
+
+  await t.test("GET hourly renvoie le qty/retouche/Qualité% combinés, ET le détail correct par couleur", async () => {
+    const hourly = await call(`/quality/models/${rootId}/hourly?date=${today}`, { token: qualityToken })
+    assert.equal(hourly.status, 200)
+    const slot4 = hourly.data.hourly.find((s) => s.index === 4)
+
+    // Combiné: qty = 5 + 10 = 15, retouche = 1 + 2 = 3, Qualité% = (15-3)/15*100 = 80.
+    assert.equal(slot4.qty, 15)
+    assert.equal(slot4.pieceRetouche, 3)
+    assert.equal(slot4.qualityPct, computeQualityPct(15, 3))
+    assert.equal(slot4.qualityPct, 80)
+
+    // Détail par couleur: chacune garde son propre Qualité%, jamais mélangé.
+    const byModel = Object.fromEntries(slot4.byModel.map((c) => [c.modelId, c]))
+    assert.equal(byModel[rootId].qty, 5)
+    assert.equal(byModel[rootId].pieceRetouche, 1)
+    assert.equal(byModel[rootId].qualityPct, computeQualityPct(5, 1))
+    assert.equal(byModel[variantId].qty, 10)
+    assert.equal(byModel[variantId].pieceRetouche, 2)
+    assert.equal(byModel[variantId].qualityPct, computeQualityPct(10, 2))
+  })
+
+  await t.test('le dashboard combiné (Qualité% du jour) reflète bien les deux couleurs ensemble, pas une seule', async () => {
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.quality.pieceRetoucheToday, 3)
+    assert.equal(dash.data.quality.dailyPercentage, computeQualityPct(dash.data.produit, 3))
+  })
+})

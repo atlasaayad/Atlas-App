@@ -1,42 +1,80 @@
 import { nanoid } from 'nanoid'
-import { get, run, logAudit } from './db/index.js'
+import { get, all, run, logAudit } from './db/index.js'
 import { SPECIALTIES } from './constants.js'
 import { todayInFactoryTZ } from './calc.js'
 
+export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
 // Shared by RH's and Agent Méthode's "Présence" screens — both write to the
-// exact same rh_attendance rows, so whichever department saves last is
-// automatically what the Rendement calculation (and everything else that
-// reads rh_attendance) uses. No separate "most recent department" logic is
-// needed: it's the same row being overwritten, not two copies to reconcile.
-export async function saveAttendance({ deptKey, id, attendance }) {
-  const now = new Date().toISOString()
-  const model = await get('SELECT chain_number FROM models WHERE id = $1', [id])
+// exact same rh_attendance_history rows for the target date, so whichever
+// department saves last for that date is automatically what the audit
+// report (and, for today, the Rendement calculation) uses. No separate
+// "most recent department" logic is needed: it's the same row being
+// overwritten, not two copies to reconcile.
+//
+// A specific date can be targeted (same date-picker/backdating pattern as
+// Agent Production's and Quality's hourly entry — see routes/production.js)
+// instead of always writing today: rh_attendance_history (permanent, one
+// row per chain/specialty/date) is always written for the target date.
+// rh_attendance (the LIVE snapshot everything else reads — Rendement,
+// Home, État des effectifs, Classement) only ever reflects TODAY's real
+// attendance, so it's only touched when the target date IS today — a
+// correction to a past day must never silently change what "today's"
+// headcount reads as.
+export async function saveAttendance({ deptKey, id, attendance, date }) {
+  const model = await get('SELECT chain_number, debut FROM models WHERE id = $1', [id])
+  if (!model) return { ok: false, error: 'not_found' }
+
   const today = todayInFactoryTZ()
+  const targetDate = String(date || today)
+  if (!DATE_RE.test(targetDate)) return { ok: false, error: 'invalid_date' }
+  if (targetDate > today) return { ok: false, error: 'date_in_future' }
+  if (model.debut && targetDate < model.debut) return { ok: false, error: 'date_before_debut' }
+
+  const now = new Date().toISOString()
+  const isBackdated = targetDate !== today
 
   for (const spec of SPECIALTIES) {
     if (!(spec in attendance)) continue
     const present = Number(attendance[spec]) || 0
-    await run(
-      `INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (model_id, specialty) DO UPDATE SET present = excluded.present, updated_at = excluded.updated_at`,
-      [id, spec, present, now]
-    )
 
     // Permanent daily record for the BSCI/SMETA audit report — never
     // overwritten by a different day, only corrected in place if this same
-    // specialty is re-submitted later today.
-    if (model) {
+    // specialty/date is re-submitted later.
+    await run(
+      `INSERT INTO rh_attendance_history (id, model_id, chain_number, specialty, date, present, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+       ON CONFLICT (chain_number, specialty, date)
+         DO UPDATE SET present = excluded.present, model_id = excluded.model_id, updated_at = excluded.updated_at`,
+      [`rah_${nanoid(10)}`, id, model.chain_number, spec, targetDate, present, now]
+    )
+
+    if (!isBackdated) {
       await run(
-        `INSERT INTO rh_attendance_history (id, model_id, chain_number, specialty, date, present, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-         ON CONFLICT (chain_number, specialty, date)
-           DO UPDATE SET present = excluded.present, model_id = excluded.model_id, updated_at = excluded.updated_at`,
-        [`rah_${nanoid(10)}`, id, model.chain_number, spec, today, present, now]
+        `INSERT INTO rh_attendance (model_id, specialty, present, updated_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (model_id, specialty) DO UPDATE SET present = excluded.present, updated_at = excluded.updated_at`,
+        [id, spec, present, now]
       )
     }
   }
 
-  await logAudit({ deptKey, modelId: id, action: 'update_attendance', details: attendance })
+  await logAudit({ deptKey, modelId: id, action: 'update_attendance', details: { attendance, date: targetDate, isBackdated } })
+  return { ok: true, date: targetDate, isBackdated }
+}
+
+// A specific day's Présence per specialty — today's or any previous day's —
+// read straight from rh_attendance_history, the permanent record (same
+// architecture as Agent Production's/Quality's "get hourly for date X").
+// Specialties with no record yet for that date come back as 0, never
+// omitted, so the caller can always render all of SPECIALTIES.
+export async function getAttendanceForDate(chainNumber, date) {
+  const rows = await all('SELECT specialty, present FROM rh_attendance_history WHERE chain_number = $1 AND date = $2', [
+    chainNumber,
+    date,
+  ])
+  const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
+  for (const r of rows) present[r.specialty] = r.present
+  return present
 }
 
 // Personnel administratif / Encadrement — a single company-wide headcount
