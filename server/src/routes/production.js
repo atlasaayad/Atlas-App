@@ -25,10 +25,17 @@ productionRouter.get('/models/:id/hourly', async (req, res) => {
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
 
   const [rows, variantRows] = await Promise.all([
-    all('SELECT slot_index, model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2', [
-      model.chain_number,
-      date,
-    ]),
+    // Restricted to this model's own colour family (itself + its active
+    // Couleur/Variante variants, via the subquery) — chain_number alone
+    // would also pick up a previous, now-inactive model's leftover rows on
+    // the same chain (a chain can be reassigned to a brand-new model at any
+    // time; see the identical fix in fullDashboard(), routes/public.js).
+    all(
+      `SELECT slot_index, model_id, qty FROM production_history
+       WHERE chain_number = $1 AND date = $2
+         AND model_id IN (SELECT id FROM models WHERE id = $3 OR parent_model_id = $3)`,
+      [model.chain_number, date, req.params.id]
+    ),
     all('SELECT id, variant_label FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [req.params.id]),
   ])
 

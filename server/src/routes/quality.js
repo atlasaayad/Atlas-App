@@ -13,6 +13,14 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // A specific day's hourly "Pièces retouche" (defaults to today), joined
 // against Agent Production's real qty for the same chain/date/slot so each
 // row can show its own computed Qualité% — never a manual entry.
+// Couleur/Variante: when the chain's model has active variants, both qty
+// and pieceRetouche are summed by model_id first (so two colours logging
+// the same hour combine correctly into the chain-wide qty/Qualité% instead
+// of one silently overwriting the other — see quality_history's widened
+// unique key in db/index.js), and each slot also carries a byModel
+// breakdown with its OWN per-colour Qualité%, mirroring Agent Production's
+// hourly response shape. Omitted entirely when there are no variants, so a
+// normal (single-colour) model's response shape is unchanged.
 qualityRouter.get('/models/:id/hourly', async (req, res) => {
   const model = await get('SELECT chain_number FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
@@ -20,23 +28,77 @@ qualityRouter.get('/models/:id/hourly', async (req, res) => {
   const date = String(req.query.date || todayInFactoryTZ())
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
 
-  const [productionRows, retoucheRows] = await Promise.all([
-    all('SELECT slot_index, qty FROM production_history WHERE chain_number = $1 AND date = $2', [model.chain_number, date]),
-    all('SELECT slot_index, piece_retouche FROM quality_history WHERE chain_number = $1 AND date = $2', [model.chain_number, date]),
+  // Both restricted to this model's own colour family (itself + its active
+  // Couleur/Variante variants, via the subquery) — chain_number alone would
+  // also pick up a previous, now-inactive model's leftover rows on the same
+  // chain (a chain can be reassigned to a brand-new model at any time; see
+  // the identical fix in fullDashboard(), routes/public.js, and in Agent
+  // Production's own GET /hourly, routes/production.js).
+  const [productionRows, retoucheRows, variantRows] = await Promise.all([
+    all(
+      `SELECT slot_index, model_id, qty FROM production_history
+       WHERE chain_number = $1 AND date = $2
+         AND model_id IN (SELECT id FROM models WHERE id = $3 OR parent_model_id = $3)`,
+      [model.chain_number, date, req.params.id]
+    ),
+    all(
+      `SELECT slot_index, model_id, piece_retouche FROM quality_history
+       WHERE chain_number = $1 AND date = $2
+         AND model_id IN (SELECT id FROM models WHERE id = $3 OR parent_model_id = $3)`,
+      [model.chain_number, date, req.params.id]
+    ),
+    all('SELECT id, variant_label FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [req.params.id]),
   ])
-  const qtyMap = Object.fromEntries(productionRows.map((r) => [r.slot_index, r.qty]))
-  const retoucheMap = Object.fromEntries(retoucheRows.map((r) => [r.slot_index, r.piece_retouche]))
+
+  const variants = variantRows.map((v) => ({ id: v.id, label: v.variant_label }))
+  const hasVariants = variants.length > 0
+
+  const qtyMap = {}
+  const qtyByModel = {}
+  for (const r of productionRows) {
+    qtyMap[r.slot_index] = (qtyMap[r.slot_index] || 0) + r.qty
+    if (hasVariants) {
+      qtyByModel[r.slot_index] ??= {}
+      qtyByModel[r.slot_index][r.model_id] = r.qty
+    }
+  }
+  const retoucheMap = {}
+  const retoucheByModel = {}
+  for (const r of retoucheRows) {
+    retoucheMap[r.slot_index] = (retoucheMap[r.slot_index] || 0) + r.piece_retouche
+    if (hasVariants) {
+      retoucheByModel[r.slot_index] ??= {}
+      retoucheByModel[r.slot_index][r.model_id] = r.piece_retouche
+    }
+  }
+
   const hourly = HOURLY_SLOTS.map((s) => {
     const qty = qtyMap[s.index] || 0
     const pieceRetouche = retoucheMap[s.index] || 0
-    return { ...s, qty, pieceRetouche, qualityPct: computeQualityPct(qty, pieceRetouche) }
+    const base = { ...s, qty, pieceRetouche, qualityPct: computeQualityPct(qty, pieceRetouche) }
+    if (!hasVariants) return base
+    const qtyPresent = qtyByModel[s.index] || {}
+    const retouchePresent = retoucheByModel[s.index] || {}
+    const colorRow = (modelId, label) => {
+      const colorQty = qtyPresent[modelId] || 0
+      const colorRetouche = retouchePresent[modelId] || 0
+      return { modelId, label, qty: colorQty, pieceRetouche: colorRetouche, qualityPct: computeQualityPct(colorQty, colorRetouche) }
+    }
+    return {
+      ...base,
+      byModel: [colorRow(req.params.id, null)].concat(variants.map((v) => colorRow(v.id, v.label))),
+    }
   })
-  res.json({ date, hourly })
+  res.json({ date, hourly, variants })
 })
 
 // Every hourly "Pièces retouche" entry — today's or a previous day's — is
 // written straight to quality_history, the single source of truth for it
 // (same architecture as production_history — see routes/production.js).
+// Couleur/Variante: an entry can target a specific colour (targetModelId =
+// that variant's id) instead of the chain's root model — same mechanism as
+// Agent Production's hourly PUT — defaulting to the root itself, so a
+// normal (single-colour) model's request is unchanged.
 qualityRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   const { id, slotIndex } = req.params
   const pieceRetouche = Math.max(0, Number(req.body?.pieceRetouche) || 0)
@@ -45,6 +107,12 @@ qualityRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
 
   const model = await get('SELECT chain_number, debut FROM models WHERE id = $1', [id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+
+  const targetModelId = req.body?.targetModelId || id
+  if (targetModelId !== id) {
+    const variant = await get('SELECT id FROM models WHERE id = $1 AND parent_model_id = $2', [targetModelId, id])
+    if (!variant) return res.status(400).json({ error: 'invalid_target_model' })
+  }
 
   const today = todayInFactoryTZ()
   const date = String(req.body?.date || today)
@@ -61,11 +129,16 @@ qualityRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
     run(
       `INSERT INTO quality_history (id, model_id, chain_number, date, slot_index, piece_retouche, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-       ON CONFLICT (chain_number, date, slot_index)
-         DO UPDATE SET piece_retouche = excluded.piece_retouche, model_id = excluded.model_id, updated_at = excluded.updated_at`,
-      [`qh_${nanoid(10)}`, id, model.chain_number, date, idx, pieceRetouche, now]
+       ON CONFLICT (chain_number, date, slot_index, model_id)
+         DO UPDATE SET piece_retouche = excluded.piece_retouche, updated_at = excluded.updated_at`,
+      [`qh_${nanoid(10)}`, targetModelId, model.chain_number, date, idx, pieceRetouche, now]
     ),
-    logAudit({ deptKey: 'quality', modelId: id, action: 'update_quality_hourly', details: { slotIndex: idx, pieceRetouche, date, isBackdated } }),
+    logAudit({
+      deptKey: 'quality',
+      modelId: targetModelId,
+      action: 'update_quality_hourly',
+      details: { slotIndex: idx, pieceRetouche, date, isBackdated },
+    }),
   ])
   res.json({ ok: true, date, isBackdated })
 })
