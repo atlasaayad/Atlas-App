@@ -44,8 +44,20 @@ async function recompute(modelId) {
   return { nd, vt, dt }
 }
 
-// Create a new model and assign it to a chain, deactivating whatever was
-// previously running there.
+// Create a new model and assign it to a chain. Does NOT deactivate/replace
+// whatever was already running there — a chain overlap (a model's Entré
+// reaching its target while it's still mid-process/exiting, and a new model
+// starting to be fed in at the same time) is real, ordinary factory
+// operation, not an exception to design around. The new model gets its own
+// completely independent gamme/effectif/VT/DT — it never shares anything
+// with whatever else is running on the chain (that's the difference from a
+// Couleur/Variante variant, which deliberately DOES share its root's
+// gamme). See openModels.js for how "which models are this chain's current
+// work" is resolved — the answer to that is what changed, not model
+// creation itself. A model, once created, simply stays `active=1` forever;
+// there is no manual "close/archive" action anywhere — see
+// isModelFinished() in openModels.js for how it naturally drops out of
+// consideration once its own Entré has reached target and En cours hits 0.
 methodeRouter.post('/models', async (req, res) => {
   const { client, qteTotale, debut, finPrevue, dessin, commande, chainNumber } = req.body || {}
   if (!client || !chainNumber) return res.status(400).json({ error: 'client_and_chain_required' })
@@ -53,16 +65,6 @@ methodeRouter.post('/models', async (req, res) => {
   const now = new Date().toISOString()
   const id = `mdl_${nanoid(10)}`
 
-  // Deactivates whatever root model was running on this chain AND any of
-  // its Couleur/Variante variants — a variant can never outlive its parent.
-  // The subquery sees the pre-update state (a single UPDATE statement), so
-  // this correctly captures "the old root" before it's flipped to active=0.
-  await run(
-    `UPDATE models SET active = 0
-     WHERE (chain_number = $1 AND active = 1 AND parent_model_id IS NULL)
-        OR parent_model_id IN (SELECT id FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL)`,
-    [chainNumber]
-  )
   await run(
     `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9)`,

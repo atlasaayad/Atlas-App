@@ -27,44 +27,136 @@ const OPERATION_SUGGESTIONS = [
   'Surjet',
 ]
 
+// Chain overlap: a chain's Entré reaching its target while it's still
+// mid-process/exiting, and a new model starting to be fed into the SAME
+// chain — ordinary, expected factory operation (see README "Chain overlap
+// — a new model without closing the old one"), not an edge case to hide
+// behind a confirmation step. A chain can therefore have more than one open
+// model (see openModels.js server-side) — `openModels` (oldest first) is
+// what `/chains` now returns per chain instead of a single `model`.
+// `selectedModelId` is which one Agent Méthode is currently viewing/
+// editing; it's never displaced by a background refresh (only by an
+// explicit pick or by the chain actually changing), matching the same
+// "never discard what the user is doing" rule as everything else here.
 export default function MethodeForm({ token, chainNumber }) {
   const [loading, setLoading] = useState(true)
+  const [openModels, setOpenModels] = useState([])
+  const [selectedModelId, setSelectedModelId] = useState(null)
   const [model, setModel] = useState(null)
   const [dashboard, setDashboard] = useState(null)
+  const [showCreateForm, setShowCreateForm] = useState(false)
 
   // Silent re-fetch (no `loading` flip) — used after every save so a tab
   // doesn't unmount/remount and lose its own state (which tab is open, an
   // in-progress form, the live launch-timer countdown's interval) every
   // time something is saved. Only the initial load / chain switch below
-  // shows the "Chargement…" full-screen state.
-  async function refresh() {
+  // shows the "Chargement…" full-screen state. `preferredModelId` lets a
+  // caller (picking a pill, or a just-created model) steer which model
+  // becomes selected once the fresh list comes back.
+  async function refresh(preferredModelId) {
     const chains = await api.getChains()
     const info = chains.find((c) => c.chainNumber === chainNumber)
-    if (info?.model) {
+    const models = info?.models || (info?.model ? [info.model] : [])
+    setOpenModels(models)
+
+    const isOpen = (id) => id && models.some((m) => m.id === id)
+    const targetId = isOpen(preferredModelId) ? preferredModelId : isOpen(selectedModelId) ? selectedModelId : models[0]?.id || null
+
+    if (targetId) {
       // Dashboard fetched alongside the model so the Présence tab can show
       // today's actual headcount (rh_attendance) next to the required
       // headcount (effectif_requis) — getModel() alone only has the latter.
-      const [m, dash] = await Promise.all([api.getModel(info.model.id), api.getDashboardByChain(chainNumber)])
+      const [m, dash] = await Promise.all([api.getModel(targetId), api.getDashboard(targetId)])
       setModel(m)
       setDashboard(dash)
+      setSelectedModelId(targetId)
+      setShowCreateForm(false)
     } else {
       setModel(null)
       setDashboard(null)
+      setSelectedModelId(null)
     }
   }
 
   useEffect(() => {
     setLoading(true)
+    setSelectedModelId(null)
+    setShowCreateForm(false)
     refresh().finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainNumber])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!model) return <CreateModelForm token={token} chainNumber={chainNumber} onCreated={refresh} />
-  return <EditModel token={token} model={model} dashboard={dashboard} onSaved={refresh} />
+
+  // Nothing open on this chain yet, or explicitly starting a new one —
+  // the overlap bar (if there's already something open) stays visible above
+  // the create form, so switching back to an existing model is one tap away.
+  if (!model || showCreateForm) {
+    return (
+      <div className="space-y-4">
+        {openModels.length > 0 && (
+          <ModelOverlapBar
+            openModels={openModels}
+            selectedModelId={showCreateForm ? null : selectedModelId}
+            onSelect={(id) => refresh(id)}
+            onAddNew={() => setShowCreateForm(true)}
+          />
+        )}
+        <CreateModelForm
+          token={token}
+          chainNumber={chainNumber}
+          onCreated={(newId) => refresh(newId)}
+          onCancel={openModels.length > 0 ? () => refresh() : null}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <ModelOverlapBar openModels={openModels} selectedModelId={selectedModelId} onSelect={(id) => refresh(id)} onAddNew={() => setShowCreateForm(true)} />
+      <EditModel token={token} model={model} dashboard={dashboard} onSaved={() => refresh()} />
+    </div>
+  )
 }
 
-function CreateModelForm({ token, chainNumber, onCreated }) {
+// Pills to switch between this chain's open models (only rendered when
+// there's more than one) plus an "add a new one in parallel" action that's
+// ALWAYS available — even with just one open model — since that's exactly
+// how a second one gets started: not by closing the first (there is no such
+// action anywhere), just by creating a new model on the same chain.
+function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
+  if (openModels.length === 0) return null
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {openModels.length > 1 &&
+        openModels.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => onSelect(m.id)}
+            className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium ${
+              selectedModelId === m.id ? 'border-turquoise bg-turquoise/10 text-turquoise' : 'border-slate-700 text-slate-400'
+            }`}
+          >
+            {m.client} ({m.dessin})
+          </button>
+        ))}
+      <button
+        onClick={onAddNew}
+        className="whitespace-nowrap rounded-full border border-dashed border-turquoise/50 px-3 py-1.5 text-xs font-medium text-turquoise active:bg-turquoise/10"
+      >
+        ➕ نموذج جديد بالتوازي
+      </button>
+      {openModels.length > 1 && (
+        <span className="text-xs text-slate-500">
+          {openModels.length} موديلات نشطة بهذه السلسلة (تداخل — عادي وقت انتهاء موديل وبدء آخر)
+        </span>
+      )}
+    </div>
+  )
+}
+
+function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
   const [form, setForm] = useState({ client: '', qteTotale: '', debut: '', finPrevue: '', dessin: '', commande: '' })
   const [saving, setSaving] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
@@ -73,8 +165,8 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
     e.preventDefault()
     setSaving(true)
     try {
-      await api.methode.createModel(token, { ...form, chainNumber })
-      onCreated()
+      const res = await api.methode.createModel(token, { ...form, chainNumber })
+      onCreated(res.id)
     } finally {
       setSaving(false)
     }
@@ -82,9 +174,22 @@ function CreateModelForm({ token, chainNumber, onCreated }) {
 
   return (
     <GlowCard>
-      <div className="mb-3 font-display text-base font-semibold text-slate-100">
-        Nouveau modèle — Chaîne {chainNumber}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="font-display text-base font-semibold text-slate-100">
+          Nouveau modèle — Chaîne {chainNumber}
+        </div>
+        {onCancel && (
+          <button onClick={onCancel} className="text-sm text-slate-400 active:text-slate-200">
+            ✕ إلغاء
+          </button>
+        )}
       </div>
+      {onCancel && (
+        <p className="mb-3 text-xs text-slate-500">
+          هذا يضيف موديل جديد لنفس السلسلة، بلا أي تأثير على الموديل (أو الموديلات) الموجودة أصلاً — كلها تبقى تشتغل
+          بشكل مستقل تماماً، بغامتها الخاصة.
+        </p>
+      )}
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <TextField label="Client" value={form.client} onChange={(v) => setForm({ ...form, client: v })} required />

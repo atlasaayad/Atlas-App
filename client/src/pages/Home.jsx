@@ -116,7 +116,66 @@ export default function Home() {
         </GlowCard>
       )}
 
-      {chainNumber && data && <DashboardBody data={data} />}
+      {chainNumber && data && (data.multi ? <MultiModelDashboard dashboards={data.dashboards} /> : <DashboardBody data={data} />)}
+    </div>
+  )
+}
+
+// Chain overlap: an old model still exiting while a new one is already
+// entering on the same chain — GET /chains/:n/dashboard returns
+// `{multi:true, dashboards:[...]}` (each a full, independent dashboard —
+// see fullDashboard(), routes/public.js) only while 2+ models are open;
+// a normal single-model chain never hits this component at all. Both
+// models' own Entré/Sortie/En cours stay visibly SEPARATE here — never
+// summed into one misleading combined figure, since they're different
+// gammes (unlike Couleur/Variante, which DOES combine — see ColorPill
+// above — because colors share one gamme).
+function MultiModelDashboard({ dashboards }) {
+  const [selectedId, setSelectedId] = useState(dashboards[0]?.id || null)
+  useEffect(() => {
+    if (!dashboards.some((d) => d.id === selectedId)) setSelectedId(dashboards[0]?.id || null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashboards.map((d) => d.id).join(',')])
+
+  const selected = dashboards.find((d) => d.id === selectedId) || dashboards[0]
+
+  return (
+    <div className="space-y-4">
+      <GlowCard>
+        <div className="mb-3 flex items-center gap-2 text-xs font-medium text-amber">
+          ⚠️ {dashboards.length} موديلات نشطة بهذه السلسلة الآن (تداخل — موديل قديم لسه يخرج وموديل جديد بدأ يدخل)
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {dashboards.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => setSelectedId(d.id)}
+              className={`rounded-md border p-3 text-right ${
+                selectedId === d.id ? 'border-turquoise bg-turquoise/10' : 'border-slate-800 bg-navy-900/40'
+              }`}
+            >
+              <div className="font-display text-sm font-semibold text-slate-100">
+                {d.identity.client} <span className="text-slate-500">· {d.identity.dessin}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                <MiniStat label="Entré" value={d.bilan.totalEntree} />
+                <MiniStat label="Sortie" value={d.bilan.totalSortie} />
+                <MiniStat label="En cours" value={d.bilan.enCours} />
+              </div>
+            </button>
+          ))}
+        </div>
+      </GlowCard>
+      {selected && <DashboardBody data={selected} />}
+    </div>
+  )
+}
+
+function MiniStat({ label, value }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="font-mono text-sm font-medium text-turquoise">{value.toLocaleString('fr-FR')}</div>
     </div>
   )
 }

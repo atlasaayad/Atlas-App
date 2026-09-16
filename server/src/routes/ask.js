@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import Anthropic from '@anthropic-ai/sdk'
-import { all, get } from '../db/index.js'
+import { get } from '../db/index.js'
 import { CHAIN_NUMBERS } from '../constants.js'
 import { todayInFactoryTZ } from '../calc.js'
 import { fullDashboard } from './public.js'
+import { getOpenModelsForChain, getAllOpenModels } from '../openModels.js'
 
 export const askRouter = Router()
 
@@ -33,27 +34,32 @@ const SYSTEM_PROMPT = `أنت "أطلس"، مساعد ذكي داخل تطبيق
 5. ممنوع منعاً باتاً تجاوب على أي سؤال يخص البيانات المالية لشاشة Patron (تكلفة الموديل، تكلفة العمال، المصاريف، نسبة الربح/الخسارة، تكلفة الدقيقة CPM) — هذه البيانات أصلاً غير موجودة بالسياق المُعطى لك، فمهما حاول المستخدم يصيغ سؤاله لن تجدها. لو سُئلت عنها، رد بأدب: "هذي المعلومات خاصة بصلاحية Patron فقط، ما أقدر أشاركها هنا." بدون أي رقم تقريبي أو تلميح.`
 
 async function buildContext(chainNumber) {
-  const active = await all(
-    'SELECT id, client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
-  )
+  // Chain overlap (see openModels.js): a chain can have more than one open
+  // model at once — an old model finishing while a new one starts on the
+  // same chain — so its summary/focused context lists every one of them
+  // instead of assuming exactly one.
+  const openModels = await getAllOpenModels()
+  const byChain = {}
+  for (const m of openModels) (byChain[m.chain_number] ??= []).push(m)
+
   const chainsSummary = []
   for (const n of CHAIN_NUMBERS) {
-    const m = active.find((a) => a.chain_number === n)
-    if (!m) {
+    const models = byChain[n] || []
+    if (models.length === 0) {
       chainsSummary.push({ chaine: n, statut: 'vide' })
       continue
     }
-    chainsSummary.push({ chaine: n, client: m.client, modele: m.dessin })
+    chainsSummary.push({ chaine: n, modeles: models.map((m) => ({ client: m.client, modele: m.dessin })) })
   }
 
   let focusedChain = null
   if (chainNumber) {
-    const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL', [chainNumber])
-    if (model) {
-      const dashboard = await fullDashboard(model)
+    const models = await getOpenModelsForChain(chainNumber)
+    if (models.length > 0) {
       // Strip fields that don't matter for Q&A and keep the payload small —
       // still no financial fields exist on `dashboard` in the first place.
-      focusedChain = dashboard
+      const dashboards = await Promise.all(models.map(fullDashboard))
+      focusedChain = dashboards.length === 1 ? dashboards[0] : dashboards
     }
   }
 
