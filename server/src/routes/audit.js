@@ -27,7 +27,15 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
     return res.status(400).json({ error: 'invalid_range' })
   }
 
-  const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL', [chainNumber])
+  // A chain can have more than one open model at once (see openModels.js) —
+  // this report stays chain-wide (deliberately spans a model change/overlap
+  // within the picked date range, same as Historique), so "Requis" here
+  // just needs ONE deterministic reference model rather than an arbitrary
+  // implicit DB row order: the primary (oldest created) one.
+  const model = await get(
+    'SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL ORDER BY created_at ASC LIMIT 1',
+    [chainNumber]
+  )
 
   const requiredRows = model
     ? await all('SELECT specialty, required FROM effectif_requis WHERE model_id = $1', [model.id])

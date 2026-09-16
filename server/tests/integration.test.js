@@ -784,7 +784,12 @@ test('Temps de lancement: Démarrer/Arrêter، هدف تحقق بدون سبب،
     assert.equal(details.responsible, 'Omar (Mécanicien)')
     assert.equal(details.reasonCode, 'machine_breakdown')
 
-    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    // Chain 8 now has two open models at once (modelId + modelId2 — creating
+    // a second model no longer retires the first, see the "chain overlap"
+    // feature below), so /chains/:n/dashboard would return the new `multi`
+    // shape here; querying modelId2 directly is what this test actually
+    // wants regardless.
+    const dashboard = await call(`/models/${modelId2}/dashboard`)
     assert.equal(dashboard.data.launchTimer.responsible, 'Omar (Mécanicien)')
   })
 })
@@ -1174,7 +1179,11 @@ test('Couleur/Variante: variante hérite VT/DT sans ressaisie, deux couleurs sai
 // model's production_history/quality_history rows into the new model's live
 // figures, because fullDashboard()'s chain-wide queries filtered only by
 // chain_number/date, never by which model actually owns those rows.
-test("changement de modèle sur une chaîne déjà utilisée: aucune contamination par l'ancien modèle inactif", async (t) => {
+// A model created on a chain that already has one active no longer retires
+// the old one (see the "chain overlap" feature test below) — each model's
+// OWN dashboard (fetched by its own id, GET /models/:id/dashboard) must
+// still never mix in the other's figures, exactly as before.
+test("un nouveau modèle sur une chaîne déjà occupée n'écrase ni ne contamine l'ancien (consultés chacun par leur propre id)", async (t) => {
   const TEST_CHAIN = 8
   const methodeToken = await login('methode', '1111')
   const productionToken = await login('production', '2222')
@@ -1200,7 +1209,7 @@ test("changement de modèle sur une chaîne déjà utilisée: aucune contaminati
     if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
   })
 
-  // The old model logs real production/quality today, before it's replaced.
+  // The old model logs real production/quality today.
   await call(`/production/models/${oldId}/hourly/0`, {
     method: 'PUT',
     token: productionToken,
@@ -1213,7 +1222,9 @@ test("changement de modèle sur une chaîne déjà utilisée: aucune contaminati
   })
   await call(`/production/models/${oldId}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 1000 } })
 
-  // A brand-new model replaces it on the exact same chain, same day.
+  // A brand-new model is created on the exact same chain, same day — it no
+  // longer retires the old one (the old one still has 500 En cours, nowhere
+  // near finished either way).
   const created = await call('/methode/models', {
     method: 'POST',
     token: methodeToken,
@@ -1222,9 +1233,8 @@ test("changement de modèle sur une chaîne déjà utilisée: aucune contaminati
   assert.equal(created.status, 201)
   newId = created.data.id
 
-  await t.test("le nouveau modèle démarre à zéro — rien de l'ancien modèle ne fuite dans son heure du jour", async () => {
-    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
-    assert.equal(dash.data.id, newId)
+  await t.test("le nouveau modèle (consulté par son propre id) démarre à zéro — rien de l'ancien ne fuite dedans", async () => {
+    const dash = await call(`/models/${newId}/dashboard`)
     assert.ok(dash.data.hourly.every((h) => h.qty === 0))
     assert.equal(dash.data.bilan.totalSortie, 0)
     assert.equal(dash.data.objectifAtteintPct, 0)
@@ -1232,29 +1242,14 @@ test("changement de modèle sur une chaîne déjà utilisée: aucune contaminati
     assert.equal(dash.data.quality.pieceRetoucheCumulative, 0)
   })
 
-  // The dashboard isn't the only place this leaked from — Agent Production's
-  // and Quality's OWN hourly-entry screens (GET /hourly, what a worker
-  // actually sees when opening the tab) had the exact same unscoped
-  // chain_number+date query, independent of fullDashboard()'s.
-  await t.test("l'écran Agent Production lui-même (GET /hourly) ne montre pas non plus les données de l'ancien modèle", async () => {
-    const hourly = await call(`/production/models/${newId}/hourly?date=${today}`, { token: productionToken })
-    assert.ok(hourly.data.hourly.every((h) => h.qty === 0))
-  })
-
-  await t.test("l'écran Quality lui-même (GET /hourly) ne montre pas non plus les données de l'ancien modèle", async () => {
-    const hourly = await call(`/quality/models/${newId}/hourly?date=${today}`, { token: qualityToken })
-    assert.ok(hourly.data.hourly.every((h) => h.qty === 0 && h.pieceRetouche === 0))
-  })
-
-  await t.test("la propre production du nouveau modèle s'affiche correctement, toujours sans mélange avec l'ancien", async () => {
+  await t.test("la propre production du nouveau modèle (consultée par son propre id) s'affiche correctement, sans mélange", async () => {
     await call(`/production/models/${newId}/hourly/1`, {
       method: 'PUT',
       token: productionToken,
       body: { qty: 20, date: today },
     })
-    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
-    assert.equal(dash.data.hourly.find((h) => h.index === 0).qty, 0) // l'ancien slot reste à 0
-    assert.equal(dash.data.hourly.find((h) => h.index === 1).qty, 20) // exactement ce que CE modèle a saisi
+    const dash = await call(`/models/${newId}/dashboard`)
+    assert.equal(dash.data.hourly.find((h) => h.index === 1).qty, 20)
     assert.equal(dash.data.bilan.totalSortie, 20)
   })
 
@@ -1262,6 +1257,153 @@ test("changement de modèle sur une chaîne déjà utilisée: aucune contaminati
     const oldDash = await call(`/models/${oldId}/dashboard`)
     assert.equal(oldDash.data.hourly.find((h) => h.index === 0).qty, 500)
     assert.equal(oldDash.data.bilan.totalSortie, 500)
+  })
+})
+
+// The chain-overlap feature itself — the real, ordinary factory scenario a
+// UX review surfaced: a model's Entré reaches its target while it's still
+// mid-process/exiting, and a new model starts being fed into the SAME
+// chain at the same time. Covers the exact 4 points asked for: (1) the new
+// model gets its own fully independent gamme/VT/DT, (2) both can log a real
+// qty for the very same hour, (3) the old one drops out of the
+// hourly-entry selector on its own once it's genuinely finished (no manual
+// "close" action anywhere), (4) Home's chain-dashboard shows both clearly
+// while they overlap, and goes back to a single dashboard once the old one
+// finishes.
+test('Chevauchement de modèles: un ancien qui finit et un nouveau qui démarre sur la même chaîne', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const today = todayInFactoryTZ()
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+
+  const oldModel = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_OVERLAP_OLD', qteTotale: 100, dessin: 'OV-OLD', chainNumber: TEST_CHAIN, debut: today },
+  })
+  assert.equal(oldModel.status, 201)
+  const oldId = oldModel.data.id
+  // Gamme totalling 200s -> VT = 200/60 ≈ 3.33min, independent of the new model's.
+  await call(`/methode/models/${oldId}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', machine: 'x', tps: 200 }] } })
+
+  let newId
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [oldId])
+    if (newId) await run('DELETE FROM models WHERE id = $1', [newId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [oldId])
+    if (newId) await run('DELETE FROM audit_log WHERE model_id = $1', [newId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  // Old model's Entré has reached its target (100) -- it's still mid-process
+  // (En cours = 100, nothing sorti yet) when the new model starts.
+  await call(`/production/models/${oldId}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 100 } })
+
+  await t.test("un nouveau modèle peut être créé sur la chaîne SANS retirer l'ancien — les deux ont leur propre gamme indépendante", async () => {
+    const created = await call('/methode/models', {
+      method: 'POST',
+      token: methodeToken,
+      body: { client: 'TEST_OVERLAP_NEW', qteTotale: 200, dessin: 'OV-NEW', chainNumber: TEST_CHAIN, debut: today },
+    })
+    assert.equal(created.status, 201)
+    newId = created.data.id
+    // Gamme totalling 400s -> VT = 400/60 ≈ 6.67min -- a completely different
+    // value from the old model's, proving no gamme/VT/DT sharing occurs.
+    const gamme = await call(`/methode/models/${newId}/gamme`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { lines: [{ operation: 'B', machine: 'y', tps: 400 }] },
+    })
+    assert.equal(gamme.status, 200)
+    assert.equal(gamme.data.vt, 400 / 60)
+
+    // The old model is still there, untouched, still active.
+    const oldStill = await get('SELECT active FROM models WHERE id = $1', [oldId])
+    assert.equal(oldStill.active, 1)
+    const oldDash = await call(`/models/${oldId}/dashboard`)
+    assert.equal(oldDash.status, 200)
+    assert.notEqual(oldDash.data.vt, gamme.data.vt) // never shares the new model's gamme
+  })
+
+  await t.test('les deux modèles peuvent saisir une quantité réelle et séparée pour la MÊME heure (comme les couleurs)', async () => {
+    const putOld = await call(`/production/models/${oldId}/hourly/4`, { method: 'PUT', token: productionToken, body: { qty: 5, date: today } })
+    assert.equal(putOld.status, 200)
+    // Targeting the sibling root via targetModelId, same mechanism as a colour variant.
+    const putNew = await call(`/production/models/${oldId}/hourly/4`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 10, date: today, targetModelId: newId },
+    })
+    assert.equal(putNew.status, 200)
+
+    const rows = await all(
+      'SELECT model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2 AND slot_index = 4',
+      [TEST_CHAIN, today]
+    )
+    assert.equal(rows.length, 2) // both rows exist, neither overwrote the other
+    const byModel = Object.fromEntries(rows.map((r) => [r.model_id, r.qty]))
+    assert.equal(byModel[oldId], 5)
+    assert.equal(byModel[newId], 10)
+
+    // Agent Production's own hourly-entry screen shows BOTH as selectable
+    // entries with the combined qty for that hour, and the correct
+    // per-model breakdown -- the exact same mechanism as Couleur/Variante,
+    // generalized to two independent models instead of two colours of one.
+    const hourly = await call(`/production/models/${oldId}/hourly?date=${today}`, { token: productionToken })
+    assert.equal(hourly.data.variants.length, 1)
+    assert.equal(hourly.data.variants[0].id, newId)
+    const slot4 = hourly.data.hourly.find((s) => s.index === 4)
+    assert.equal(slot4.qty, 15) // 5 + 10 combined
+    const bySlotModel = Object.fromEntries(slot4.byModel.map((c) => [c.modelId, c.qty]))
+    assert.equal(bySlotModel[oldId], 5)
+    assert.equal(bySlotModel[newId], 10)
+  })
+
+  await t.test("l'ancien modèle disparaît tout seul de la sélection active une fois vraiment fini (Entré >= cible ET En cours = 0) — aucun bouton manuel", async () => {
+    // Old model: Entré=100 (already at target), Sortie so far = 5 (from the
+    // hour above) -> En cours = 95, still open.
+    let open = await call(`/production/models/${oldId}/hourly?date=${today}`, { token: productionToken })
+    assert.equal(open.data.variants.length, 1) // both still open
+
+    // Finish exiting the old model's remaining 95 pieces.
+    await call(`/production/models/${oldId}/hourly/5`, { method: 'PUT', token: productionToken, body: { qty: 95, date: today } })
+
+    // Now old model: Entré=100, Sortie=5+95=100 -> En cours=0, Entré>=cible -> finished.
+    open = await call(`/production/models/${newId}/hourly?date=${today}`, { token: productionToken })
+    assert.equal(open.data.variants.length, 0) // the old model dropped out on its own
+    assert.equal(open.data.hourly.find((s) => s.index === 5).qty, 0) // and it's no longer part of the (now single-model) combined qty either
+
+    // Still fully queryable by its own id -- "finished" ≠ "deleted".
+    const oldDash = await call(`/models/${oldId}/dashboard`)
+    assert.equal(oldDash.status, 200)
+    assert.equal(oldDash.data.bilan.totalSortie, 100)
+  })
+
+  await t.test("Home (le dashboard de la chaîne) montre les deux clairement pendant le chevauchement, puis redevient un seul après", async () => {
+    // Roll back to the overlapping state to verify the `multi` shape (undo
+    // the previous subtest's closing production, since it only mutated
+    // production_history for slot 5 -- delete that row directly).
+    await run('DELETE FROM production_history WHERE model_id = $1 AND slot_index = 5', [oldId])
+
+    const multi = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(multi.status, 200)
+    assert.equal(multi.data.multi, true)
+    assert.equal(multi.data.dashboards.length, 2)
+    const ids = multi.data.dashboards.map((d) => d.id).sort()
+    assert.deepEqual(ids, [newId, oldId].sort())
+    // Never merged into one combined number -- each keeps its own bilan.
+    const oldEntry = multi.data.dashboards.find((d) => d.id === oldId)
+    assert.equal(oldEntry.bilan.totalSortie, 5)
+
+    // Re-finish the old model the same way as before.
+    await call(`/production/models/${oldId}/hourly/5`, { method: 'PUT', token: productionToken, body: { qty: 95, date: today } })
+
+    const single = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(single.status, 200)
+    assert.equal(single.data.multi, undefined) // back to the plain single-dashboard shape
+    assert.equal(single.data.id, newId)
   })
 })
 
