@@ -356,6 +356,30 @@ CREATE TABLE IF NOT EXISTS personnel_admin_history (
   created_at TEXT,
   updated_at TEXT
 );
+
+-- Planning — Agent Méthode's hourly production PLAN for a model, entered
+-- ahead of real production so Home can show Plan vs Réel. Keyed by model_id
+-- (not chain_number) since a plan belongs to exactly one model's own
+-- launch, same as VT/DT/gamme — during a chain overlap (see openModels.js),
+-- each open root model has its own completely independent plan, never
+-- combined. Same (date, slot_index) shape as production_history so the two
+-- line up hour-for-hour, but this is its own table, never touched by Agent
+-- Production — a plan and its real outcome are two separate facts about the
+-- same hour. No row at all means "no plan for that hour" (never a fake 0),
+-- matching the rest of ATLAS: Agent Méthode deletes the row instead of
+-- writing a 0 when a previously-planned hour is cleared.
+CREATE TABLE IF NOT EXISTS planning_hourly (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  chain_number INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  slot_index INTEGER NOT NULL,
+  qty INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE (model_id, date, slot_index)
+);
+CREATE INDEX IF NOT EXISTS idx_planning_hourly_model_date ON planning_hourly (model_id, date);
 `
 
 // One-time (per old specialty code), idempotent specialty rename/merge

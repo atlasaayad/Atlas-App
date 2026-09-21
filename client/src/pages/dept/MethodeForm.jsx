@@ -238,6 +238,7 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
 const TABS = [
   ['identite', 'Identité', null],
   ['gamme', 'Gamme de montage', null],
+  ['planning', '📊 Planning', null],
   ['effectif', '🎯 Effectif', 'target'],
   ['presence', '📅 Présence', 'daily'],
   ['lancement', 'Temps de lancement', null],
@@ -284,6 +285,7 @@ function EditModel({ token, model, dashboard, onSaved }) {
 
       {tab === 'identite' && <IdentiteTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'gamme' && <GammeTab token={token} model={model} onSaved={onSaved} />}
+      {tab === 'planning' && <PlanningTab token={token} model={model} />}
       {tab === 'effectif' && <EffectifTab token={token} model={model} onSaved={onSaved} />}
       {tab === 'presence' && <PresenceTab token={token} model={model} dashboard={dashboard} onSaved={onSaved} />}
       {tab === 'lancement' && <LaunchTimerTab token={token} model={model} onSaved={onSaved} />}
@@ -739,6 +741,158 @@ function GammeTab({ token, model, onSaved }) {
       </button>
       <div className="mt-4">
         <SaveButton onClick={submit} saving={saving} saved={saved} />
+      </div>
+    </GlowCard>
+  )
+}
+
+// Planning — Agent Méthode's hourly production PLAN, entered ahead of real
+// production so Home can show Plan vs Réel (see planning.js server-side).
+// Unlike Présence/hourly entry elsewhere, future dates are the whole point
+// here — there's no "max: today" on the date picker, only a "min: Début"
+// (nothing is planned before the model even starts). Bulk-saves one whole
+// day at a time (all 9 hours, one "Enregistrer") rather than a per-hour OK
+// button — there's no time pressure planning ahead, unlike logging what
+// just happened on the floor. An hour left blank stays "غير مخطط" (no
+// plan), never a fake 0 — the server deletes that slot's row entirely.
+function PlanningTab({ token, model }) {
+  const TODAY = todayInFactoryTZ()
+  const [selectedDate, setSelectedDate] = useState(model.debut || TODAY)
+  const [hourly, setHourly] = useState([])
+  const [summary, setSummary] = useState({ totalPlanned: 0, expectedFinishDate: null })
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  const [retryTick, setRetryTick] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
+
+  const minDate = model.debut || null
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setLoadError(false)
+    api.methode
+      .getPlanning(token, model.id, selectedDate)
+      .then((r) => {
+        if (cancelled) return
+        setHourly(r.hourly)
+        setSummary({ totalPlanned: r.totalPlanned, expectedFinishDate: r.expectedFinishDate })
+        setLoading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoadError(true)
+        setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token, model.id, selectedDate, retryTick])
+
+  function handleDateChange(value) {
+    if (minDate && value < minDate) return
+    setSelectedDate(value)
+  }
+
+  function updateSlot(idx, value) {
+    setHourly((prev) => prev.map((s) => (s.index === idx ? { ...s, qty: value } : s)))
+  }
+
+  async function submit() {
+    setSaving(true)
+    try {
+      const payload = hourly.map((s) => ({
+        index: s.index,
+        qty: s.qty === '' || s.qty === null || s.qty === undefined ? null : Number(s.qty),
+      }))
+      const res = await api.methode.updatePlanning(token, model.id, selectedDate, payload)
+      setSummary({ totalPlanned: res.totalPlanned, expectedFinishDate: res.expectedFinishDate })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const qteTotale = model.qte_totale || 0
+  const overPlanned = qteTotale > 0 && summary.totalPlanned > qteTotale
+
+  return (
+    <GlowCard>
+      <p className="mb-3 text-sm text-slate-400">
+        <b className="text-slate-300">Planning</b> — الكمية المخططة لكل ساعة، قبل بداية الإنتاج الحقيقي — يقدر يكون
+        بداية بطيئة وتسريع بالوسط، ما يشترط رقم ثابت لكل ساعة. النظام كيقارنها أوتوماتيكياً بالإنتاج الحقيقي (Plan
+        مقابل Réel، بادينا Home).
+      </p>
+
+      <div className="mb-4 flex flex-wrap gap-4 text-sm">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Total planifié</div>
+          <div className={`font-mono ${overPlanned ? 'text-amber' : 'text-turquoise'}`}>
+            {summary.totalPlanned.toLocaleString('fr-FR')} / {qteTotale.toLocaleString('fr-FR')}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">تاريخ الانتهاء المتوقع</div>
+          <div className="font-mono text-turquoise">{summary.expectedFinishDate || 'غير محدد بعد'}</div>
+        </div>
+      </div>
+      {overPlanned && (
+        <div className="mb-3 rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
+          ⚠️ مجموع المخطط ({summary.totalPlanned.toLocaleString('fr-FR')}) تجاوز Qté totale (
+          {qteTotale.toLocaleString('fr-FR')}) — تأكد من الأرقام.
+        </div>
+      )}
+
+      <label className="mb-3 block max-w-xs">
+        <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">اليوم</span>
+        <input
+          type="date"
+          value={selectedDate}
+          min={minDate || undefined}
+          onChange={(e) => handleDateChange(e.target.value)}
+          className="h-11 w-full rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
+        />
+      </label>
+
+      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
+          Chargement…
+        </div>
+      ) : loadError ? (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <span className="text-sm text-status-bad">فشل تحميل المخطط — تحقق من الاتصال.</span>
+          <button
+            onClick={() => setRetryTick((t) => t + 1)}
+            className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {hourly.map((slot) => (
+            <div key={slot.index} className="flex items-center gap-2.5">
+              <span className="w-24 shrink-0 font-mono text-xs text-slate-400">{slot.label}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="غير مخطط"
+                value={slot.qty ?? ''}
+                onChange={(e) => updateSlot(slot.index, e.target.value)}
+                className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 placeholder:text-slate-600 focus:border-turquoise focus:outline-none"
+              />
+              {voiceMode && <VoiceMicButton label={slot.label} onConfirm={(n) => updateSlot(slot.index, n)} />}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-4">
+        <SaveButton onClick={submit} saving={saving || loading || loadError} saved={saved} />
       </div>
     </GlowCard>
   )

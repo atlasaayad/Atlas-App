@@ -2,9 +2,10 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { SPECIALTIES, DELAY_REASONS } from '../constants.js'
+import { SPECIALTIES, DELAY_REASONS, HOURLY_SLOTS } from '../constants.js'
 import { computeVTMinutes, computeDT, computeLaunchTimerState, todayInFactoryTZ } from '../calc.js'
 import { saveAttendance, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
+import { getPlanningSummary } from '../planning.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -211,6 +212,69 @@ methodeRouter.get('/models/:id/attendance', async (req, res) => {
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
   const attendance = await getAttendanceForDate(model.chain_number, date)
   res.json({ date, attendance })
+})
+
+// Planning — the hourly production PLAN Agent Méthode enters ahead of real
+// production, one day at a time, so Home can show Plan vs Réel (see
+// planning.js). Unlike Agent Production's/Quality's hourly entry, dates
+// here are NOT capped at today — planning ahead is the entire point, so
+// tomorrow/next week are valid targets; only a date before Début is
+// rejected (nothing is planned before the model even starts).
+methodeRouter.get('/models/:id/planning', async (req, res) => {
+  const model = await get('SELECT id, qte_totale, debut FROM models WHERE id = $1', [req.params.id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+
+  const date = String(req.query.date || model.debut || todayInFactoryTZ())
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
+
+  const [rows, summary] = await Promise.all([
+    all('SELECT slot_index, qty FROM planning_hourly WHERE model_id = $1 AND date = $2', [req.params.id, date]),
+    getPlanningSummary(model),
+  ])
+  const byIndex = Object.fromEntries(rows.map((r) => [r.slot_index, r.qty]))
+  // A slot with no row is `qty: null` (never a fake 0) — the client leaves
+  // its input blank rather than showing an unplanned hour as "0 planned".
+  const hourly = HOURLY_SLOTS.map((s) => ({ ...s, qty: s.index in byIndex ? byIndex[s.index] : null }))
+
+  res.json({ date, hourly, qteTotale: model.qte_totale || 0, totalPlanned: summary.totalPlanned, expectedFinishDate: summary.expectedFinishDate })
+})
+
+// Bulk-saves one full day's plan in a single request (9 slots at once) —
+// Agent Méthode fills in a whole day, then one "Enregistrer", not a
+// per-hour OK button like live production entry (there's no time pressure
+// planning ahead, unlike logging what just happened on the floor). Each
+// slot's qty is either a number (upsert) or null (delete — clears a
+// previously-planned hour back to "not planned", never a fake 0).
+methodeRouter.put('/models/:id/planning/:date', async (req, res) => {
+  const { id, date } = req.params
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
+
+  const model = await get('SELECT id, chain_number, debut FROM models WHERE id = $1', [id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+  if (model.debut && date < model.debut) return res.status(400).json({ error: 'date_before_debut' })
+
+  const hourly = Array.isArray(req.body?.hourly) ? req.body.hourly : []
+  const now = new Date().toISOString()
+  await Promise.all(
+    hourly
+      .filter((h) => h && Number.isInteger(h.index) && h.index >= 0 && h.index <= 8)
+      .map((h) => {
+        if (h.qty === null || h.qty === '' || h.qty === undefined) {
+          return run('DELETE FROM planning_hourly WHERE model_id = $1 AND date = $2 AND slot_index = $3', [id, date, h.index])
+        }
+        return run(
+          `INSERT INTO planning_hourly (id, model_id, chain_number, date, slot_index, qty, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+           ON CONFLICT (model_id, date, slot_index)
+             DO UPDATE SET qty = excluded.qty, updated_at = excluded.updated_at`,
+          [`plh_${nanoid(10)}`, id, model.chain_number, date, h.index, Math.max(0, Number(h.qty) || 0), now]
+        )
+      })
+  )
+
+  const summary = await getPlanningSummary(await get('SELECT id, qte_totale FROM models WHERE id = $1', [id]))
+  await logAudit({ deptKey: 'methode', modelId: id, action: 'update_planning_hourly', details: { date, hourly } })
+  res.json({ ok: true, date, totalPlanned: summary.totalPlanned, expectedFinishDate: summary.expectedFinishDate })
 })
 
 const DELAY_REASON_CODES = new Set(DELAY_REASONS.map((r) => r.code))
