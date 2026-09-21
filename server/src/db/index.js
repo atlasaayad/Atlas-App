@@ -38,12 +38,24 @@ let schemaReady = null
 // first query of each cold start rather than at import time, so a bad
 // DATABASE_URL surfaces as a normal request error instead of crashing the
 // whole function on load.
+//
+// On failure, the cached promise is cleared so the NEXT call retries from
+// scratch instead of replaying the same rejection forever. Without this, a
+// single transient failure here (e.g. Neon's serverless compute being cold
+// and timing out on the very first query after a deploy) would otherwise
+// permanently wedge every route on that warm instance — every table this
+// function is meant to create would simply never exist for the lifetime of
+// that instance, since nothing else ever calls it again.
 export function ensureSchema() {
   if (!schemaReady) {
     schemaReady = run(SCHEMA_SQL)
       .then(migrateSpecialtyNames)
       .then(migrateProductionHistoryUniqueKey)
       .then(migrateQualityHistoryUniqueKey)
+      .catch((err) => {
+        schemaReady = null
+        throw err
+      })
   }
   return schemaReady
 }

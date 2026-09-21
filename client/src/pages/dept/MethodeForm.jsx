@@ -892,7 +892,7 @@ function PlanningTab({ token, model }) {
         </div>
       )}
       <div className="mt-4">
-        <SaveButton onClick={submit} saving={saving || loading || loadError} saved={saved} />
+        <SaveButton onClick={submit} saving={saving} disabled={saving || loading || loadError} saved={saved} />
       </div>
     </GlowCard>
   )
@@ -1249,12 +1249,17 @@ function Metric({ label, value }) {
   )
 }
 
-function SaveButton({ onClick, saving, saved, type }) {
+// `disabled` defaults to `saving` (every existing caller's behavior,
+// unchanged) but can be passed separately — e.g. "the underlying data
+// failed to load, so there's nothing sane to submit yet" is a real reason
+// to disable the button, but it is NOT "currently saving", and must never
+// say "Enregistrement…" for something that was never actually sent.
+function SaveButton({ onClick, saving, saved, disabled, type }) {
   return (
     <button
       type={type || 'button'}
       onClick={onClick}
-      disabled={saving}
+      disabled={disabled ?? saving}
       className="col-span-full w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
     >
       {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
