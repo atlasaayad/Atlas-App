@@ -10,6 +10,7 @@ import EarlyWarningBanner from '../components/EarlyWarningBanner'
 import HistoriqueModal from '../components/HistoriqueModal'
 import DetailsFinaleModal from '../components/DetailsFinaleModal'
 import ClassementModal from '../components/ClassementModal'
+import PlanReelCard from '../components/PlanReelCard'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS, DELAY_REASONS } from '../lib/constants'
@@ -324,6 +325,9 @@ function DashboardBody({ data }) {
           <StatCircle label="En cours" value={displayedBilan.enCours} size="lg" />
         </div>
       </GlowCard>
+
+      {/* Planning — Plan vs Réel, omitted entirely when Agent Méthode never entered one */}
+      <PlanReelCard planning={data.planning} />
 
       {/* Rendement — composite efficiency+quality score, distinct from Objectif atteint% */}
       <GlowCard title="Rendement">

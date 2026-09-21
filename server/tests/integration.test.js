@@ -1624,3 +1624,136 @@ test('Quality: deux couleurs saisissent "Pièces retouche" à la même heure sé
     assert.equal(dash.data.quality.dailyPercentage, computeQualityPct(dash.data.produit, 3))
   })
 })
+
+function addDaysStr(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+test('Planning: Agent Méthode planifie heure par heure, comparé automatiquement au Réel (Plan vs Réel)', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+
+  const today = todayInFactoryTZ()
+  const tomorrow = addDaysStr(today, 1)
+  const yesterday = addDaysStr(today, -1)
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'PLAN_TEST', qteTotale: 200, debut: today, dessin: 'PLN-1', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test("aucun plan saisi → GET renvoie des créneaux vides (null, jamais 0) et le dashboard public omet 'planning'", async () => {
+    const planning = await call(`/methode/models/${modelId}/planning?date=${today}`, { token: methodeToken })
+    assert.equal(planning.status, 200)
+    assert.ok(planning.data.hourly.every((s) => s.qty === null))
+    assert.equal(planning.data.totalPlanned, 0)
+    assert.equal(planning.data.expectedFinishDate, null)
+
+    const dash = await call(`/models/${modelId}/dashboard`)
+    assert.equal(dash.data.planning.hasPlan, false)
+  })
+
+  await t.test("rejette une date avant Début du modèle", async () => {
+    const res = await call(`/methode/models/${modelId}/planning/${yesterday}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { hourly: [{ index: 0, qty: 10 }] },
+    })
+    assert.equal(res.status, 400)
+    assert.equal(res.data.error, 'date_before_debut')
+  })
+
+  await t.test("saisie du plan sur 2 jours → total cumulé correct et date de fin prévue calculée automatiquement", async () => {
+    const putToday = await call(`/methode/models/${modelId}/planning/${today}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { hourly: [{ index: 0, qty: 50 }, { index: 1, qty: 60 }, { index: 2, qty: 60 }] }, // 170
+    })
+    assert.equal(putToday.status, 200)
+    assert.equal(putToday.data.totalPlanned, 170)
+    assert.equal(putToday.data.expectedFinishDate, null) // 170 < 200, pas encore atteint
+
+    // Demain: +40 → cumulé 210 >= 200 (qteTotale) → la fin prévue tombe demain.
+    const putTomorrow = await call(`/methode/models/${modelId}/planning/${tomorrow}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { hourly: [{ index: 0, qty: 40 }] },
+    })
+    assert.equal(putTomorrow.status, 200)
+    assert.equal(putTomorrow.data.totalPlanned, 210)
+    assert.equal(putTomorrow.data.expectedFinishDate, tomorrow)
+  })
+
+  await t.test("GET renvoie exactement les heures saisies, les autres restent null (jamais un faux 0)", async () => {
+    const planning = await call(`/methode/models/${modelId}/planning?date=${today}`, { token: methodeToken })
+    const byIndex = Object.fromEntries(planning.data.hourly.map((s) => [s.index, s.qty]))
+    assert.equal(byIndex[0], 50)
+    assert.equal(byIndex[1], 60)
+    assert.equal(byIndex[2], 60)
+    assert.equal(byIndex[3], null)
+  })
+
+  await t.test("Plan vs Réel sur le dashboard: production réelle logée aujourd'hui comparée heure par heure et jour par jour", async () => {
+    const prod = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 45 },
+    })
+    assert.equal(prod.status, 200)
+
+    const dash = await call(`/models/${modelId}/dashboard`)
+    const planning = dash.data.planning
+    assert.equal(planning.hasPlan, true)
+    assert.equal(planning.totalPlanned, 210)
+    assert.equal(planning.expectedFinishDate, tomorrow)
+
+    const slot0 = planning.todayHourly.find((s) => s.index === 0)
+    assert.equal(slot0.planQty, 50)
+    assert.equal(slot0.realQty, 45)
+    const slot1 = planning.todayHourly.find((s) => s.index === 1)
+    assert.equal(slot1.planQty, 60)
+    assert.equal(slot1.realQty, 0)
+
+    assert.equal(planning.daily.length, 2) // aujourd'hui + demain (la fin prévue)
+    const dayToday = planning.daily.find((d) => d.date === today)
+    assert.equal(dayToday.planQty, 170)
+    assert.equal(dayToday.realQty, 45)
+    assert.equal(dayToday.planCumulative, 170)
+    assert.equal(dayToday.realCumulative, 45)
+    const dayTomorrow = planning.daily.find((d) => d.date === tomorrow)
+    assert.equal(dayTomorrow.planQty, 40)
+    assert.equal(dayTomorrow.realQty, 0)
+    assert.equal(dayTomorrow.planCumulative, 210)
+    assert.equal(dayTomorrow.realCumulative, 45)
+  })
+
+  await t.test("effacer une heure déjà planifiée (qty: null) la supprime réellement, sans laisser un faux 0", async () => {
+    const clear = await call(`/methode/models/${modelId}/planning/${today}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { hourly: [{ index: 2, qty: null }] },
+    })
+    assert.equal(clear.status, 200)
+    assert.equal(clear.data.totalPlanned, 150) // 210 - 60
+
+    const planning = await call(`/methode/models/${modelId}/planning?date=${today}`, { token: methodeToken })
+    const slot2 = planning.data.hourly.find((s) => s.index === 2)
+    assert.equal(slot2.qty, null)
+
+    const row = await get('SELECT id FROM planning_hourly WHERE model_id = $1 AND date = $2 AND slot_index = 2', [modelId, today])
+    assert.equal(row, undefined) // la ligne a été supprimée, pas mise à 0
+  })
+})

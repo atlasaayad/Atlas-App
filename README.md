@@ -374,6 +374,49 @@ the old model's last piece exits and it closes itself, automatically.
   `getOpenModelsForChain()` actually returns more than one row; the common
   case stays byte-identical to before this feature.
 
+### Planning — Plan vs Réel (Agent Méthode + Home)
+
+A new "📊 Planning" tab on Agent Méthode's screen, next to "Gamme de
+montage", lets Agent Méthode enter the model's hourly production PLAN
+ahead of real production — day by day, hour by hour — so Home can show,
+automatically, how the real output compares to what was planned.
+
+- **`planning_hourly`** (new table, `server/src/planning.js`) — one row per
+  `(model_id, date, slot_index)`, same shape as `production_history` but
+  entirely its own table: a plan and its real outcome are two separate
+  facts about the same hour, never mixed. Scoped to the ROOT model alone,
+  same ownership as VT/DT/gamme — during a chain overlap (see above), each
+  open model has its own independent plan, never combined; a Couleur/
+  Variante variant has no plan of its own either, same as it has no gamme
+  of its own. An hour with no row means "not planned" — the client always
+  shows it blank ("غير مخطط"), never a fake 0, and clearing a previously
+  planned hour actually deletes its row rather than writing a 0.
+- **Entering the plan** — Agent Méthode picks a day (no upper bound on the
+  date — planning ahead is the entire point, unlike every other date
+  picker in ATLAS, which caps at today; the lower bound is still the
+  model's own Début) and types a planned qty per hour, free-form — a slow
+  start and a faster middle are both just typed in, no fixed-DT-per-hour
+  assumption. One "Enregistrer" bulk-saves the whole day (9 hours) in a
+  single request — there's no time pressure planning ahead, unlike
+  logging what just happened on the floor, so this doesn't need Agent
+  Production's per-hour "OK" pattern. A live "Total planifié: X / Qté
+  totale" (turns amber past the target) and "تاريخ الانتهاء المتوقع" —
+  the expected finish date, the first day whose planned cumulative
+  reaches Qté totale, always computed live from `planning_hourly`, never
+  stored — sit above the grid the whole time Agent Méthode is entering.
+- **Home — "Planning — Plan vs Réel"** — a new card, shown only when a
+  plan actually exists (`planning.hasPlan`; a model nobody ever planned
+  looks exactly like it did before this feature). Three levels at once,
+  matching Agent Méthode's own spec: a hand-rolled SVG line chart of the
+  cumulative Plan vs Réel curve from Début through whichever is later of
+  today or the plan's own expected finish date; today's hourly Plan/Réel
+  as a small dual-bar chart; and a per-day table with the exact gap in
+  BOTH pieces and % (`diffQty`, `diffPct` — no monetary figure anywhere,
+  by design). Plan is always rendered in the same violet used for Agent
+  Méthode's "🎯 Effectif" tab (a fixed, planned-ahead number); Réel in the
+  app's usual turquoise (live, real data) — reusing that existing color
+  language rather than inventing a new one.
+
 ### État des effectifs (bottom-nav tab, public)
 
 A fourth bottom-nav tab, between Départements and Ask Atlas — no PIN, same

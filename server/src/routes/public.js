@@ -12,6 +12,7 @@ import {
 } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels } from '../openModels.js'
+import { getPlanVsReel } from '../planning.js'
 import {
   computeObjectifJour,
   prodAMaintenant,
@@ -211,6 +212,7 @@ export async function fullDashboard(model) {
     launchTimerRow,
     finaleAttendanceRows,
     colorData,
+    planning,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -286,6 +288,12 @@ export async function fullDashboard(model) {
       // this is a single-element array and the client can treat it as
       // optional. See computeColorBreakdown() below.
       Promise.all(colorModels.map((m) => computeColorBreakdown(m, model.debut, today, model.dt))),
+      // Planning — Plan vs Réel, always scoped to the ROOT model alone
+      // (never per-color): a plan is entered once for the whole launch,
+      // same ownership as VT/DT/gamme, not a per-variant thing. Returns
+      // `{hasPlan:false}` when Agent Méthode never entered one, so a normal
+      // model's dashboard carries no extra weight for this.
+      getPlanVsReel(model),
     ])
 
   const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
@@ -472,6 +480,7 @@ export async function fullDashboard(model) {
     etatDesPostes,
     effectifs,
     launchTimer: formatLaunchTimer(launchTimerRow),
+    planning,
   }
 }
 
