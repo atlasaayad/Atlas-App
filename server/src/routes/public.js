@@ -11,6 +11,7 @@ import {
   WORK_HOURS_PER_DAY,
 } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
+import { getOpenModelsForChain, getAllOpenModels } from '../openModels.js'
 import {
   computeObjectifJour,
   prodAMaintenant,
@@ -57,8 +58,14 @@ publicRouter.get('/models', async (req, res) => {
 })
 
 publicRouter.get('/chains', async (req, res) => {
-  const active = await all('SELECT id, client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL')
-  const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
+  // Chain overlap: a chain can have more than one open root model at once
+  // (see openModels.js) — `models` carries every one of them (oldest
+  // first), `model` stays the first/primary one alone so every existing
+  // caller that only ever reads `.model` (chain pickers, ChainPicker.jsx,
+  // etc.) keeps working unchanged for the common single-model case.
+  const openModels = await getAllOpenModels()
+  const byChain = {}
+  for (const m of openModels) (byChain[m.chain_number] ??= []).push(m)
 
   // "Most recent real activity today" per chain, so the client can default
   // Home to whichever chain someone actually worked on today instead of a
@@ -84,11 +91,15 @@ publicRouter.get('/chains', async (req, res) => {
   }
 
   res.json(
-    CHAIN_NUMBERS.map((n) => ({
-      chainNumber: n,
-      model: byChain[n] || null,
-      lastActivityToday: lastActivityByChain[n] || null,
-    }))
+    CHAIN_NUMBERS.map((n) => {
+      const models = byChain[n] || []
+      return {
+        chainNumber: n,
+        model: models[0] || null,
+        models,
+        lastActivityToday: lastActivityByChain[n] || null,
+      }
+    })
   )
 })
 
@@ -470,10 +481,21 @@ publicRouter.get('/models/:id/dashboard', async (req, res) => {
   res.json(await fullDashboard(model))
 })
 
+// Chain overlap: when exactly one root model is open on this chain, the
+// response is IDENTICAL to before (a single fullDashboard() object) — every
+// existing caller (Home, Ask Atlas, Classement) keeps working unchanged.
+// Only when two (or more) roots are genuinely open at once — see
+// openModels.js — does the shape change, to `{ multi: true, dashboards:
+// [...] }`, one COMPLETE, independent fullDashboard() per open model, never
+// merged into one misleading combined number (they don't share a gamme, so
+// there's no meaningful "combined VT/DT/Rendement" the way Couleur/Variante
+// colors have). Home.jsx is the one caller that understands `multi`.
 publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
-  const model = await get('SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL', [Number(req.params.chainNumber)])
-  if (!model) return res.status(404).json({ error: 'no_active_model' })
-  res.json(await fullDashboard(model))
+  const openModels = await getOpenModelsForChain(Number(req.params.chainNumber))
+  if (openModels.length === 0) return res.status(404).json({ error: 'no_active_model' })
+  if (openModels.length === 1) return res.json(await fullDashboard(openModels[0]))
+  const dashboards = await Promise.all(openModels.map(fullDashboard))
+  res.json({ multi: true, dashboards })
 })
 
 // 🏆 Classement des chaînes — every chain (1-8), ranked by today's
@@ -481,12 +503,19 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
 // this is always computed live from the same real-time figures shown on
 // each chain's own dashboard — no separate cached leaderboard state.
 publicRouter.get('/chains/ranking', async (req, res) => {
-  const active = await all('SELECT * FROM models WHERE active = 1 AND parent_model_id IS NULL')
-  const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
+  // Chain overlap: ranked by the chain's primary (oldest) open model only —
+  // same convention as everywhere else a screen wasn't asked to become
+  // multi-model-aware (see openModels.js) — rather than inventing a
+  // combined score across two models that don't share a gamme. A finished
+  // model (see isModelFinished()) now correctly drops out of the ranking
+  // entirely instead of lingering as "active".
+  const openModels = await getAllOpenModels()
+  const byChain = {}
+  for (const m of openModels) (byChain[m.chain_number] ??= []).push(m)
 
   const entries = await Promise.all(
     CHAIN_NUMBERS.map(async (chainNumber) => {
-      const model = byChain[chainNumber]
+      const model = byChain[chainNumber]?.[0]
       if (!model) return { chainNumber, model: null, rendement: null }
       const dash = await fullDashboard(model)
       return {
@@ -536,8 +565,15 @@ publicRouter.get('/personnel-admin', async (req, res) => {
 // could drift. An empty chain (no active model) still appears, subtotal 0,
 // with no specialty breakdown — never silently dropped.
 publicRouter.get('/effectifs/overview', async (req, res) => {
-  const active = await all('SELECT * FROM models WHERE active = 1 AND parent_model_id IS NULL')
-  const byChain = Object.fromEntries(active.map((m) => [m.chain_number, m]))
+  // Chain overlap: unlike Rendement/VT/DT (which never combine across
+  // different-gamme models — see openModels.js), a headcount is a plain
+  // additive count regardless of which model each worker is entered under,
+  // so a chain's specialty totals here are the SUM across every one of its
+  // open models, not just the primary one — the true number of people
+  // actually on that physical chain right now.
+  const active = await getAllOpenModels()
+  const byChain = {}
+  for (const m of active) (byChain[m.chain_number] ??= []).push(m)
 
   const [rhRows, finaleRows, depotRows, personnelAdmin] = await Promise.all([
     active.length
@@ -554,14 +590,17 @@ publicRouter.get('/effectifs/overview', async (req, res) => {
   for (const r of rhRows) (rhByModel[r.model_id] ??= {})[r.specialty] = r.present
 
   const chains = CHAIN_NUMBERS.map((chainNumber) => {
-    const model = byChain[chainNumber]
-    if (!model) {
+    const models = byChain[chainNumber] || []
+    if (models.length === 0) {
       return { chainNumber, model: null, specialties: [], subtotal: 0 }
     }
-    const present = rhByModel[model.id] || {}
-    const specialties = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0 }))
+    const specialties = SPECIALTIES.map((s) => ({
+      specialty: s,
+      present: models.reduce((sum, m) => sum + (rhByModel[m.id]?.[s] || 0), 0),
+    }))
     const subtotal = specialties.reduce((sum, s) => sum + s.present, 0)
-    return { chainNumber, model: { client: model.client, dessin: model.dessin }, specialties, subtotal }
+    const primary = models[0]
+    return { chainNumber, model: { client: primary.client, dessin: primary.dessin }, specialties, subtotal }
   })
   const chainsTotal = chains.reduce((sum, c) => sum + c.subtotal, 0)
 

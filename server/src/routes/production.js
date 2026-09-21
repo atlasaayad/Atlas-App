@@ -4,6 +4,7 @@ import { get, all, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
 import { todayInFactoryTZ } from '../calc.js'
 import { HOURLY_SLOTS } from '../constants.js'
+import { getHourlyEntryTargets } from '../openModels.js'
 
 export const productionRouter = Router()
 productionRouter.use(requireDept('production'))
@@ -12,41 +13,38 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 // A specific day's hourly slots (defaults to today) — lets Agent Production
 // load a previous day's entries for review/correction, not just today's.
-// Couleur/Variante: when the chain's model has active variants, each slot
-// also carries a byModel breakdown (one entry per color, keyed by model_id)
-// so the client can render one input per color instead of one combined
-// number — omitted entirely when there are no variants, so a normal
-// (single-color) model's response shape is completely unchanged.
+// Selectable entries for this chain: this model's own Couleur/Variante
+// variants PLUS, since a chain overlap is real (see openModels.js), any
+// OTHER root model still open on the same chain (and that root's own
+// variants too) — the exact same `byModel`/one-input-per-entry mechanism
+// generalized from "this model's colors" to "everything this chain is
+// currently working on". Omitted entirely when there's only one entry, so
+// a normal (single-model, no-color) chain's response is completely
+// unchanged.
 productionRouter.get('/models/:id/hourly', async (req, res) => {
-  const model = await get('SELECT chain_number FROM models WHERE id = $1', [req.params.id])
+  const model = await get('SELECT id, chain_number FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
 
   const date = String(req.query.date || todayInFactoryTZ())
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
 
-  const [rows, variantRows] = await Promise.all([
-    // Restricted to this model's own colour family (itself + its active
-    // Couleur/Variante variants, via the subquery) — chain_number alone
-    // would also pick up a previous, now-inactive model's leftover rows on
-    // the same chain (a chain can be reassigned to a brand-new model at any
-    // time; see the identical fix in fullDashboard(), routes/public.js).
-    all(
-      `SELECT slot_index, model_id, qty FROM production_history
-       WHERE chain_number = $1 AND date = $2
-         AND model_id IN (SELECT id FROM models WHERE id = $3 OR parent_model_id = $3)`,
-      [model.chain_number, date, req.params.id]
-    ),
-    all('SELECT id, variant_label FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [req.params.id]),
-  ])
+  const entries = await getHourlyEntryTargets(model)
+  const hasEntries = entries.length > 1
 
-  const variants = variantRows.map((v) => ({ id: v.id, label: v.variant_label }))
-  const hasVariants = variants.length > 0
+  // Restricted to exactly this chain's current entries (model_id = ANY(...))
+  // — chain_number alone would also pick up a previous, now-finished/
+  // unrelated model's leftover rows on the same chain (see the identical
+  // fix in fullDashboard(), routes/public.js).
+  const rows = await all(
+    'SELECT slot_index, model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2 AND model_id = ANY($3)',
+    [model.chain_number, date, entries.map((e) => e.modelId)]
+  )
 
   const hourlyMap = {}
   const byModelMap = {} // slot_index -> { model_id: qty }
   for (const r of rows) {
     hourlyMap[r.slot_index] = (hourlyMap[r.slot_index] || 0) + r.qty
-    if (hasVariants) {
+    if (hasEntries) {
       byModelMap[r.slot_index] ??= {}
       byModelMap[r.slot_index][r.model_id] = r.qty
     }
@@ -54,16 +52,14 @@ productionRouter.get('/models/:id/hourly', async (req, res) => {
 
   const hourly = HOURLY_SLOTS.map((s) => {
     const base = { ...s, qty: hourlyMap[s.index] || 0 }
-    if (!hasVariants) return base
+    if (!hasEntries) return base
     const present = byModelMap[s.index] || {}
     return {
       ...base,
-      byModel: [{ modelId: req.params.id, label: null, qty: present[req.params.id] || 0 }].concat(
-        variants.map((v) => ({ modelId: v.id, label: v.label, qty: present[v.id] || 0 }))
-      ),
+      byModel: entries.map((e) => ({ modelId: e.modelId, label: e.label, qty: present[e.modelId] || 0 })),
     }
   })
-  res.json({ date, hourly, variants })
+  res.json({ date, hourly, variants: entries.slice(1).map((e) => ({ id: e.modelId, label: e.label })) })
 })
 
 // Every hourly entry — today's or a previous day's — is written straight to
@@ -81,22 +77,26 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   const model = await get('SELECT chain_number, debut FROM models WHERE id = $1', [id])
   if (!model) return res.status(404).json({ error: 'not_found' })
 
-  // Couleur/Variante: an entry can target a specific color (targetModelId =
-  // that variant's id) instead of the chain's root model — this is what
-  // lets two colors both log a real, separate qty for the very same hour.
-  // Defaults to the root itself, so a normal (single-color) model's request
-  // is completely unchanged.
+  // An entry can target ANY other model sharing this chain — its own
+  // Couleur/Variante variants, or (a chain overlap — see openModels.js) a
+  // completely independent sibling root model that's also open on this
+  // chain, or that sibling's own variants — not just its own family.
+  // Defaults to the root itself, so a normal (single-model) chain's request
+  // is completely unchanged. The target's OWN début is what's validated
+  // below (not `:id`'s) — an overlapping model can genuinely start later
+  // than whatever's already running on the same chain.
   const targetModelId = req.body?.targetModelId || id
+  let targetModel = model
   if (targetModelId !== id) {
-    const variant = await get('SELECT id FROM models WHERE id = $1 AND parent_model_id = $2', [targetModelId, id])
-    if (!variant) return res.status(400).json({ error: 'invalid_target_model' })
+    targetModel = await get('SELECT debut FROM models WHERE id = $1 AND chain_number = $2', [targetModelId, model.chain_number])
+    if (!targetModel) return res.status(400).json({ error: 'invalid_target_model' })
   }
 
   const today = todayInFactoryTZ()
   const date = String(req.body?.date || today)
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
   if (date > today) return res.status(400).json({ error: 'date_in_future' })
-  if (model.debut && date < model.debut) return res.status(400).json({ error: 'date_before_debut' })
+  if (targetModel.debut && date < targetModel.debut) return res.status(400).json({ error: 'date_before_debut' })
 
   const now = new Date().toISOString()
   // Backdated edits (any date other than today) get flagged explicitly in

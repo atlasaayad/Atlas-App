@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { all } from '../db/index.js'
 import { todayInFactoryTZ, detectDeclineTrend } from '../calc.js'
+import { getAllOpenModels } from '../openModels.js'
 
 export const earlyWarningRouter = Router()
 
@@ -11,9 +12,11 @@ export const earlyWarningRouter = Router()
 // here on the very next check, same as everywhere else.
 earlyWarningRouter.get('/early-warnings', async (req, res) => {
   const today = todayInFactoryTZ()
-  const activeModels = await all(
-    'SELECT id, client, dessin, chain_number FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
-  )
+  // Chain overlap (see openModels.js): checked per OPEN model, not per
+  // chain — a chain with two open models (an old one finishing, a new one
+  // starting) gets each checked independently, and a model that's already
+  // finished no longer lingers here generating stale warnings.
+  const activeModels = await getAllOpenModels()
 
   // One query per active chain, all fired together — a sequential loop here
   // would mean the whole banner (and the Home page load that includes it)
