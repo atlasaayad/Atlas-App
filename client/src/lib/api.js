@@ -107,7 +107,7 @@ export const api = {
       request(`/methode/models/${id}/variants`, { method: 'POST', body: { label, qteTotale }, token }),
     updateVariant: (token, id, variantId, label, qteTotale) =>
       request(`/methode/models/${id}/variants/${variantId}`, { method: 'PUT', body: { label, qteTotale }, token }),
-    getPlanning: (token, id, date) => request(`/methode/models/${id}/planning?date=${date}`, { token }),
+    getPlanning: (token, id) => request(`/methode/models/${id}/planning/all`, { token }),
     updatePlanning: (token, id, date, hourly) =>
       request(`/methode/models/${id}/planning/${date}`, { method: 'PUT', body: { hourly }, token }),
   },

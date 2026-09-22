@@ -746,38 +746,56 @@ function GammeTab({ token, model, onSaved }) {
   )
 }
 
+function addDaysStr(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+const DAY_NAME_FORMAT = new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', weekday: 'long' })
+
+function formatDayLabel(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  const weekday = DAY_NAME_FORMAT.format(d)
+  const dd = String(d.getUTCDate()).padStart(2, '0')
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const yy = String(d.getUTCFullYear()).slice(-2)
+  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${dd}/${mm}/${yy}`
+}
+
 // Planning — Agent Méthode's hourly production PLAN, entered ahead of real
 // production so Home can show Plan vs Réel (see planning.js server-side).
-// Unlike Présence/hourly entry elsewhere, future dates are the whole point
-// here — there's no "max: today" on the date picker, only a "min: Début"
-// (nothing is planned before the model even starts). Bulk-saves one whole
-// day at a time (all 9 hours, one "Enregistrer") rather than a per-hour OK
-// button — there's no time pressure planning ahead, unlike logging what
-// just happened on the floor. An hour left blank stays "غير مخطط" (no
-// plan), never a fake 0 — the server deletes that slot's row entirely.
+// One continuous, scrollable table — a row per day, days appended
+// automatically as they're filled in — never a day-picker to hop between
+// screens with (that was the previous design; this replaces it entirely).
+// Each cell auto-saves on blur (one real request per hour actually
+// touched) — there's no page-wide "Enregistrer" anymore, since there's no
+// single "day" being edited at a time. Unlike Présence/hourly entry
+// elsewhere, planned dates are NOT capped at today — planning ahead is the
+// entire point. An hour left blank stays blank ("—"), never a fake 0 — the
+// server deletes that cell's row entirely when cleared.
 function PlanningTab({ token, model }) {
-  const TODAY = todayInFactoryTZ()
-  const [selectedDate, setSelectedDate] = useState(model.debut || TODAY)
-  const [hourly, setHourly] = useState([])
-  const [summary, setSummary] = useState({ totalPlanned: 0, expectedFinishDate: null })
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [retryTick, setRetryTick] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [voiceMode, setVoiceMode] = useState(false)
-
-  const minDate = model.debut || null
+  const [debut, setDebut] = useState(model.debut)
+  const [hourlySlots, setHourlySlots] = useState([])
+  const [cellsByDay, setCellsByDay] = useState({}) // { "2026-08-01": { "0": 50, "2": 60 } }
+  const [summary, setSummary] = useState({ totalPlanned: 0, expectedFinishDate: null })
+  const [savingCells, setSavingCells] = useState({}) // key `${date}:${index}` -> true
+  const [savedCells, setSavedCells] = useState({})
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setLoadError(false)
     api.methode
-      .getPlanning(token, model.id, selectedDate)
+      .getPlanning(token, model.id)
       .then((r) => {
         if (cancelled) return
-        setHourly(r.hourly)
+        setDebut(r.debut)
+        setHourlySlots(r.hourlySlots)
+        setCellsByDay(r.days || {})
         setSummary({ totalPlanned: r.totalPlanned, expectedFinishDate: r.expectedFinishDate })
         setLoading(false)
       })
@@ -789,30 +807,55 @@ function PlanningTab({ token, model }) {
     return () => {
       cancelled = true
     }
-  }, [token, model.id, selectedDate, retryTick])
+  }, [token, model.id, retryTick])
 
-  function handleDateChange(value) {
-    if (minDate && value < minDate) return
-    setSelectedDate(value)
+  // Auto-extending day rows, purely derived from state — no special-case
+  // "add a row" code needed: once any cell in the last rendered day gets a
+  // real value, `cellsByDay` changes, `lastDataDate` moves forward, and a
+  // fresh empty day appears right after it on the next render. Once the
+  // server confirms the plan has reached Qté totale (`expectedFinishDate`
+  // set), rows stop exactly there — matching "الجدول كيوقف" once the target
+  // is reached, with no extra empty row dangling past it.
+  const rows = useMemo(() => {
+    const start = debut || todayInFactoryTZ()
+    // A day only counts as "has data" once one of its cells holds a real
+    // number — merely clicking into a cell and leaving it blank again
+    // (updateCell still records that day with an empty-string cell) must
+    // never by itself spawn a new empty row.
+    const dataDates = Object.keys(cellsByDay).filter((d) =>
+      Object.values(cellsByDay[d] || {}).some((v) => v !== null && v !== undefined && v !== '')
+    )
+    // No data yet → just the one starting row (Début), nothing more. Once
+    // ANY day has a value, one empty buffer day is appended right after the
+    // latest one with data — that's the "auto-extend" — until the plan
+    // reaches Qté totale, at which point rows stop exactly on that day.
+    const hasAnyData = dataDates.length > 0
+    const lastDataDate = hasAnyData ? dataDates.reduce((a, b) => (b > a ? b : a)) : start
+    const endDate = summary.expectedFinishDate || (hasAnyData ? addDaysStr(lastDataDate, 1) : start)
+    const spanDays = Math.max(0, Math.round((new Date(`${endDate}T00:00:00Z`) - new Date(`${start}T00:00:00Z`)) / 86400000))
+    const out = []
+    for (let i = 0; i <= spanDays; i++) {
+      const date = addDaysStr(start, i)
+      out.push({ date, label: formatDayLabel(date), cells: cellsByDay[date] || {} })
+    }
+    return out
+  }, [debut, cellsByDay, summary.expectedFinishDate])
+
+  function updateCell(date, index, value) {
+    setCellsByDay((prev) => ({ ...prev, [date]: { ...prev[date], [index]: value } }))
   }
 
-  function updateSlot(idx, value) {
-    setHourly((prev) => prev.map((s) => (s.index === idx ? { ...s, qty: value } : s)))
-  }
-
-  async function submit() {
-    setSaving(true)
+  async function saveCell(date, index, rawValue) {
+    const key = `${date}:${index}`
+    const qty = rawValue === '' || rawValue === null || rawValue === undefined ? null : Number(rawValue)
+    setSavingCells((s) => ({ ...s, [key]: true }))
     try {
-      const payload = hourly.map((s) => ({
-        index: s.index,
-        qty: s.qty === '' || s.qty === null || s.qty === undefined ? null : Number(s.qty),
-      }))
-      const res = await api.methode.updatePlanning(token, model.id, selectedDate, payload)
+      const res = await api.methode.updatePlanning(token, model.id, date, [{ index, qty }])
       setSummary({ totalPlanned: res.totalPlanned, expectedFinishDate: res.expectedFinishDate })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      setSavedCells((s) => ({ ...s, [key]: true }))
+      setTimeout(() => setSavedCells((s) => ({ ...s, [key]: false })), 1500)
     } finally {
-      setSaving(false)
+      setSavingCells((s) => ({ ...s, [key]: false }))
     }
   }
 
@@ -822,9 +865,10 @@ function PlanningTab({ token, model }) {
   return (
     <GlowCard>
       <p className="mb-3 text-sm text-slate-400">
-        <b className="text-slate-300">Planning</b> — الكمية المخططة لكل ساعة، قبل بداية الإنتاج الحقيقي — يقدر يكون
-        بداية بطيئة وتسريع بالوسط، ما يشترط رقم ثابت لكل ساعة. النظام كيقارنها أوتوماتيكياً بالإنتاج الحقيقي (Plan
-        مقابل Réel، بادينا Home).
+        <b className="text-slate-300">Planning</b> — الكمية المخططة لكل ساعة، قبل بداية الإنتاج الحقيقي — عمّر كل يوم
+        بقيمه الخاصة (بداية بطيئة وتسريع بالوسط، ما يشترط رقم ثابت). الأيام كتزاد تلقائياً كل ما عمّرتي آخر واحد،
+        والحفظ أوتوماتيكي بمجرد ما تخرج من الخانة. النظام كيقارنها أوتوماتيكياً بالإنتاج الحقيقي (Plan مقابل Réel،
+        بادينا Home).
       </p>
 
       <div className="mb-4 flex flex-wrap gap-4 text-sm">
@@ -834,10 +878,6 @@ function PlanningTab({ token, model }) {
             {summary.totalPlanned.toLocaleString('fr-FR')} / {qteTotale.toLocaleString('fr-FR')}
           </div>
         </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-slate-500">تاريخ الانتهاء المتوقع</div>
-          <div className="font-mono text-turquoise">{summary.expectedFinishDate || 'غير محدد بعد'}</div>
-        </div>
       </div>
       {overPlanned && (
         <div className="mb-3 rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
@@ -845,19 +885,12 @@ function PlanningTab({ token, model }) {
           {qteTotale.toLocaleString('fr-FR')}) — تأكد من الأرقام.
         </div>
       )}
+      {summary.expectedFinishDate && (
+        <div className="mb-3 rounded-md border border-status-good/40 bg-status-good/10 px-3 py-2 text-sm text-status-good">
+          ✅ المخطط وصل للكمية الإجمالية — آخر يوم: {summary.expectedFinishDate}
+        </div>
+      )}
 
-      <label className="mb-3 block max-w-xs">
-        <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">اليوم</span>
-        <input
-          type="date"
-          value={selectedDate}
-          min={minDate || undefined}
-          onChange={(e) => handleDateChange(e.target.value)}
-          className="h-11 w-full rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 focus:border-turquoise focus:outline-none"
-        />
-      </label>
-
-      <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-turquoise/30 border-t-turquoise" />
@@ -874,26 +907,57 @@ function PlanningTab({ token, model }) {
           </button>
         </div>
       ) : (
-        <div className="space-y-2.5">
-          {hourly.map((slot) => (
-            <div key={slot.index} className="flex items-center gap-2.5">
-              <span className="w-24 shrink-0 font-mono text-xs text-slate-400">{slot.label}</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                placeholder="غير مخطط"
-                value={slot.qty ?? ''}
-                onChange={(e) => updateSlot(slot.index, e.target.value)}
-                className="h-11 w-full min-w-0 rounded border border-slate-700 bg-navy-900 px-3 text-base text-slate-200 placeholder:text-slate-600 focus:border-turquoise focus:outline-none"
-              />
-              {voiceMode && <VoiceMicButton label={slot.label} onConfirm={(n) => updateSlot(slot.index, n)} />}
-            </div>
-          ))}
+        <div className="overflow-auto rounded-md border border-slate-800" style={{ maxHeight: '65vh' }}>
+          <table className="border-collapse text-sm">
+            <thead>
+              <tr>
+                <th className="sticky top-0 left-0 z-20 whitespace-nowrap bg-navy-900 px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  اليوم
+                </th>
+                {hourlySlots.map((s) => (
+                  <th
+                    key={s.index}
+                    className="sticky top-0 z-10 whitespace-nowrap bg-navy-900 px-2 py-2 text-center font-mono text-[11px] font-normal text-slate-500"
+                  >
+                    {s.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.date}>
+                  <td className="sticky left-0 z-10 whitespace-nowrap border-t border-slate-800 bg-navy-900 px-3 py-1.5 text-sm font-medium text-slate-300">
+                    {row.label}
+                  </td>
+                  {hourlySlots.map((s) => {
+                    const key = `${row.date}:${s.index}`
+                    const value = row.cells[s.index]
+                    return (
+                      <td key={s.index} className="border-t border-slate-800 p-1">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          placeholder="—"
+                          defaultValue={value ?? ''}
+                          key={`${key}:${value ?? ''}`}
+                          onBlur={(e) => {
+                            updateCell(row.date, s.index, e.target.value)
+                            saveCell(row.date, s.index, e.target.value)
+                          }}
+                          className={`h-10 w-20 rounded border bg-navy-900 px-1.5 text-center text-sm text-slate-200 placeholder:text-slate-600 focus:border-turquoise focus:outline-none ${
+                            savedCells[key] ? 'border-turquoise' : 'border-slate-700'
+                          } ${savingCells[key] ? 'opacity-50' : ''}`}
+                        />
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-      <div className="mt-4">
-        <SaveButton onClick={submit} saving={saving} disabled={saving || loading || loadError} saved={saved} />
-      </div>
     </GlowCard>
   )
 }

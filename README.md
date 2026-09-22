@@ -391,19 +391,26 @@ automatically, how the real output compares to what was planned.
   of its own. An hour with no row means "not planned" — the client always
   shows it blank ("غير مخطط"), never a fake 0, and clearing a previously
   planned hour actually deletes its row rather than writing a 0.
-- **Entering the plan** — Agent Méthode picks a day (no upper bound on the
-  date — planning ahead is the entire point, unlike every other date
-  picker in ATLAS, which caps at today; the lower bound is still the
-  model's own Début) and types a planned qty per hour, free-form — a slow
-  start and a faster middle are both just typed in, no fixed-DT-per-hour
-  assumption. One "Enregistrer" bulk-saves the whole day (9 hours) in a
-  single request — there's no time pressure planning ahead, unlike
-  logging what just happened on the floor, so this doesn't need Agent
-  Production's per-hour "OK" pattern. A live "Total planifié: X / Qté
-  totale" (turns amber past the target) and "تاريخ الانتهاء المتوقع" —
-  the expected finish date, the first day whose planned cumulative
-  reaches Qté totale, always computed live from `planning_hourly`, never
-  stored — sit above the grid the whole time Agent Méthode is entering.
+- **Entering the plan — one continuous table, no day picker** — a row per
+  day (starting at the model's own Début), a column per hour; Agent
+  Méthode just types straight into the grid, day after day, each with its
+  own free-form values (a slow start, a faster middle — no
+  fixed-DT-per-hour assumption). Days extend themselves: the table starts
+  with exactly one row, and a fresh empty day is appended right under the
+  last one the moment it gets any real value — never a wall of empty rows
+  upfront, never a dead end with nowhere left to type. `GET
+  /methode/models/:id/planning/all` returns every day's data (and the 9
+  hour-slot labels) in one shot so the whole table renders at once; the
+  table itself scrolls (day-label column and hour-label row both sticky)
+  rather than paging between screens. Each cell auto-saves on blur — one
+  real request per hour actually touched (`PUT
+  /methode/models/:id/planning/:date` with a single-slot `hourly` array),
+  no page-wide "Enregistrer". A live "Total planifié: X / Qté totale"
+  (turns amber past the target) sits above the grid the whole time; once
+  the planned cumulative reaches Qté totale, a banner names that exact day
+  and the table stops extending there — editing already-shown days can
+  still push the total back under target, which reopens an empty row past
+  the end exactly as before.
 - **Home — "Planning — Plan vs Réel"** — a new card, shown only when a
   plan actually exists (`planning.hasPlan`; a model nobody ever planned
   looks exactly like it did before this feature). Three levels at once,
