@@ -1655,12 +1655,14 @@ test('Planning: Agent Méthode planifie heure par heure, comparé automatiquemen
     if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
   })
 
-  await t.test("aucun plan saisi → GET renvoie des créneaux vides (null, jamais 0) et le dashboard public omet 'planning'", async () => {
-    const planning = await call(`/methode/models/${modelId}/planning?date=${today}`, { token: methodeToken })
+  await t.test("aucun plan saisi → GET /planning/all renvoie un objet 'days' vide et le dashboard public omet 'planning'", async () => {
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
     assert.equal(planning.status, 200)
-    assert.ok(planning.data.hourly.every((s) => s.qty === null))
+    assert.deepEqual(planning.data.days, {})
+    assert.equal(planning.data.debut, today)
     assert.equal(planning.data.totalPlanned, 0)
     assert.equal(planning.data.expectedFinishDate, null)
+    assert.equal(planning.data.hourlySlots.length, 9)
 
     const dash = await call(`/models/${modelId}/dashboard`)
     assert.equal(dash.data.planning.hasPlan, false)
@@ -1697,13 +1699,13 @@ test('Planning: Agent Méthode planifie heure par heure, comparé automatiquemen
     assert.equal(putTomorrow.data.expectedFinishDate, tomorrow)
   })
 
-  await t.test("GET renvoie exactement les heures saisies, les autres restent null (jamais un faux 0)", async () => {
-    const planning = await call(`/methode/models/${modelId}/planning?date=${today}`, { token: methodeToken })
-    const byIndex = Object.fromEntries(planning.data.hourly.map((s) => [s.index, s.qty]))
-    assert.equal(byIndex[0], 50)
-    assert.equal(byIndex[1], 60)
-    assert.equal(byIndex[2], 60)
-    assert.equal(byIndex[3], null)
+  await t.test("GET /planning/all renvoie exactement les heures saisies pour chaque jour, rien d'autre (jamais un faux 0)", async () => {
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
+    assert.equal(planning.data.days[today]['0'], 50)
+    assert.equal(planning.data.days[today]['1'], 60)
+    assert.equal(planning.data.days[today]['2'], 60)
+    assert.equal(planning.data.days[today]['3'], undefined) // pas de ligne du tout, pas un faux 0
+    assert.equal(planning.data.days[tomorrow]['0'], 40)
   })
 
   await t.test("Plan vs Réel sur le dashboard: production réelle logée aujourd'hui comparée heure par heure et jour par jour", async () => {
@@ -1749,9 +1751,8 @@ test('Planning: Agent Méthode planifie heure par heure, comparé automatiquemen
     assert.equal(clear.status, 200)
     assert.equal(clear.data.totalPlanned, 150) // 210 - 60
 
-    const planning = await call(`/methode/models/${modelId}/planning?date=${today}`, { token: methodeToken })
-    const slot2 = planning.data.hourly.find((s) => s.index === 2)
-    assert.equal(slot2.qty, null)
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
+    assert.equal(planning.data.days[today]['2'], undefined)
 
     const row = await get('SELECT id FROM planning_hourly WHERE model_id = $1 AND date = $2 AND slot_index = 2', [modelId, today])
     assert.equal(row, undefined) // la ligne a été supprimée, pas mise à 0

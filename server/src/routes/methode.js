@@ -215,36 +215,43 @@ methodeRouter.get('/models/:id/attendance', async (req, res) => {
 })
 
 // Planning — the hourly production PLAN Agent Méthode enters ahead of real
-// production, one day at a time, so Home can show Plan vs Réel (see
-// planning.js). Unlike Agent Production's/Quality's hourly entry, dates
-// here are NOT capped at today — planning ahead is the entire point, so
-// tomorrow/next week are valid targets; only a date before Début is
-// rejected (nothing is planned before the model even starts).
-methodeRouter.get('/models/:id/planning', async (req, res) => {
+// production, so Home can show Plan vs Réel (see planning.js). The whole
+// plan is one continuous table client-side (a row per day, auto-extending —
+// no day picker, no back-and-forth), so this returns EVERY day's data in
+// one shot rather than one day at a time. Unlike Agent Production's/
+// Quality's hourly entry, planned dates are NOT capped at today — planning
+// ahead is the entire point.
+methodeRouter.get('/models/:id/planning/all', async (req, res) => {
   const model = await get('SELECT id, qte_totale, debut FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
 
-  const date = String(req.query.date || model.debut || todayInFactoryTZ())
-  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
-
   const [rows, summary] = await Promise.all([
-    all('SELECT slot_index, qty FROM planning_hourly WHERE model_id = $1 AND date = $2', [req.params.id, date]),
+    all('SELECT date, slot_index, qty FROM planning_hourly WHERE model_id = $1 ORDER BY date, slot_index', [req.params.id]),
     getPlanningSummary(model),
   ])
-  const byIndex = Object.fromEntries(rows.map((r) => [r.slot_index, r.qty]))
-  // A slot with no row is `qty: null` (never a fake 0) — the client leaves
-  // its input blank rather than showing an unplanned hour as "0 planned".
-  const hourly = HOURLY_SLOTS.map((s) => ({ ...s, qty: s.index in byIndex ? byIndex[s.index] : null }))
+  // { "2026-08-01": { "0": 50, "2": 60 }, ... } — a day/slot with no row is
+  // simply absent (never a fake 0); the client leaves that cell blank.
+  const days = {}
+  for (const r of rows) {
+    ;(days[r.date] ??= {})[r.slot_index] = r.qty
+  }
 
-  res.json({ date, hourly, qteTotale: model.qte_totale || 0, totalPlanned: summary.totalPlanned, expectedFinishDate: summary.expectedFinishDate })
+  res.json({
+    debut: model.debut,
+    qteTotale: model.qte_totale || 0,
+    totalPlanned: summary.totalPlanned,
+    expectedFinishDate: summary.expectedFinishDate,
+    hourlySlots: HOURLY_SLOTS,
+    days,
+  })
 })
 
-// Bulk-saves one full day's plan in a single request (9 slots at once) —
-// Agent Méthode fills in a whole day, then one "Enregistrer", not a
-// per-hour OK button like live production entry (there's no time pressure
-// planning ahead, unlike logging what just happened on the floor). Each
-// slot's qty is either a number (upsert) or null (delete — clears a
-// previously-planned hour back to "not planned", never a fake 0).
+// Saves one cell (or a handful) at a time — the client calls this on every
+// input blur, one real request per hour the user actually touched, not a
+// page-wide "Enregistrer" (there's no day-selection step to save FROM
+// anymore — the whole plan is one continuous table). Each slot's qty is
+// either a number (upsert) or null (delete — clears a previously-planned
+// hour back to "not planned", never a fake 0).
 methodeRouter.put('/models/:id/planning/:date', async (req, res) => {
   const { id, date } = req.params
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
