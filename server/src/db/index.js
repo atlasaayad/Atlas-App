@@ -392,6 +392,39 @@ CREATE TABLE IF NOT EXISTS planning_hourly (
   UNIQUE (model_id, date, slot_index)
 );
 CREATE INDEX IF NOT EXISTS idx_planning_hourly_model_date ON planning_hourly (model_id, date);
+
+-- ⚙️ Réglages (Agent Méthode/Patron only) — the live, admin-editable
+-- specialty lists that used to be hardcoded in constants.js
+-- (SPECIALTIES/FINALE_SPECIALTIES). 'chain' feeds effectif_requis/
+-- rh_attendance/rh_attendance_history; 'finale' feeds finale_attendance —
+-- see specialties.js for the read/add/rename/delete logic and exactly how
+-- a rename cascades into those tables (the same merge-on-conflict pattern
+-- migrateSpecialtyNames() below already uses for the old hardcoded rename).
+-- Seeded once from the old hardcoded arrays (seedSpecialtyDefs() in
+-- seed.js) so an already-deployed database's behavior doesn't change on
+-- the day this ships; every table this feeds already defaults a missing
+-- row to 0 rather than assuming a fixed list, so adding a new specialty
+-- here needs no backfill either.
+CREATE TABLE IF NOT EXISTS specialty_defs (
+  id TEXT PRIMARY KEY,
+  group_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE (group_key, name)
+);
+
+-- "📩 الإبلاغ عن مشكلة" — open to every logged-in department (see
+-- DeptGate.jsx's BackBar), reviewed read-only from ⚙️ Réglages by Agent
+-- Méthode/Patron. No status/resolved flag on purpose — matches the app's
+-- general minimalism (a plain chronological log is what was asked for).
+CREATE TABLE IF NOT EXISTS feedback_reports (
+  id TEXT PRIMARY KEY,
+  dept_key TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT
+);
 `
 
 // One-time (per old specialty code), idempotent specialty rename/merge

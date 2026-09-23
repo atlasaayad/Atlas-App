@@ -6,6 +6,7 @@ import Departments from './pages/Departments'
 import DeptGate from './pages/DeptGate'
 import EffectifsOverview from './pages/EffectifsOverview'
 import Ask from './pages/Ask'
+import SettingsGate from './pages/SettingsGate'
 import PredictApp from './predict/PredictApp'
 
 function Header() {
@@ -34,6 +35,7 @@ function FactoryApp() {
             <Route path="/departements/:deptKey" element={<DeptGate />} />
             <Route path="/effectifs" element={<EffectifsOverview />} />
             <Route path="/ask" element={<Ask />} />
+            <Route path="/reglages" element={<SettingsGate />} />
           </Routes>
         </main>
         <BottomNav />

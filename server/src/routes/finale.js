@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { FINALE_SPECIALTIES } from '../constants.js'
+import { getSpecialties } from '../specialties.js'
 
 export const finaleRouter = Router()
 finaleRouter.use(requireDept('finale'))
@@ -61,15 +61,16 @@ finaleRouter.put('/models/:id', async (req, res) => {
   res.json({ ok: true })
 })
 
-// Finale's own headcount, per specialty (FINALE_SPECIALTIES) — feeds the
-// "État des effectifs" overview page's Finale section, summed across every
-// chain's Finale entry there. Current live snapshot only, same as
-// rh_attendance — no backdating for this one.
+// Finale's own headcount, per specialty (the 'finale' specialty group —
+// see specialties.js) — feeds the "État des effectifs" overview page's
+// Finale section, summed across every chain's Finale entry there. Current
+// live snapshot only, same as rh_attendance — no backdating for this one.
 finaleRouter.put('/models/:id/effectif', async (req, res) => {
   const { id } = req.params
   const effectif = req.body?.effectif || {}
   const now = new Date().toISOString()
-  for (const spec of FINALE_SPECIALTIES) {
+  const specialties = await getSpecialties('finale')
+  for (const spec of specialties) {
     if (!(spec in effectif)) continue
     const present = Math.max(0, Number(effectif[spec]) || 0)
     await run(

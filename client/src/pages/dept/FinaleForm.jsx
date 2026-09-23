@@ -6,7 +6,6 @@ import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
-import { FINALE_SPECIALTIES } from '../../lib/constants'
 
 const GROUPS = [
   {
@@ -146,7 +145,7 @@ export default function FinaleForm({ token, chainNumber }) {
           عدد العمال الحاضرين اليوم بمرحلة Finale لكل تخصص — يظهر بمجموع Finale بشاشة "État des effectifs".
         </p>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          {FINALE_SPECIALTIES.map((sp) => (
+          {Object.keys(effectif).map((sp) => (
             <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
               <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={999} />
               {voiceMode && <VoiceMicButton label={sp} onConfirm={(n) => setEffectif({ ...effectif, [sp]: n })} />}

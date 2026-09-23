@@ -2,10 +2,11 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { SPECIALTIES, DELAY_REASONS, HOURLY_SLOTS } from '../constants.js'
+import { DELAY_REASONS, HOURLY_SLOTS } from '../constants.js'
 import { computeVTMinutes, computeDT, computeLaunchTimerState, todayInFactoryTZ } from '../calc.js'
 import { saveAttendance, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
 import { getPlanningSummary } from '../planning.js'
+import { getSpecialties } from '../specialties.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -75,7 +76,8 @@ methodeRouter.post('/models', async (req, res) => {
   // No hourly_production seeding — production_history has no rows yet for
   // this brand-new model, and an absent row already reads back as qty 0
   // wherever hourly data is displayed, so there's nothing to pre-create.
-  const effectifRows = buildBulkInsert(SPECIALTIES.map((spec) => [id, spec, 0]))
+  const specialties = await getSpecialties('chain')
+  const effectifRows = buildBulkInsert(specialties.map((spec) => [id, spec, 0]))
   await Promise.all([
     run(`INSERT INTO effectif_requis (model_id, specialty, required) VALUES ${effectifRows.valuesSql}`, effectifRows.params),
     run('INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, 0, 0, $2)', [id, now]),
@@ -171,7 +173,8 @@ methodeRouter.put('/models/:id/effectif', async (req, res) => {
   if (!model) return res.status(404).json({ error: 'not_found' })
   const effectif = req.body?.effectif || {}
 
-  const rows = SPECIALTIES.map((spec) => [req.params.id, spec, Number(effectif[spec]) || 0])
+  const specialties = await getSpecialties('chain')
+  const rows = specialties.map((spec) => [req.params.id, spec, Number(effectif[spec]) || 0])
   const { valuesSql, params } = buildBulkInsert(rows)
   await run(
     `INSERT INTO effectif_requis (model_id, specialty, required) VALUES ${valuesSql}

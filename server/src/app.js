@@ -16,6 +16,7 @@ import { depotRouter } from './routes/depot.js'
 import { logisticsRouter } from './routes/logistics.js'
 import { posteRouter } from './routes/poste.js'
 import { patronRouter } from './routes/patron.js'
+import { settingsRouter } from './routes/settings.js'
 
 export const app = express()
 app.use(cors())
@@ -56,6 +57,7 @@ app.use('/api/depot', depotRouter)
 app.use('/api/logistics', logisticsRouter)
 app.use('/api/poste', posteRouter)
 app.use('/api/patron', patronRouter)
+app.use('/api', settingsRouter)
 
 app.get('/api/health', (req, res) => res.json({ ok: true }))
 

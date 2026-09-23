@@ -2,7 +2,8 @@ import { Router } from 'express'
 import ExcelJS from 'exceljs'
 import { all, get } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { SPECIALTIES, HOURLY_SLOTS } from '../constants.js'
+import { HOURLY_SLOTS } from '../constants.js'
+import { getSpecialties } from '../specialties.js'
 
 export const auditRouter = Router()
 
@@ -37,11 +38,10 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
     [chainNumber]
   )
 
+  const currentSpecialties = await getSpecialties('chain')
   const requiredRows = model
     ? await all('SELECT specialty, required FROM effectif_requis WHERE model_id = $1', [model.id])
     : []
-  const requiredMap = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
-  for (const r of requiredRows) requiredMap[r.specialty] = r.required
 
   const attendanceRows = await all(
     `SELECT date, specialty, present, updated_at FROM rh_attendance_history
@@ -53,6 +53,19 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
     if (!attendanceByDate[r.date]) attendanceByDate[r.date] = []
     attendanceByDate[r.date].push(r)
   }
+
+  // A compliance report must never silently drop real recorded data just
+  // because a specialty was later removed from the live entry screens
+  // (deleting one only ever stops it appearing on Effectif/Présence — see
+  // specialties.js) — so this report's own specialty list is the CURRENT
+  // live list plus whichever specialties actually have a row in exactly
+  // this date range, even if since deleted. requiredMap covers the same
+  // union so a since-deleted specialty's "Requis" column isn't blank
+  // either.
+  const historicalSpecialties = [...new Set(attendanceRows.map((r) => r.specialty))]
+  const specialties = [...currentSpecialties, ...historicalSpecialties.filter((s) => !currentSpecialties.includes(s))]
+  const requiredMap = Object.fromEntries(specialties.map((s) => [s, 0]))
+  for (const r of requiredRows) requiredMap[r.specialty] = r.required
 
   const hourlyRows = await all(
     `SELECT date, COUNT(*) AS slots FROM production_history
@@ -130,7 +143,7 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
       r.font = { italic: true, color: { argb: 'FFCC3333' } }
       continue
     }
-    for (const spec of SPECIALTIES) {
+    for (const spec of specialties) {
       const r = rows.find((x) => x.specialty === spec)
       const required = requiredMap[spec] || 0
       if (!r) {

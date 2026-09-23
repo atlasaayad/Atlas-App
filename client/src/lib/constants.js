@@ -15,21 +15,12 @@ export const DEPARTMENT_META = {
 
 export const GENERIC_POSTE_DEPARTMENTS = ['coupe', 'magasin', 'mecanicien', 'echantillon']
 
-// Renamed from the old 15-code shorthand — see server/src/constants.js for
-// the full old→new mapping and the migration that carried historical values
-// over (301/502/504/516 merged into "Machinistes"; "Stg" moved wholesale
-// into "Machiniste stagiaire").
-export const SPECIALTIES = [
-  'Machinistes', 'Machiniste stagiaire', 'Repassage préparation', 'Stagiaire fer', 'Traçage',
-  'Transport', 'Chef', 'Robot', 'Machine spéciale', 'Manuel spécial / Traçage spécial',
-  'Contrôle chaîne', 'Retouche', 'Finition',
-]
-
-// Finale's own headcount specialties — separate from the 13 chain
-// specialties above.
-export const FINALE_SPECIALTIES = [
-  'Repassage Finale', 'Contrôle Finale', 'Stagiaire', 'Main', 'Transport', 'Nettoyage', 'Mesure', 'Machiniste',
-]
+// Specialty lists (chain + Finale) are no longer hardcoded here — they're
+// live, admin-editable data (⚙️ Réglages, Agent Méthode/Patron only — see
+// server/src/specialties.js). Every screen that shows a specialty grid
+// derives its list from data it already fetched (model.effectif,
+// dashboard.effectifs, dashboard.finaleAttendance), never a client-side
+// constant.
 
 export const MACHINES = ['301', '502', '504', '516', 'robot', 'fer', 'main', 'sp', 'rz/stg']
 
