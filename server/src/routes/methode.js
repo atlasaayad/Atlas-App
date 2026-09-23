@@ -2,11 +2,13 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { DELAY_REASONS, HOURLY_SLOTS } from '../constants.js'
+import { DELAY_REASONS } from '../constants.js'
 import { computeVTMinutes, computeDT, computeLaunchTimerState, todayInFactoryTZ } from '../calc.js'
 import { saveAttendance, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
 import { getPlanningSummary } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
+import { getWorkHours } from '../workHours.js'
+import { uploadModelImage, deleteModelImage } from '../imageUpload.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -149,6 +151,40 @@ methodeRouter.put('/models/:id', async (req, res) => {
   res.json({ ok: true })
 })
 
+// The model's own photo — optional, shown as a thumbnail on Home's identity
+// card (see fullDashboard()'s `identity.imageUrl`, routes/public.js).
+// `imageBase64` is a full data URI (client reads the picked file with
+// FileReader.readAsDataURL) — see imageUpload.js for the decode/validate/
+// upload-to-Vercel-Blob step. Replaces (and best-effort deletes) whatever
+// image was there before, if any.
+methodeRouter.put('/models/:id/image', async (req, res) => {
+  const model = await get('SELECT id, image_url FROM models WHERE id = $1', [req.params.id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+
+  let imageUrl
+  try {
+    imageUrl = await uploadModelImage(model.id, req.body?.imageBase64)
+  } catch (err) {
+    const status = err.code === 'storage_not_configured' ? 503 : 400
+    return res.status(status).json({ error: err.code || 'upload_failed' })
+  }
+
+  await run('UPDATE models SET image_url = $1, updated_at = $2 WHERE id = $3', [imageUrl, new Date().toISOString(), model.id])
+  if (model.image_url) await deleteModelImage(model.image_url)
+  await logAudit({ deptKey: 'methode', modelId: model.id, action: 'update_model_image' })
+  res.json({ ok: true, imageUrl })
+})
+
+methodeRouter.delete('/models/:id/image', async (req, res) => {
+  const model = await get('SELECT id, image_url FROM models WHERE id = $1', [req.params.id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+
+  await run('UPDATE models SET image_url = NULL, updated_at = $1 WHERE id = $2', [new Date().toISOString(), model.id])
+  if (model.image_url) await deleteModelImage(model.image_url)
+  await logAudit({ deptKey: 'methode', modelId: model.id, action: 'delete_model_image' })
+  res.json({ ok: true })
+})
+
 // Replace the whole gamme (list of {operation, machine, tps}) and recompute VT/DT.
 methodeRouter.put('/models/:id/gamme', async (req, res) => {
   const model = await get('SELECT id FROM models WHERE id = $1', [req.params.id])
@@ -219,18 +255,34 @@ methodeRouter.get('/models/:id/attendance', async (req, res) => {
 
 // Planning — the hourly production PLAN Agent Méthode enters ahead of real
 // production, so Home can show Plan vs Réel (see planning.js). The whole
-// plan is one continuous table client-side (a row per day, auto-extending —
-// no day picker, no back-and-forth), so this returns EVERY day's data in
-// one shot rather than one day at a time. Unlike Agent Production's/
-// Quality's hourly entry, planned dates are NOT capped at today — planning
-// ahead is the entire point.
+// plan is one continuous table client-side (a row per day), so this returns
+// EVERY day's data in one shot rather than one day at a time. Unlike Agent
+// Production's/Quality's hourly entry, planned dates are NOT capped at
+// today — planning ahead is the entire point.
+//
+// `plannedDates` is which day-rows the table shows — explicit and
+// user-controlled via the add/delete-day routes below (planning_days),
+// NOT purely derived from entered data anymore: a day can appear here with
+// nothing entered yet (a freshly added blank row), in any order (skipping a
+// holiday, adding out of sequence). A brand-new model with no plan touched
+// yet gets exactly one row, at Début, seeded lazily right here.
 methodeRouter.get('/models/:id/planning/all', async (req, res) => {
   const model = await get('SELECT id, qte_totale, debut FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
 
-  const [rows, summary] = await Promise.all([
+  if (model.debut) {
+    await run('INSERT INTO planning_days (model_id, date, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [
+      model.id,
+      model.debut,
+      new Date().toISOString(),
+    ])
+  }
+
+  const [dayRows, rows, summary, hourlySlots] = await Promise.all([
+    all('SELECT date FROM planning_days WHERE model_id = $1 ORDER BY date', [req.params.id]),
     all('SELECT date, slot_index, qty FROM planning_hourly WHERE model_id = $1 ORDER BY date, slot_index', [req.params.id]),
     getPlanningSummary(model),
+    getWorkHours(),
   ])
   // { "2026-08-01": { "0": 50, "2": 60 }, ... } — a day/slot with no row is
   // simply absent (never a fake 0); the client leaves that cell blank.
@@ -244,9 +296,50 @@ methodeRouter.get('/models/:id/planning/all', async (req, res) => {
     qteTotale: model.qte_totale || 0,
     totalPlanned: summary.totalPlanned,
     expectedFinishDate: summary.expectedFinishDate,
-    hourlySlots: HOURLY_SLOTS,
+    hourlySlots,
+    plannedDates: dayRows.map((r) => r.date),
     days,
   })
+})
+
+// "+ إضافة يوم" — adds one explicit day-row to the table at whatever date
+// Agent Méthode picks (skip a holiday, add out of sequence — no forced
+// next-in-line date, unlike the old auto-extend behavior this replaces).
+// Idempotent (ON CONFLICT DO NOTHING): re-adding an already-present date is
+// a harmless no-op, not an error.
+methodeRouter.post('/models/:id/planning/days', async (req, res) => {
+  const { id } = req.params
+  const date = String(req.body?.date || '')
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
+
+  const model = await get('SELECT id, debut FROM models WHERE id = $1', [id])
+  if (!model) return res.status(404).json({ error: 'not_found' })
+  if (model.debut && date < model.debut) return res.status(400).json({ error: 'date_before_debut' })
+
+  await run('INSERT INTO planning_days (model_id, date, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [
+    id,
+    date,
+    new Date().toISOString(),
+  ])
+  await logAudit({ deptKey: 'methode', modelId: id, action: 'add_planning_day', details: { date } })
+  res.status(201).json({ ok: true, date })
+})
+
+// Removing a day-row also clears whatever was entered for it — a deleted
+// row must never leave orphaned hourly data invisibly sitting in
+// planning_hourly (it would silently resurrect if the same date were ever
+// re-added).
+methodeRouter.delete('/models/:id/planning/days/:date', async (req, res) => {
+  const { id, date } = req.params
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
+
+  await Promise.all([
+    run('DELETE FROM planning_days WHERE model_id = $1 AND date = $2', [id, date]),
+    run('DELETE FROM planning_hourly WHERE model_id = $1 AND date = $2', [id, date]),
+  ])
+  const summary = await getPlanningSummary(await get('SELECT id, qte_totale FROM models WHERE id = $1', [id]))
+  await logAudit({ deptKey: 'methode', modelId: id, action: 'delete_planning_day', details: { date } })
+  res.json({ ok: true, date, totalPlanned: summary.totalPlanned, expectedFinishDate: summary.expectedFinishDate })
 })
 
 // Saves one cell (or a handful) at a time — the client calls this on every
@@ -263,11 +356,16 @@ methodeRouter.put('/models/:id/planning/:date', async (req, res) => {
   if (!model) return res.status(404).json({ error: 'not_found' })
   if (model.debut && date < model.debut) return res.status(400).json({ error: 'date_before_debut' })
 
+  const workHours = await getWorkHours()
   const hourly = Array.isArray(req.body?.hourly) ? req.body.hourly : []
   const now = new Date().toISOString()
-  await Promise.all(
-    hourly
-      .filter((h) => h && Number.isInteger(h.index) && h.index >= 0 && h.index <= 8)
+  await Promise.all([
+    // Defensive — the client only ever saves a cell for a date already
+    // shown in the table (i.e. already in planning_days), but this keeps
+    // the two tables consistent even if that ever isn't true.
+    run('INSERT INTO planning_days (model_id, date, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, date, now]),
+    ...hourly
+      .filter((h) => h && Number.isInteger(h.index) && h.index >= 0 && h.index < workHours.length)
       .map((h) => {
         if (h.qty === null || h.qty === '' || h.qty === undefined) {
           return run('DELETE FROM planning_hourly WHERE model_id = $1 AND date = $2 AND slot_index = $3', [id, date, h.index])
@@ -279,8 +377,8 @@ methodeRouter.put('/models/:id/planning/:date', async (req, res) => {
              DO UPDATE SET qty = excluded.qty, updated_at = excluded.updated_at`,
           [`plh_${nanoid(10)}`, id, model.chain_number, date, h.index, Math.max(0, Number(h.qty) || 0), now]
         )
-      })
-  )
+      }),
+  ])
 
   const summary = await getPlanningSummary(await get('SELECT id, qte_totale FROM models WHERE id = $1', [id]))
   await logAudit({ deptKey: 'methode', modelId: id, action: 'update_planning_hourly', details: { date, hourly } })

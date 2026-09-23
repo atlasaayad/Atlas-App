@@ -2,8 +2,8 @@ import { Router } from 'express'
 import ExcelJS from 'exceljs'
 import { all, get } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { HOURLY_SLOTS } from '../constants.js'
 import { getSpecialties } from '../specialties.js'
+import { getWorkHours } from '../workHours.js'
 
 export const auditRouter = Router()
 
@@ -38,7 +38,7 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
     [chainNumber]
   )
 
-  const currentSpecialties = await getSpecialties('chain')
+  const [currentSpecialties, workHours] = await Promise.all([getSpecialties('chain'), getWorkHours()])
   const requiredRows = model
     ? await all('SELECT specialty, required FROM effectif_requis WHERE model_id = $1', [model.id])
     : []
@@ -165,7 +165,7 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
   const hours = workbook.addWorksheet('Heures documentées')
   hours.columns = [
     { header: 'Date', key: 'date', width: 12 },
-    { header: `Heures de production enregistrées (sur ${HOURLY_SLOTS.length})`, key: 'slots', width: 36 },
+    { header: `Heures de production enregistrées (sur ${workHours.length})`, key: 'slots', width: 36 },
   ]
   hours.getRow(1).font = { bold: true }
   for (const date of allDates) {

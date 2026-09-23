@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import { all, run, logAudit } from '../db/index.js'
 import { requireDept, requireAnyDept } from '../auth.js'
 import { getSpecialties, addSpecialty, renameSpecialty, deleteSpecialty } from '../specialties.js'
+import { getWorkHours, addWorkHour, updateWorkHour, deleteWorkHour } from '../workHours.js'
 
 export const settingsRouter = Router()
 
@@ -49,6 +50,45 @@ settingsRouter.delete('/settings/specialties/:groupKey/:name', requireSettings, 
   await deleteSpecialty(groupKey, name)
   await logAudit({ deptKey: req.dept, action: 'delete_specialty', details: { groupKey, name } })
   res.json({ specialties: await getSpecialties(groupKey) })
+})
+
+// ⏰ ساعات العمل — the live, admin-editable hourly-slot layout every screen
+// using hourly slots (Planning, Production, Quality, Home, the audit
+// report) now reads from instead of a hardcoded constant — see
+// workHours.js for exactly why add/delete are restricted (append-only /
+// last-only) while editing an existing slot's own time is unrestricted.
+settingsRouter.get('/settings/work-hours', requireSettings, async (req, res) => {
+  res.json({ workHours: await getWorkHours() })
+})
+
+settingsRouter.post('/settings/work-hours', requireSettings, async (req, res) => {
+  try {
+    await addWorkHour(req.body?.start, req.body?.end)
+  } catch (err) {
+    return res.status(400).json({ error: err.code || 'invalid_time' })
+  }
+  await logAudit({ deptKey: req.dept, action: 'add_work_hour', details: { start: req.body?.start, end: req.body?.end } })
+  res.status(201).json({ workHours: await getWorkHours() })
+})
+
+settingsRouter.put('/settings/work-hours/:id', requireSettings, async (req, res) => {
+  try {
+    await updateWorkHour(req.params.id, req.body?.start, req.body?.end)
+  } catch (err) {
+    return res.status(400).json({ error: err.code || 'invalid_time' })
+  }
+  await logAudit({ deptKey: req.dept, action: 'update_work_hour', details: { id: req.params.id, start: req.body?.start, end: req.body?.end } })
+  res.json({ workHours: await getWorkHours() })
+})
+
+settingsRouter.delete('/settings/work-hours/:id', requireSettings, async (req, res) => {
+  try {
+    await deleteWorkHour(req.params.id)
+  } catch (err) {
+    return res.status(400).json({ error: err.code || 'invalid_delete' })
+  }
+  await logAudit({ deptKey: req.dept, action: 'delete_work_hour', details: { id: req.params.id } })
+  res.json({ workHours: await getWorkHours() })
 })
 
 // 📩 الإبلاغ عن مشكلة — open to any logged-in department (see the small

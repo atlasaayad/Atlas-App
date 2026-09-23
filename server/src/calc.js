@@ -1,5 +1,3 @@
-import { HOURLY_SLOTS, WORK_HOURS_PER_DAY } from './constants.js'
-
 // VT = somme des temps (TPS, en secondes) de la gamme, exprimée en minutes.
 export function computeVTMinutes(gammeLines) {
   const totalSeconds = gammeLines.reduce((sum, l) => sum + (Number(l.tps) || 0), 0)
@@ -12,21 +10,26 @@ export function computeDT(nd, totalTpsSeconds) {
   return (Number(nd) * 3600) / totalTpsSeconds
 }
 
-// Objectif/jour (Demandé) = DT * heures de travail (9)
-export function computeObjectifJour(dt) {
-  return dt * WORK_HOURS_PER_DAY
+// Objectif/jour (Demandé) = DT * heures de travail — workHoursCount is the
+// live number of configured shifts (⚙️ Réglages → ساعات العمل, see
+// workHours.js), passed explicitly by the caller instead of a hardcoded
+// constant so a factory-wide change to the shift layout takes effect here
+// immediately.
+export function computeObjectifJour(dt, workHoursCount) {
+  return dt * workHoursCount
 }
 
-const SLOT_START_MINUTES = HOURLY_SLOTS.map((s) => {
-  const [start] = s.label.split('-')
-  const [h, m] = start.split(':').map(Number)
-  return h * 60 + m
-})
-
 // Index (0-based) of the hourly slot the current time falls into, in the
-// factory's timezone. Returns -1 before the shift starts, HOURLY_SLOTS.length-1
-// once the shift is over (so "Prod à maintenant" sums the full day).
-export function currentSlotIndex(date = new Date()) {
+// factory's timezone. `workHours` is the live, admin-editable slot list
+// (see workHours.js's getWorkHours()) — passed in rather than imported, so
+// this stays a pure function of whatever layout is currently configured.
+// Returns -1 before the shift starts, workHours.length-1 once the shift is
+// over (so "Prod à maintenant" sums the full day).
+export function currentSlotIndex(workHours, date = new Date()) {
+  const slotStartMinutes = workHours.map((s) => {
+    const [h, m] = s.start.split(':').map(Number)
+    return h * 60 + m
+  })
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Africa/Casablanca',
     hour: '2-digit',
@@ -37,17 +40,17 @@ export function currentSlotIndex(date = new Date()) {
   const minute = Number(parts.find((p) => p.type === 'minute').value)
   const nowMinutes = hour * 60 + minute
 
-  if (nowMinutes < SLOT_START_MINUTES[0]) return -1
+  if (slotStartMinutes.length === 0 || nowMinutes < slotStartMinutes[0]) return -1
   let idx = 0
-  for (let i = 0; i < SLOT_START_MINUTES.length; i++) {
-    if (nowMinutes >= SLOT_START_MINUTES[i]) idx = i
+  for (let i = 0; i < slotStartMinutes.length; i++) {
+    if (nowMinutes >= slotStartMinutes[i]) idx = i
   }
   return idx
 }
 
 // Sum of hourly production qty from slot 0 up to (and including) the current slot.
-export function prodAMaintenant(hourlyMap, now = new Date()) {
-  const idx = currentSlotIndex(now)
+export function prodAMaintenant(hourlyMap, workHours, now = new Date()) {
+  const idx = currentSlotIndex(workHours, now)
   if (idx < 0) return 0
   let total = 0
   for (let i = 0; i <= idx; i++) total += Number(hourlyMap[i] || 0)
@@ -171,7 +174,7 @@ export function computeLaunchTimerState({ objectifHeures, startedAt, stoppedAt }
 
 // Inclusive day count between two YYYY-MM-DD dates (used to size the
 // cumulative-since-Début attendance-minutes denominator: cumulativeDays *
-// WORK_HOURS_PER_DAY * 60). UTC-based arithmetic on date-only strings, so
+// workHours.length * 60). UTC-based arithmetic on date-only strings, so
 // it's immune to DST — there is no time-of-day component to shift.
 export function daysBetweenInclusive(fromDate, toDate) {
   const from = new Date(`${fromDate}T00:00:00Z`)

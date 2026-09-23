@@ -480,6 +480,7 @@ function IdentiteTab({ token, model, onSaved }) {
 
   return (
     <GlowCard>
+      <ModelImageUploader token={token} model={model} onSaved={onSaved} />
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <TextField label="Client" value={form.client} onChange={(v) => setForm({ ...form, client: v })} required />
@@ -510,6 +511,89 @@ function IdentiteTab({ token, model, onSaved }) {
         <SaveButton type="submit" saving={saving} saved={saved} />
       </form>
     </GlowCard>
+  )
+}
+
+// Optional — the identity card on Home stays exactly as before if this is
+// never used (see fullDashboard()'s `identity.imageUrl`). Reads the picked
+// file client-side (FileReader → data URI) rather than a multipart upload —
+// simpler given the app's JSON-only API, and small enough at these size caps
+// (5MB here, 6MB decoded server-side — the base64 envelope adds ~33%).
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+function ModelImageUploader({ token, model, onSaved }) {
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState(null)
+
+  function readFileAsDataUri(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setError(null)
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError('الصورة كبيرة بزاف — الحد الأقصى 5MB.')
+      return
+    }
+    setUploading(true)
+    try {
+      const dataUri = await readFileAsDataUri(file)
+      await api.methode.uploadModelImage(token, model.id, dataUri)
+      onSaved()
+    } catch (err) {
+      setError(
+        err?.data?.error === 'storage_not_configured'
+          ? 'تخزين الصور غير مفعّل حالياً على هاد السيرفر.'
+          : 'فشل رفع الصورة — تحقق من الاتصال وإعادة المحاولة.'
+      )
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function handleDelete() {
+    setUploading(true)
+    setError(null)
+    try {
+      await api.methode.deleteModelImage(token, model.id)
+      onSaved()
+    } catch {
+      setError('فشل حذف الصورة.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div className="mb-4 flex items-center gap-4 border-b border-slate-800 pb-4">
+      {model.image_url ? (
+        <img src={model.image_url} alt="" className="h-20 w-20 rounded-md border border-slate-700 object-cover" />
+      ) : (
+        <div className="flex h-20 w-20 items-center justify-center rounded-md border border-dashed border-slate-700 text-2xl text-slate-600">
+          🖼️
+        </div>
+      )}
+      <div className="flex flex-col gap-1.5">
+        <label className="w-fit cursor-pointer rounded-md border border-turquoise/40 px-3 py-1.5 text-xs text-turquoise active:bg-turquoise/10">
+          {uploading ? 'جاري الرفع…' : model.image_url ? '📷 تغيير الصورة' : '📷 إضافة صورة الموديل'}
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={uploading} onChange={handleFile} />
+        </label>
+        {model.image_url && (
+          <button onClick={handleDelete} disabled={uploading} className="w-fit text-xs text-status-bad active:opacity-70 disabled:opacity-50">
+            🗑 حذف الصورة
+          </button>
+        )}
+        {error && <span className="text-xs text-status-bad">{error}</span>}
+      </div>
+    </div>
   )
 }
 
@@ -746,12 +830,6 @@ function GammeTab({ token, model, onSaved }) {
   )
 }
 
-function addDaysStr(dateStr, n) {
-  const d = new Date(`${dateStr}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
-}
-
 const DAY_NAME_FORMAT = new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', weekday: 'long' })
 
 function formatDayLabel(dateStr) {
@@ -780,24 +858,31 @@ function PlanningTab({ token, model }) {
   const [retryTick, setRetryTick] = useState(0)
   const [debut, setDebut] = useState(model.debut)
   const [hourlySlots, setHourlySlots] = useState([])
+  const [plannedDates, setPlannedDates] = useState([]) // ["2026-08-01", ...] — explicit, user-controlled rows
   const [cellsByDay, setCellsByDay] = useState({}) // { "2026-08-01": { "0": 50, "2": 60 } }
   const [summary, setSummary] = useState({ totalPlanned: 0, expectedFinishDate: null })
   const [savingCells, setSavingCells] = useState({}) // key `${date}:${index}` -> true
   const [savedCells, setSavedCells] = useState({})
+  const [newDayDate, setNewDayDate] = useState('')
+  const [dayActionPending, setDayActionPending] = useState(null) // 'add' | a date being deleted
+  const [dayActionError, setDayActionError] = useState(null)
+
+  async function loadPlanning() {
+    const r = await api.methode.getPlanning(token, model.id)
+    setDebut(r.debut)
+    setHourlySlots(r.hourlySlots)
+    setPlannedDates(r.plannedDates || [])
+    setCellsByDay(r.days || {})
+    setSummary({ totalPlanned: r.totalPlanned, expectedFinishDate: r.expectedFinishDate })
+  }
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setLoadError(false)
-    api.methode
-      .getPlanning(token, model.id)
-      .then((r) => {
-        if (cancelled) return
-        setDebut(r.debut)
-        setHourlySlots(r.hourlySlots)
-        setCellsByDay(r.days || {})
-        setSummary({ totalPlanned: r.totalPlanned, expectedFinishDate: r.expectedFinishDate })
-        setLoading(false)
+    loadPlanning()
+      .then(() => {
+        if (!cancelled) setLoading(false)
       })
       .catch(() => {
         if (cancelled) return
@@ -807,39 +892,16 @@ function PlanningTab({ token, model }) {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, model.id, retryTick])
 
-  // Auto-extending day rows, purely derived from state — no special-case
-  // "add a row" code needed: once any cell in the last rendered day gets a
-  // real value, `cellsByDay` changes, `lastDataDate` moves forward, and a
-  // fresh empty day appears right after it on the next render. Once the
-  // server confirms the plan has reached Qté totale (`expectedFinishDate`
-  // set), rows stop exactly there — matching "الجدول كيوقف" once the target
-  // is reached, with no extra empty row dangling past it.
-  const rows = useMemo(() => {
-    const start = debut || todayInFactoryTZ()
-    // A day only counts as "has data" once one of its cells holds a real
-    // number — merely clicking into a cell and leaving it blank again
-    // (updateCell still records that day with an empty-string cell) must
-    // never by itself spawn a new empty row.
-    const dataDates = Object.keys(cellsByDay).filter((d) =>
-      Object.values(cellsByDay[d] || {}).some((v) => v !== null && v !== undefined && v !== '')
-    )
-    // No data yet → just the one starting row (Début), nothing more. Once
-    // ANY day has a value, one empty buffer day is appended right after the
-    // latest one with data — that's the "auto-extend" — until the plan
-    // reaches Qté totale, at which point rows stop exactly on that day.
-    const hasAnyData = dataDates.length > 0
-    const lastDataDate = hasAnyData ? dataDates.reduce((a, b) => (b > a ? b : a)) : start
-    const endDate = summary.expectedFinishDate || (hasAnyData ? addDaysStr(lastDataDate, 1) : start)
-    const spanDays = Math.max(0, Math.round((new Date(`${endDate}T00:00:00Z`) - new Date(`${start}T00:00:00Z`)) / 86400000))
-    const out = []
-    for (let i = 0; i <= spanDays; i++) {
-      const date = addDaysStr(start, i)
-      out.push({ date, label: formatDayLabel(date), cells: cellsByDay[date] || {} })
-    }
-    return out
-  }, [debut, cellsByDay, summary.expectedFinishDate])
+  // Rows are the explicit, server-held list (planning_days) — sorted here
+  // since a day can be added out of sequence (skipping a holiday, filling
+  // in an earlier date after a later one already exists).
+  const rows = useMemo(
+    () => [...plannedDates].sort().map((date) => ({ date, label: formatDayLabel(date), cells: cellsByDay[date] || {} })),
+    [plannedDates, cellsByDay]
+  )
 
   function updateCell(date, index, value) {
     setCellsByDay((prev) => ({ ...prev, [date]: { ...prev[date], [index]: value } }))
@@ -859,6 +921,42 @@ function PlanningTab({ token, model }) {
     }
   }
 
+  async function addDay(e) {
+    e.preventDefault()
+    if (!newDayDate) return
+    setDayActionError(null)
+    setDayActionPending('add')
+    try {
+      await api.methode.addPlanningDay(token, model.id, newDayDate)
+      await loadPlanning()
+      setNewDayDate('')
+    } catch (err) {
+      setDayActionError(err?.data?.error === 'date_before_debut' ? 'التاريخ قبل Début — اختر تاريخ لاحق.' : 'فشلت إضافة اليوم.')
+    } finally {
+      setDayActionPending(null)
+    }
+  }
+
+  async function deleteDay(date) {
+    if (!confirm(`حذف يوم ${formatDayLabel(date)}؟ غادي يمسح معه أي قيم كانت مدخلة فيه.`)) return
+    setDayActionError(null)
+    setDayActionPending(date)
+    try {
+      const res = await api.methode.deletePlanningDay(token, model.id, date)
+      setSummary({ totalPlanned: res.totalPlanned, expectedFinishDate: res.expectedFinishDate })
+      setPlannedDates((prev) => prev.filter((d) => d !== date))
+      setCellsByDay((prev) => {
+        const next = { ...prev }
+        delete next[date]
+        return next
+      })
+    } catch {
+      setDayActionError('فشل حذف اليوم.')
+    } finally {
+      setDayActionPending(null)
+    }
+  }
+
   const qteTotale = model.qte_totale || 0
   const overPlanned = qteTotale > 0 && summary.totalPlanned > qteTotale
 
@@ -866,9 +964,9 @@ function PlanningTab({ token, model }) {
     <GlowCard>
       <p className="mb-3 text-sm text-slate-400">
         <b className="text-slate-300">Planning</b> — الكمية المخططة لكل ساعة، قبل بداية الإنتاج الحقيقي — عمّر كل يوم
-        بقيمه الخاصة (بداية بطيئة وتسريع بالوسط، ما يشترط رقم ثابت). الأيام كتزاد تلقائياً كل ما عمّرتي آخر واحد،
-        والحفظ أوتوماتيكي بمجرد ما تخرج من الخانة. النظام كيقارنها أوتوماتيكياً بالإنتاج الحقيقي (Plan مقابل Réel،
-        بادينا Home).
+        بقيمه الخاصة (بداية بطيئة وتسريع بالوسط، ما يشترط رقم ثابت). زيد أو احذف أي يوم بالزر تحت (تقدر تخطى يوم عطلة
+        أو تزيد أيام بلا ترتيب صارم) — والحفظ أوتوماتيكي بمجرد ما تخرج من الخانة. النظام كيقارنها أوتوماتيكياً
+        بالإنتاج الحقيقي (Plan مقابل Réel، بادينا Home).
       </p>
 
       <div className="mb-4 flex flex-wrap gap-4 text-sm">
@@ -890,6 +988,24 @@ function PlanningTab({ token, model }) {
           ✅ المخطط وصل للكمية الإجمالية — آخر يوم: {summary.expectedFinishDate}
         </div>
       )}
+
+      <form onSubmit={addDay} className="mb-3 flex flex-wrap items-end gap-2">
+        <input
+          type="date"
+          value={newDayDate}
+          min={debut || undefined}
+          onChange={(e) => setNewDayDate(e.target.value)}
+          className="rounded-md border border-slate-700 bg-navy-900 px-2.5 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={!newDayDate || dayActionPending === 'add'}
+          className="rounded-md border border-turquoise/50 px-3 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10 disabled:opacity-50"
+        >
+          {dayActionPending === 'add' ? 'جاري الإضافة…' : '+ إضافة يوم'}
+        </button>
+        {dayActionError && <span className="text-xs text-status-bad">{dayActionError}</span>}
+      </form>
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
@@ -922,6 +1038,7 @@ function PlanningTab({ token, model }) {
                     {s.label}
                   </th>
                 ))}
+                <th className="sticky top-0 z-10 bg-navy-900 px-2 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -952,6 +1069,16 @@ function PlanningTab({ token, model }) {
                       </td>
                     )
                   })}
+                  <td className="border-t border-slate-800 px-1 text-center">
+                    <button
+                      onClick={() => deleteDay(row.date)}
+                      disabled={dayActionPending === row.date}
+                      title="حذف اليوم"
+                      className="text-status-bad active:opacity-70 disabled:opacity-50"
+                    >
+                      🗑
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

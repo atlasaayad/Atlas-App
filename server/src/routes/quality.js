@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid'
 import { get, all, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
 import { todayInFactoryTZ, computeQualityPct } from '../calc.js'
-import { HOURLY_SLOTS } from '../constants.js'
+import { getWorkHours } from '../workHours.js'
 import { getHourlyEntryTargets } from '../openModels.js'
 
 export const qualityRouter = Router()
@@ -32,7 +32,7 @@ qualityRouter.get('/models/:id/hourly', async (req, res) => {
   const date = String(req.query.date || todayInFactoryTZ())
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
 
-  const entries = await getHourlyEntryTargets(model)
+  const [entries, workHours] = await Promise.all([getHourlyEntryTargets(model), getWorkHours()])
   const hasEntries = entries.length > 1
   const entryIds = entries.map((e) => e.modelId)
 
@@ -72,7 +72,7 @@ qualityRouter.get('/models/:id/hourly', async (req, res) => {
     }
   }
 
-  const hourly = HOURLY_SLOTS.map((s) => {
+  const hourly = workHours.map((s) => {
     const qty = qtyMap[s.index] || 0
     const pieceRetouche = retoucheMap[s.index] || 0
     const base = { ...s, qty, pieceRetouche, qualityPct: computeQualityPct(qty, pieceRetouche) }
@@ -102,10 +102,12 @@ qualityRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   const { id, slotIndex } = req.params
   const pieceRetouche = Math.max(0, Number(req.body?.pieceRetouche) || 0)
   const idx = Number(slotIndex)
-  if (idx < 0 || idx > 8) return res.status(400).json({ error: 'invalid_slot' })
 
   const model = await get('SELECT chain_number, debut FROM models WHERE id = $1', [id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+
+  const workHours = await getWorkHours()
+  if (idx < 0 || idx >= workHours.length) return res.status(400).json({ error: 'invalid_slot' })
 
   // An entry can target ANY other model sharing this chain — its own
   // Couleur/Variante variants, or (a chain overlap — see openModels.js) a

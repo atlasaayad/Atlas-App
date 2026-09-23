@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { nanoid } from 'nanoid'
 import { get, run, ensureSchema, logAudit } from './index.js'
-import { DEPARTMENTS, SPECIALTIES, FINALE_SPECIALTIES } from '../constants.js'
+import { DEPARTMENTS, SPECIALTIES, FINALE_SPECIALTIES, HOURLY_SLOTS } from '../constants.js'
 import { computeVTMinutes, computeDT, todayInFactoryTZ } from '../calc.js'
 
 // Default 4-digit PINs, one per department. Override per-deployment via env
@@ -56,6 +56,30 @@ async function seedSpecialtyDefs() {
   }
   await seedGroup('chain', SPECIALTIES)
   await seedGroup('finale', FINALE_SPECIALTIES)
+}
+
+// Same one-time-only-if-empty seed as seedSpecialtyDefs() above, for the
+// live work_hours table — from the old hardcoded HOURLY_SLOTS, so an
+// already-deployed database's slot layout doesn't change on the day this
+// ships. Only ever runs while the table is empty, so an admin's later
+// add/edit/delete via ⚙️ Réglages (workHours.js) is never overwritten on a
+// later boot.
+function zeroPad(hhmm) {
+  const [h, m] = hhmm.split(':')
+  return `${h.padStart(2, '0')}:${m}`
+}
+
+async function seedWorkHours() {
+  const existing = await get('SELECT COUNT(*) c FROM work_hours')
+  if (Number(existing.c) > 0) return
+  const now = new Date().toISOString()
+  for (let i = 0; i < HOURLY_SLOTS.length; i++) {
+    const [start, end] = HOURLY_SLOTS[i].label.split('-')
+    await run(
+      `INSERT INTO work_hours (id, start_time, end_time, sort_order, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
+      [`wh_${nanoid(10)}`, zeroPad(start), zeroPad(end), i, now]
+    )
+  }
 }
 
 async function seedConfig() {
@@ -225,6 +249,7 @@ export async function runSeed({ log = false } = {}) {
   await seedDepartments()
   await seedConfig()
   await seedSpecialtyDefs()
+  await seedWorkHours()
   await seedDemoModel()
 
   if (log) {
