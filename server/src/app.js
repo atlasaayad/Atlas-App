@@ -20,7 +20,12 @@ import { settingsRouter } from './routes/settings.js'
 
 export const app = express()
 app.use(cors())
-app.use(express.json())
+// 8mb, not the default 100kb — the model-image upload (PUT
+// /methode/models/:id/image) sends the photo as a base64 data URI in the
+// JSON body (~33% larger than the raw file; see imageUpload.js's own
+// MAX_BYTES=6MB cap on the decoded image itself). Every other route's
+// payload is tiny, so this costs nothing in the normal case.
+app.use(express.json({ limit: '8mb' }))
 
 // Cold start already calls runSeed() (which awaits this) once, at module
 // load (see /api/index.js) — but if that single attempt fails (e.g. Neon's

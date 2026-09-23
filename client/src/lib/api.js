@@ -110,6 +110,11 @@ export const api = {
     getPlanning: (token, id) => request(`/methode/models/${id}/planning/all`, { token }),
     updatePlanning: (token, id, date, hourly) =>
       request(`/methode/models/${id}/planning/${date}`, { method: 'PUT', body: { hourly }, token }),
+    addPlanningDay: (token, id, date) => request(`/methode/models/${id}/planning/days`, { method: 'POST', body: { date }, token }),
+    deletePlanningDay: (token, id, date) => request(`/methode/models/${id}/planning/days/${date}`, { method: 'DELETE', token }),
+    uploadModelImage: (token, id, imageBase64) =>
+      request(`/methode/models/${id}/image`, { method: 'PUT', body: { imageBase64 }, token, timeoutMs: 30000 }),
+    deleteModelImage: (token, id) => request(`/methode/models/${id}/image`, { method: 'DELETE', token }),
   },
   production: {
     getHourly: (token, id, date) => request(`/production/models/${id}/hourly?date=${date}`, { token }),
@@ -178,6 +183,11 @@ export const api = {
     deleteSpecialty: (token, groupKey, name) =>
       request(`/settings/specialties/${groupKey}/${encodeURIComponent(name)}`, { method: 'DELETE', token }),
     getFeedback: (token) => request('/settings/feedback', { token }),
+    getWorkHours: (token) => request('/settings/work-hours', { token }),
+    addWorkHour: (token, start, end) => request('/settings/work-hours', { method: 'POST', body: { start, end }, token }),
+    updateWorkHour: (token, id, start, end) =>
+      request(`/settings/work-hours/${id}`, { method: 'PUT', body: { start, end }, token }),
+    deleteWorkHour: (token, id) => request(`/settings/work-hours/${id}`, { method: 'DELETE', token }),
   },
   feedback: {
     submit: (token, message) => request('/settings/feedback', { method: 'POST', body: { message }, token }),

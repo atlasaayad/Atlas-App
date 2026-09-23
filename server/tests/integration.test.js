@@ -12,7 +12,16 @@ import { runSeed } from '../src/db/seed.js'
 import { get, run, all, pool } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
 import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
-import { SPECIALTIES } from '../src/constants.js'
+import { SPECIALTIES, HOURLY_SLOTS } from '../src/constants.js'
+
+// Matches exactly what seedWorkHours() seeds a fresh DB with (from the same
+// HOURLY_SLOTS constant) — used only to independently recompute an expected
+// prodAMaintenant() value in assertions below, mirroring the live
+// work_hours table's shape (getWorkHours()'s {index, label, start, end}).
+const TEST_WORK_HOURS = HOURLY_SLOTS.map((s, i) => {
+  const [start, end] = s.label.split('-')
+  return { index: i, label: s.label, start, end }
+})
 
 let server
 let base
@@ -295,7 +304,7 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
     // prodAMaintenant تحسب من نفس المصدر، لكن حسب الساعة الحالية فعلياً (لو
     // الاختبار اشتغل قبل بداية الدوام 6:30، الناتج صفر بشكل صحيح) — نحسب
     // القيمة المتوقعة بنفس الدالة الحقيقية بدل افتراض توقيت ثابت.
-    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250 }))
+    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250 }, TEST_WORK_HOURS))
   })
 
   await t.test('Total sortie/Le reste/En cours بـBilan de la chaîne يجمعون كل الأيام من Début — مو يوم واحد فقط', async () => {
@@ -331,7 +340,7 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
     // hardcoded to 325) so this doesn't depend on what time of day the
     // test happens to run — before 6:30 the real app also legitimately
     // reports 0, no matter what's recorded.
-    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250, 3: 75 }))
+    assert.equal(dashboard.data.produit, prodAMaintenant({ 2: 250, 3: 75 }, TEST_WORK_HOURS))
   })
 
   await t.test('رفض تاريخ مستقبلي', async () => {
@@ -421,7 +430,7 @@ test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب �
     // dailyPercentage null), peu importe ce qui est enregistré. On calcule
     // la valeur attendue avec la même fonction que l'app plutôt que de
     // supposer une heure fixe.
-    const expectedDailyPct = computeQualityPct(prodAMaintenant({ 0: 100 }), 10)
+    const expectedDailyPct = computeQualityPct(prodAMaintenant({ 0: 100 }, TEST_WORK_HOURS), 10)
     assert.equal(dashboard.data.quality.dailyPercentage, expectedDailyPct)
     assert.equal(dashboard.data.quality.percentage, 90) // cumulatif (Total sortie) n'est jamais borné par l'heure actuelle
     assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
@@ -453,7 +462,7 @@ test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب �
     assert.equal(dashboard.data.quality.percentage, 90)
     assert.equal(dashboard.data.quality.pieceRetoucheCumulative, 30)
     // Journalier (aujourd'hui uniquement) reste inchangé — la correction d'hier ne le touche pas.
-    assert.equal(dashboard.data.quality.dailyPercentage, computeQualityPct(prodAMaintenant({ 0: 100 }), 10))
+    assert.equal(dashboard.data.quality.dailyPercentage, computeQualityPct(prodAMaintenant({ 0: 100 }, TEST_WORK_HOURS), 10))
     assert.equal(dashboard.data.quality.pieceRetoucheToday, 10)
   })
 
@@ -592,7 +601,7 @@ test('Rendement: Rendement_Production% (SAM-based) + Score_Rendement = moyenne a
     // actuelle réelle — on calcule la valeur attendue avec la même fonction
     // que l'app plutôt que de supposer une heure fixe (avant 6:30 "produit"
     // est légitimement 0, peu importe ce qui est enregistré).
-    const expectedProduit = prodAMaintenant({ 0: 100 })
+    const expectedProduit = prodAMaintenant({ 0: 100 }, TEST_WORK_HOURS)
     const expectedDailyProdPct = computeRendementProduction(expectedProduit, 5, 10, 9 * 60)
     const expectedDailyQualityPct = computeQualityPct(expectedProduit, 10)
     const expectedDailyScore = computeScoreRendement(expectedDailyProdPct, expectedDailyQualityPct)
@@ -1870,5 +1879,211 @@ test('⚙️ Réglages: gestion des spécialités (ajout/renommage/suppression) 
   await t.test('message vide → 400', async () => {
     const res = await call('/settings/feedback', { method: 'POST', token: methodeToken, body: { message: '   ' } })
     assert.equal(res.status, 400)
+  })
+})
+
+test('Planning: contrôle manuel des jours ("+ إضافة يوم" / suppression) — planning_days', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+
+  const today = todayInFactoryTZ()
+  const skipAhead = addDaysStr(today, 3) // simulates skipping a holiday — not the next-in-line date
+  const yesterday = addDaysStr(today, -1)
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'PLAN_DAYS_TEST', qteTotale: 100, debut: today, dessin: 'PLD-1', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('un modèle tout juste créé est auto-amorcé avec exactement une ligne, à Début', async () => {
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
+    assert.deepEqual(planning.data.plannedDates, [today])
+  })
+
+  await t.test("+ إضافة يوم : ajoute une date au choix, même hors séquence (saute des jours) — triée à l'affichage", async () => {
+    const res = await call(`/methode/models/${modelId}/planning/days`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { date: skipAhead },
+    })
+    assert.equal(res.status, 201)
+
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
+    assert.deepEqual(planning.data.plannedDates, [today, skipAhead])
+  })
+
+  await t.test('ré-ajouter la même date est un no-op idempotent (pas de doublon)', async () => {
+    const res = await call(`/methode/models/${modelId}/planning/days`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { date: skipAhead },
+    })
+    assert.equal(res.status, 201)
+
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
+    assert.deepEqual(planning.data.plannedDates, [today, skipAhead])
+  })
+
+  await t.test('rejette une date avant Début du modèle', async () => {
+    const res = await call(`/methode/models/${modelId}/planning/days`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { date: yesterday },
+    })
+    assert.equal(res.status, 400)
+    assert.equal(res.data.error, 'date_before_debut')
+  })
+
+  await t.test('format de date invalide → 400', async () => {
+    const res = await call(`/methode/models/${modelId}/planning/days`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { date: '03/09/2026' },
+    })
+    assert.equal(res.status, 400)
+    assert.equal(res.data.error, 'invalid_date')
+  })
+
+  await t.test('supprimer un jour enlève la ligne ET efface les heures qui y étaient saisies (jamais de données orphelines)', async () => {
+    const put = await call(`/methode/models/${modelId}/planning/${skipAhead}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { hourly: [{ index: 0, qty: 30 }] },
+    })
+    assert.equal(put.status, 200)
+    assert.equal(put.data.totalPlanned, 30)
+
+    const del = await call(`/methode/models/${modelId}/planning/days/${skipAhead}`, {
+      method: 'DELETE',
+      token: methodeToken,
+    })
+    assert.equal(del.status, 200)
+    assert.equal(del.data.totalPlanned, 0) // la ligne supprimée emporte ses heures avec elle
+
+    const planning = await call(`/methode/models/${modelId}/planning/all`, { token: methodeToken })
+    assert.deepEqual(planning.data.plannedDates, [today])
+    assert.equal(planning.data.days[skipAhead], undefined)
+
+    const orphanRow = await get('SELECT id FROM planning_hourly WHERE model_id = $1 AND date = $2', [modelId, skipAhead])
+    assert.equal(orphanRow, undefined)
+  })
+})
+
+test('⏰ ساعات العمل: source unique des shifts (Planning/Production/Quality/Home) — ajout en fin de liste, suppression du dernier seulement', async (t) => {
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+
+  const before = await call('/settings/work-hours', { token: methodeToken })
+  assert.equal(before.status, 200)
+  const originalCount = before.data.workHours.length
+  assert.ok(originalCount > 0)
+  const firstSlot = before.data.workHours[0]
+
+  await t.test("un token d'un autre département ne peut ni lire ni modifier les heures", async () => {
+    assert.equal((await call('/settings/work-hours', { token: productionToken })).status, 403)
+    assert.equal(
+      (await call('/settings/work-hours', { method: 'POST', token: productionToken, body: { start: '16:00', end: '17:00' } })).status,
+      403
+    )
+  })
+
+  await t.test('heure invalide → 400', async () => {
+    const res = await call('/settings/work-hours', { method: 'POST', token: methodeToken, body: { start: 'pas une heure', end: '17:00' } })
+    assert.equal(res.status, 400)
+  })
+
+  let addedId
+  await t.test('ajouter une shift → toujours en fin de liste (jamais insérée au milieu)', async () => {
+    const res = await call('/settings/work-hours', { method: 'POST', token: methodeToken, body: { start: '16:00', end: '17:00' } })
+    assert.equal(res.status, 201)
+    assert.equal(res.data.workHours.length, originalCount + 1)
+    const last = res.data.workHours[res.data.workHours.length - 1]
+    assert.equal(last.index, originalCount)
+    assert.equal(last.label, '16:00-17:00')
+    addedId = last.id
+  })
+  t.after(async () => run('DELETE FROM work_hours WHERE id = $1', [addedId]))
+
+  await t.test('supprimer une shift qui n\'est PAS la dernière → 400 (ne casserait pas les slot_index déjà enregistrés)', async () => {
+    const res = await call(`/settings/work-hours/${firstSlot.id}`, { method: 'DELETE', token: methodeToken })
+    assert.equal(res.status, 400)
+    assert.equal(res.data.error, 'can_only_delete_last')
+  })
+
+  await t.test("modifier l'heure d'une shift existante en place reste toujours autorisé (sa position ne bouge pas)", async () => {
+    const res = await call(`/settings/work-hours/${firstSlot.id}`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { start: firstSlot.start, end: firstSlot.end },
+    })
+    assert.equal(res.status, 200)
+    const stillFirst = res.data.workHours[0]
+    assert.equal(stillFirst.id, firstSlot.id)
+    assert.equal(stillFirst.label, firstSlot.label)
+  })
+
+  await t.test('supprimer la dernière shift (celle qu\'on vient d\'ajouter) → autorisé, revient à la liste initiale', async () => {
+    const res = await call(`/settings/work-hours/${addedId}`, { method: 'DELETE', token: methodeToken })
+    assert.equal(res.status, 200)
+    assert.equal(res.data.workHours.length, originalCount)
+    addedId = null
+  })
+})
+
+test('📷 صورة الموديل: upload/delete gated to Agent Méthode, degrades cleanly without Blob storage configured', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'IMAGE_TEST', qteTotale: 10, debut: todayInFactoryTZ(), dessin: 'IMG-1', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('sans BLOB_READ_WRITE_TOKEN configuré (cas de ce test local) → 503 storage_not_configured, jamais un crash', async () => {
+    assert.equal(process.env.BLOB_READ_WRITE_TOKEN, undefined)
+    const res = await call(`/methode/models/${modelId}/image`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { imageBase64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' },
+    })
+    assert.equal(res.status, 503)
+    assert.equal(res.data.error, 'storage_not_configured')
+
+    const model = await call(`/models/${modelId}`)
+    assert.equal(model.data.image_url, null) // jamais partiellement enregistré
+  })
+
+  await t.test('modèle introuvable → 404', async () => {
+    const res = await call('/methode/models/mdl_does_not_exist/image', {
+      method: 'PUT',
+      token: methodeToken,
+      body: { imageBase64: 'data:image/png;base64,AAAA' },
+    })
+    assert.equal(res.status, 404)
+  })
+
+  await t.test('supprimer une image quand il n\'y en a pas déjà → ok (no-op), jamais une erreur', async () => {
+    const res = await call(`/methode/models/${modelId}/image`, { method: 'DELETE', token: methodeToken })
+    assert.equal(res.status, 200)
   })
 })

@@ -1,17 +1,12 @@
 import { Router } from 'express'
 import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
-import {
-  DEPARTMENTS,
-  CHAIN_NUMBERS,
-  HOURLY_SLOTS,
-  GENERIC_POSTE_DEPARTMENTS,
-  WORK_HOURS_PER_DAY,
-} from '../constants.js'
+import { DEPARTMENTS, CHAIN_NUMBERS, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels } from '../openModels.js'
 import { getPlanVsReel } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
+import { getWorkHours } from '../workHours.js'
 import {
   computeObjectifJour,
   prodAMaintenant,
@@ -149,7 +144,7 @@ function formatLaunchTimer(row) {
 // `colors` array (the root itself included) — never combined with any
 // other color, unlike every other figure in fullDashboard(), which is the
 // chain-wide combined total across all colors.
-async function computeColorBreakdown(colorModel, debut, today, dt) {
+async function computeColorBreakdown(colorModel, debut, today, dt, workHours) {
   const [hourlyRows, cumulativeRow, totalsRow] = await Promise.all([
     all('SELECT slot_index, qty FROM production_history WHERE model_id = $1 AND date = $2', [colorModel.id, today]),
     get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE model_id = $1 AND date >= $2 AND date <= $3', [
@@ -164,7 +159,7 @@ async function computeColorBreakdown(colorModel, debut, today, dt) {
   // DT), so this color's bar reads as its own contribution toward the
   // hour's shared target — the same HourlyBarChart component renders
   // either array unmodified.
-  const hourly = HOURLY_SLOTS.map((s) => {
+  const hourly = workHours.map((s) => {
     const qty = hourlyMap[s.index] || 0
     return { ...s, qty, pct: dt > 0 ? Math.round((qty / dt) * 100) : 0 }
   })
@@ -193,6 +188,7 @@ export async function fullDashboard(model) {
     : await all('SELECT * FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [model.id])
   const colorModels = [model, ...variantRows]
   const colorModelIds = colorModels.map((m) => m.id)
+  const workHours = await getWorkHours()
 
   // All lookups below are independent (keyed only by model.id/chain_number)
   // and none depends on another's result, so they're fired together instead
@@ -293,7 +289,7 @@ export async function fullDashboard(model) {
       // other color) — root is always colorData[0], so "no variants" means
       // this is a single-element array and the client can treat it as
       // optional. See computeColorBreakdown() below.
-      Promise.all(colorModels.map((m) => computeColorBreakdown(m, model.debut, today, model.dt))),
+      Promise.all(colorModels.map((m) => computeColorBreakdown(m, model.debut, today, model.dt, workHours))),
       // Planning — Plan vs Réel, always scoped to the ROOT model alone
       // (never per-color): a plan is entered once for the whole launch,
       // same ownership as VT/DT/gamme, not a per-variant thing. Returns
@@ -316,15 +312,15 @@ export async function fullDashboard(model) {
   // without changing any of the calculations themselves.
   const hourlyMap = {}
   for (const r of hourlyRows) hourlyMap[r.slot_index] = (hourlyMap[r.slot_index] || 0) + r.qty
-  const hourly = HOURLY_SLOTS.map((s) => ({
+  const hourly = workHours.map((s) => ({
     ...s,
     qty: hourlyMap[s.index] || 0,
     pct: model.dt > 0 ? Math.round(((hourlyMap[s.index] || 0) / model.dt) * 100) : 0,
   }))
 
   const totalEntreeCombined = totalsRows.reduce((sum, r) => sum + (r.total_entree || 0), 0)
-  const demande = Math.round(computeObjectifJour(model.dt))
-  const produit = prodAMaintenant(hourlyMap)
+  const demande = Math.round(computeObjectifJour(model.dt, workHours.length))
+  const produit = prodAMaintenant(hourlyMap, workHours)
   const restant = Math.max(demande - produit, 0)
   // "Total sortie" (Bilan de la chaîne) is the model's whole-life output —
   // every hour ever recorded for this chain from Début to today, not just
@@ -380,7 +376,7 @@ export async function fullDashboard(model) {
   const hourlyRendementProdPct = lastHourEntry ? computeRendementProduction(hourlyQty, samMinutes, ouvriersPresents, 60) : null
   const hourlyScoreRendement = computeScoreRendement(hourlyRendementProdPct, hourlyQualityPct)
 
-  const dailyRendementProdPct = computeRendementProduction(produit, samMinutes, ouvriersPresents, WORK_HOURS_PER_DAY * 60)
+  const dailyRendementProdPct = computeRendementProduction(produit, samMinutes, ouvriersPresents, workHours.length * 60)
   const dailyScoreRendement = computeScoreRendement(dailyRendementProdPct, qualityDailyPct)
 
   const cumulativeDays = daysBetweenInclusive(model.debut || today, today)
@@ -388,7 +384,7 @@ export async function fullDashboard(model) {
     totalSortie,
     samMinutes,
     ouvriersPresents,
-    cumulativeDays * WORK_HOURS_PER_DAY * 60
+    cumulativeDays * workHours.length * 60
   )
   const cumulativeScoreRendement = computeScoreRendement(cumulativeRendementProdPct, qualityCumulativePct)
 
@@ -434,6 +430,7 @@ export async function fullDashboard(model) {
       finPrevue: model.fin_prevue,
       dessin: model.dessin,
       commande: model.commande,
+      imageUrl: model.image_url || null,
     },
     dt: model.dt,
     vt: model.vt,

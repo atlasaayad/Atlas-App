@@ -29,7 +29,7 @@ test('computeDT = (ND * 3600) / somme des TPS', () => {
 })
 
 test('computeObjectifJour = DT * heures de travail par jour', () => {
-  approx(computeObjectifJour(240), 240 * WORK_HOURS_PER_DAY)
+  approx(computeObjectifJour(240, WORK_HOURS_PER_DAY), 240 * WORK_HOURS_PER_DAY)
 })
 
 // Régression contre le modèle de démo réel (server/src/db/seed.js): 8 lignes
@@ -48,7 +48,7 @@ test('régression: chaîne de calcul VT → DT → Objectif/jour sur le modèle 
   const dt = computeDT(nd, totalTps)
   approx(dt, 488.13559322033898, 1e-6)
 
-  const objectifJour = computeObjectifJour(dt)
+  const objectifJour = computeObjectifJour(dt, WORK_HOURS_PER_DAY)
   approx(objectifJour, 4393.220338983051, 1e-4)
 })
 

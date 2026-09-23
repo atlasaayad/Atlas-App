@@ -52,6 +52,7 @@ export function ensureSchema() {
       .then(migrateSpecialtyNames)
       .then(migrateProductionHistoryUniqueKey)
       .then(migrateQualityHistoryUniqueKey)
+      .then(migratePlanningDaysBackfill)
       .catch((err) => {
         schemaReady = null
         throw err
@@ -137,6 +138,13 @@ CREATE TABLE IF NOT EXISTS models (
 -- deleting a root also removes its variants, same as any other child row.
 ALTER TABLE models ADD COLUMN IF NOT EXISTS parent_model_id TEXT REFERENCES models(id) ON DELETE CASCADE;
 ALTER TABLE models ADD COLUMN IF NOT EXISTS variant_label TEXT;
+
+-- The model's own photo (the actual garment/piece), shown as a thumbnail on
+-- Home's identity card — uploaded by Agent Méthode, optional (NULL means the
+-- card just renders without one, unchanged from before this existed). Always
+-- a public Vercel Blob URL (see imageUpload.js) — the DB only ever holds the
+-- URL, never the image bytes themselves.
+ALTER TABLE models ADD COLUMN IF NOT EXISTS image_url TEXT;
 
 CREATE TABLE IF NOT EXISTS gamme_lines (
   id TEXT PRIMARY KEY,
@@ -425,6 +433,45 @@ CREATE TABLE IF NOT EXISTS feedback_reports (
   message TEXT NOT NULL,
   created_at TEXT
 );
+
+-- ⏰ ساعات العمل — the live, admin-editable hourly-slot layout that used to
+-- be the hardcoded HOURLY_SLOTS/WORK_HOURS_PER_DAY in constants.js. This is
+-- now the ONE source of truth every screen using hourly slots (Planning,
+-- Production, Quality, Home's charts, the audit report) reads live — see
+-- workHours.js. 'sort_order' (ascending) IS the slot's 'slot_index' used
+-- throughout production_history/quality_history/planning_hourly, so editing
+-- this list is NOT free-form: workHours.js only ever appends a new slot at
+-- the end (never inserts in the middle) and only ever lets the LAST slot be
+-- deleted — anything else would silently reinterpret every OTHER slot's
+-- already-recorded historical data under a different time range. Editing an
+-- existing slot's own start/end time in place is always safe (its position,
+-- and therefore its slot_index, never moves). Seeded once from the old
+-- hardcoded HOURLY_SLOTS (seedWorkHours() in seed.js) so an already-deployed
+-- database's behavior doesn't change on the day this ships.
+CREATE TABLE IF NOT EXISTS work_hours (
+  id TEXT PRIMARY KEY,
+  start_time TEXT NOT NULL,
+  end_time TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+-- Which day-rows Agent Méthode's Planning table shows for a model —
+-- previously purely derived (Début + one auto-extending buffer day); now
+-- explicit and user-controlled ("+ إضافة يوم" picks any date, skipping a
+-- holiday or adding out of order, and each row is individually deletable).
+-- Deliberately separate from planning_hourly (which is the actual entered
+-- qty data) — a day can appear here with nothing entered yet (a freshly
+-- added blank row), and deleting a row here also clears whatever was
+-- entered for it (see the DELETE route) so no orphaned hourly data is left
+-- behind for a date that's no longer even shown.
+CREATE TABLE IF NOT EXISTS planning_days (
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  created_at TEXT,
+  PRIMARY KEY (model_id, date)
+);
 `
 
 // One-time (per old specialty code), idempotent specialty rename/merge
@@ -527,6 +574,25 @@ async function migrateQualityHistoryUniqueKey() {
       END IF;
     END $$;
   `)
+}
+
+// One-time (idempotent) backfill: planning_days didn't exist before this
+// deploy, so any model whose Agent Méthode already entered a real plan has
+// data sitting in planning_hourly with zero corresponding planning_days
+// rows — without this, that data would become invisible/uneditable the
+// moment the client starts rendering the table from planning_days alone.
+// Runs on every ensureSchema() call, like the other one-time migrations
+// below; a no-op after the first successful run (ON CONFLICT DO NOTHING
+// finds nothing left to insert). A genuinely brand-new model with no plan
+// entered yet gets its first row lazily, from the GET /planning/all route
+// itself (seeded at Début), not here.
+async function migratePlanningDaysBackfill() {
+  await run(`
+    INSERT INTO planning_days (model_id, date, created_at)
+    SELECT DISTINCT ph.model_id, ph.date, $1
+    FROM planning_hourly ph
+    ON CONFLICT (model_id, date) DO NOTHING
+  `, [new Date().toISOString()])
 }
 
 export async function logAudit({ deptKey, modelId, action, details }) {

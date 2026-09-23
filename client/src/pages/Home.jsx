@@ -228,11 +228,20 @@ function DashboardBody({ data }) {
       {/* 1. Identity card */}
       <GlowCard>
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="font-display text-lg font-semibold text-slate-100">
-              {data.identity.client} <span className="text-slate-500">· {data.identity.dessin}</span>
+          <div className="flex items-center gap-3">
+            {data.identity.imageUrl && (
+              <img
+                src={data.identity.imageUrl}
+                alt=""
+                className="h-14 w-14 shrink-0 rounded-md border border-slate-700 object-cover"
+              />
+            )}
+            <div>
+              <div className="font-display text-lg font-semibold text-slate-100">
+                {data.identity.client} <span className="text-slate-500">· {data.identity.dessin}</span>
+              </div>
+              <div className="text-xs text-slate-500">Chaîne {data.chainNumber}</div>
             </div>
-            <div className="text-xs text-slate-500">Chaîne {data.chainNumber}</div>
           </div>
           <div className="flex flex-wrap gap-6 text-sm">
             <Field label="Qté totale" value={data.identity.qteTotale?.toLocaleString('fr-FR')} />

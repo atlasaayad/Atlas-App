@@ -64,6 +64,12 @@ export const FINALE_SPECIALTIES = [
 
 export const MACHINES = ['301', '502', '504', '516', 'robot', 'fer', 'main', 'sp', 'rz/stg']
 
+// ⚠️ Default/seed value ONLY — the live, admin-editable slot layout now
+// lives in the work_hours table (see workHours.js and the "⚙️ Réglages →
+// ساعات العمل" screen, Agent Méthode/Patron only). Read exactly once, by
+// seedWorkHours() in db/seed.js, to populate a brand-new database; no
+// runtime route imports it anymore (calc.test.js keeps using it as a
+// stable pure-function test fixture, which is unrelated).
 export const HOURLY_SLOTS = [
   { index: 0, label: '6:30-7:30' },
   { index: 1, label: '7:30-8:30' },
@@ -76,6 +82,9 @@ export const HOURLY_SLOTS = [
   { index: 8, label: '15:00-16:00' },
 ]
 
+// ⚠️ Same caveat as HOURLY_SLOTS above — kept only as calc.test.js's test
+// fixture. Runtime code now always passes the live slot count
+// (workHours.length) explicitly to computeObjectifJour() instead.
 export const WORK_HOURS_PER_DAY = 9
 
 export const CHAIN_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8]

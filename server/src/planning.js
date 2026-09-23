@@ -1,5 +1,5 @@
 import { all } from './db/index.js'
-import { HOURLY_SLOTS } from './constants.js'
+import { getWorkHours } from './workHours.js'
 import { todayInFactoryTZ } from './calc.js'
 
 function addDays(dateStr, n) {
@@ -43,9 +43,10 @@ export async function getPlanningSummary(model) {
 // far today happens to reach. Diffs (pieces + %) are left for the client to
 // compute from planQty/realQty — never a monetary figure, by design.
 export async function getPlanVsReel(model) {
-  const [planRows, realRows] = await Promise.all([
+  const [planRows, realRows, workHours] = await Promise.all([
     all('SELECT date, slot_index, qty FROM planning_hourly WHERE model_id = $1 ORDER BY date, slot_index', [model.id]),
     all('SELECT date, slot_index, qty FROM production_history WHERE model_id = $1', [model.id]),
+    getWorkHours(),
   ])
   if (planRows.length === 0) return { hasPlan: false }
 
@@ -95,7 +96,7 @@ export async function getPlanVsReel(model) {
     daily.push({ date, planQty, realQty, planCumulative, realCumulative })
   }
 
-  const todayHourly = HOURLY_SLOTS.map((s) => ({
+  const todayHourly = workHours.map((s) => ({
     ...s,
     planQty: planByDateSlot[`${today}:${s.index}`] || 0,
     realQty: realByDateSlot[`${today}:${s.index}`] || 0,

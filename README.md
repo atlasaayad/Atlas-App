@@ -391,26 +391,32 @@ automatically, how the real output compares to what was planned.
   of its own. An hour with no row means "not planned" — the client always
   shows it blank ("غير مخطط"), never a fake 0, and clearing a previously
   planned hour actually deletes its row rather than writing a 0.
-- **Entering the plan — one continuous table, no day picker** — a row per
-  day (starting at the model's own Début), a column per hour; Agent
-  Méthode just types straight into the grid, day after day, each with its
-  own free-form values (a slow start, a faster middle — no
-  fixed-DT-per-hour assumption). Days extend themselves: the table starts
-  with exactly one row, and a fresh empty day is appended right under the
-  last one the moment it gets any real value — never a wall of empty rows
-  upfront, never a dead end with nowhere left to type. `GET
-  /methode/models/:id/planning/all` returns every day's data (and the 9
-  hour-slot labels) in one shot so the whole table renders at once; the
-  table itself scrolls (day-label column and hour-label row both sticky)
-  rather than paging between screens. Each cell auto-saves on blur — one
-  real request per hour actually touched (`PUT
-  /methode/models/:id/planning/:date` with a single-slot `hourly` array),
-  no page-wide "Enregistrer". A live "Total planifié: X / Qté totale"
-  (turns amber past the target) sits above the grid the whole time; once
-  the planned cumulative reaches Qté totale, a banner names that exact day
-  and the table stops extending there — editing already-shown days can
-  still push the total back under target, which reopens an empty row past
-  the end exactly as before.
+- **Entering the plan — one continuous table, manually controlled rows** —
+  a row per day, a column per hour; Agent Méthode just types straight into
+  the grid, each day with its own free-form values (a slow start, a faster
+  middle — no fixed-DT-per-hour assumption). Which days appear is now
+  explicit and user-controlled (**`planning_days`**, one `(model_id,
+  date)` row per shown day — separate from `planning_hourly`, the actual
+  entered qty) rather than auto-extending: a "+ إضافة يوم" date-picker adds
+  any date at all — out of sequence, skipping a holiday — and every row has
+  its own 🗑 delete button (which also clears whatever hourly data was
+  entered for that day, never leaving an orphaned row behind). A brand-new
+  model still starts with exactly one row, at its own Début, seeded lazily
+  on first load; an already-deployed database's existing plans are
+  backfilled once into `planning_days` from their `planning_hourly` dates
+  (`migratePlanningDaysBackfill()`, `db/index.js`) so nothing entered
+  before this shipped becomes invisible. `GET
+  /methode/models/:id/planning/all` returns every day's data, the live
+  `plannedDates` list, and the current hour-slot labels (see ⏰ ساعات العمل
+  below) in one shot so the whole table renders at once; the table itself
+  scrolls (day-label column and hour-label row both sticky) rather than
+  paging between screens. Each cell auto-saves on blur — one real request
+  per hour actually touched (`PUT /methode/models/:id/planning/:date` with
+  a single-slot `hourly` array), no page-wide "Enregistrer". A live "Total
+  planifié: X / Qté totale" (turns amber past the target) sits above the
+  grid the whole time; once the planned cumulative reaches Qté totale, a
+  banner names that exact day — purely informational now, since row
+  add/delete is manual, so it never blocks adding further days past it.
 - **Home — "Planning — Plan vs Réel"** — a new card, shown only when a
   plan actually exists (`planning.hasPlan`; a model nobody ever planned
   looks exactly like it did before this feature). Three levels at once,
@@ -424,7 +430,36 @@ automatically, how the real output compares to what was planned.
   app's usual turquoise (live, real data) — reusing that existing color
   language rather than inventing a new one.
 
-### ⚙️ Réglages — editable specialties, feedback log, per-device language (Agent Méthode + Patron)
+### 🖼️ Model photo on the identity card (Agent Méthode + Home)
+
+Home's identity card (the top card showing client/dessin/Qté totale/Début/Fin
+prévue) can now show a thumbnail of the actual garment/piece next to that
+text — entirely optional; a model nobody ever added a photo for renders
+exactly like it did before this feature.
+
+- Uploaded from Agent Méthode's Identité tab (`ModelImageUploader`,
+  `client/src/pages/dept/MethodeForm.jsx`) — a file input reads the picked
+  image client-side (`FileReader.readAsDataURL`) and sends it as a base64
+  data URI in a normal JSON `PUT /methode/models/:id/image` request (5MB
+  client-side cap, 6MB decoded server-side), rather than a multipart
+  upload — simpler given the rest of the API is JSON-only, and small enough
+  at these caps that the app's global JSON body limit only needed raising
+  to 8mb (`server/src/app.js`), not switched to a different parser.
+- **Storage: Vercel Blob** (`server/src/imageUpload.js`, `@vercel/blob`) —
+  the decoded image is re-uploaded there (never proxied as-is) as a public
+  object; only its URL is stored, on `models.image_url`. Requires
+  `BLOB_READ_WRITE_TOKEN` (auto-injected once a Blob store is connected
+  under Vercel's Storage tab — see `.env.example`); without it, upload
+  returns `503 storage_not_configured` and the Identité tab shows a clear
+  message instead of erroring — model creation/editing itself is
+  completely unaffected either way, matching the same "optional API key,
+  clean degradation" pattern as Ask Atlas/ATLAS PREDICT.
+- Replacing or deleting an image best-effort deletes the old Blob object
+  too (`deleteModelImage()`), but a failed delete there never blocks
+  clearing/replacing the DB reference — the card always reflects
+  `models.image_url` correctly either way.
+
+### ⚙️ Réglages — editable specialties, work hours, feedback log, per-device language (Agent Méthode + Patron)
 
 A new "⚙️ الإعدادات" tile on the Départements page, alongside the normal
 PIN-gated department tiles but not itself a real department — it reuses
@@ -456,6 +491,27 @@ Three sections:
   `migrateSpecialtyNames()` already used for the old hardcoded rename —
   reused, not reinvented, just triggered on demand instead of once at
   deploy.
+- **⏰ ساعات العمل — one centralized shift layout for the whole system** —
+  the 9 hourly slots (`6:30-7:30` … `15:00-16:00`) used to be hardcoded in
+  `constants.js` (`HOURLY_SLOTS`/`WORK_HOURS_PER_DAY`); they now live in a
+  new `work_hours` table (`server/src/workHours.js`'s `getWorkHours()`),
+  editable from this screen with no code change and no redeploy. Every
+  screen/route that used to import those constants directly — Planning,
+  Agent Production's/Quality's hourly entry, Home's dashboard/charts, the
+  audit report — now calls `getWorkHours()` live instead, so a change here
+  takes effect everywhere at once. **The catch**: `work_hours`' ascending
+  `sort_order` **is** the `slot_index` every hourly table
+  (`production_history`/`quality_history`/`planning_hourly`) keys its
+  historical data by — deleting or reordering a middle slot would silently
+  reinterpret every OTHER slot's already-recorded data under a different
+  time range. So editing is deliberately constrained: a new slot always
+  **appends** at the end (never inserted in the middle), and only the
+  **last** slot may be deleted (attempting any other returns `400
+  can_only_delete_last`) — editing an existing slot's own start/end time in
+  place is always safe (its position never moves) and unrestricted. Seeded
+  once from the old `HOURLY_SLOTS` (`seedWorkHours()` in `db/seed.js`) so
+  an already-deployed database's layout doesn't change on the day this
+  ships.
 - **📩 Reporting a problem** — open to any logged-in department, not just
   Méthode/Patron: a small 📩 button on every department screen's own top
   bar (`FeedbackButton.jsx`, rendered from `DeptGate.jsx`'s `BackBar`, so
@@ -855,6 +911,7 @@ just-merged fix "still doesn't work," first rule out a stale cached page
 | `PIN_<DEPT>` | No | Override a department's PIN — re-synced on every boot, so it can be rotated later too |
 | `ANTHROPIC_API_KEY` | No | Enables Ask Atlas. Without it, `/api/ask` returns `503 ai_not_configured` and the UI degrades gracefully |
 | `ASK_DAILY_LIMIT` | No | Ask Atlas questions allowed per factory-local day, system-wide. Defaults to `100` |
+| `BLOB_READ_WRITE_TOKEN` | No | Enables the model-photo upload. Auto-set once a Blob store is connected (Vercel Project → Storage). Without it, upload returns `503 storage_not_configured` and the identity card just renders without a photo |
 
 ## Customizing for another factory
 

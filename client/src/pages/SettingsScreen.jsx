@@ -14,6 +14,7 @@ export default function SettingsScreen({ token, onBack }) {
       </div>
 
       <SpecialtiesCard token={token} />
+      <WorkHoursCard token={token} />
       <FeedbackCard token={token} />
       <LanguageCard />
     </div>
@@ -167,6 +168,175 @@ function SpecialtyRow({ name, onRename, onDelete }) {
           تعديل
         </button>
         <button onClick={onDelete} className="rounded px-2 py-1 text-xs text-status-bad active:bg-status-bad/10">
+          حذف
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ⏰ ساعات العمل — المصدر الوحيد لشرائح الساعات بكامل النظام (Planning،
+// Production، Quality، لوحة القيادة، تقرير Audit) — أي تعديل هنا كيتبدل
+// أوتوماتيكياً فكل الشاشات بلا الحاجة يبدلو واحد واحد (server/src/
+// workHours.js). الإضافة دائماً فآخر اللائحة، والحذف مسموح غير للشريحة
+// الأخيرة — تفادياً لأي تبديل فترتيب الشرائح يفسد بيانات قديمة مسجلة
+// بشرائح سابقة (شوف التعليق فوق جدول work_hours فـ db/index.js).
+function WorkHoursCard({ token }) {
+  const [workHours, setWorkHours] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [newStart, setNewStart] = useState('')
+  const [newEnd, setNewEnd] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    api.settings
+      .getWorkHours(token)
+      .then((r) => {
+        if (!cancelled) setWorkHours(r.workHours)
+      })
+      .finally(() => !cancelled && setLoading(false))
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  async function addOne(e) {
+    e.preventDefault()
+    if (!newStart || !newEnd) return
+    setSaving(true)
+    setError('')
+    try {
+      const r = await api.settings.addWorkHour(token, newStart, newEnd)
+      setWorkHours(r.workHours)
+      setNewStart('')
+      setNewEnd('')
+    } catch {
+      setError('فشلت الإضافة — تحقق من الوقت.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function update(id, start, end) {
+    const r = await api.settings.updateWorkHour(token, id, start, end)
+    setWorkHours(r.workHours)
+  }
+
+  async function remove(id) {
+    if (!confirm('حذف آخر شريحة ساعة؟')) return
+    const r = await api.settings.deleteWorkHour(token, id)
+    setWorkHours(r.workHours)
+  }
+
+  return (
+    <GlowCard title="⏰ ساعات العمل">
+      <p className="mb-3 text-sm text-slate-400">
+        شرائح الساعات المستعملة فكل شاشات النظام (Planning، Production، Quality، لوحة القيادة). تعديل الوقت لشريحة
+        موجودة آمن دائماً؛ الإضافة كتزاد فآخر اللائحة، والحذف مسموح غير للشريحة الأخيرة — باش ما تتبدلش بيانات قديمة
+        مسجلة بشرائح سابقة.
+      </p>
+      {loading ? (
+        <div className="py-6 text-center text-sm text-slate-500">Chargement…</div>
+      ) : (
+        <div className="space-y-2">
+          {workHours.map((wh, i) => (
+            <WorkHourRow
+              key={wh.id}
+              workHour={wh}
+              isLast={i === workHours.length - 1}
+              onUpdate={(start, end) => update(wh.id, start, end)}
+              onDelete={() => remove(wh.id)}
+            />
+          ))}
+        </div>
+      )}
+      <form onSubmit={addOne} className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          type="time"
+          value={newStart}
+          onChange={(e) => setNewStart(e.target.value)}
+          className="h-11 rounded-md border border-slate-700 bg-navy-900 px-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+        />
+        <span className="text-slate-500">—</span>
+        <input
+          type="time"
+          value={newEnd}
+          onChange={(e) => setNewEnd(e.target.value)}
+          className="h-11 rounded-md border border-slate-700 bg-navy-900 px-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={saving}
+          className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-4 text-sm font-medium text-turquoise disabled:opacity-50"
+        >
+          + إضافة شريحة
+        </button>
+      </form>
+      {error && <div className="mt-2 text-sm text-status-bad">{error}</div>}
+    </GlowCard>
+  )
+}
+
+function WorkHourRow({ workHour, isLast, onUpdate, onDelete }) {
+  const [editing, setEditing] = useState(false)
+  const [start, setStart] = useState(workHour.start)
+  const [end, setEnd] = useState(workHour.end)
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2">
+        <input
+          type="time"
+          value={start}
+          onChange={(e) => setStart(e.target.value)}
+          autoFocus
+          className="h-10 rounded border border-turquoise/50 bg-navy-900 px-2 text-sm text-slate-200 focus:outline-none"
+        />
+        <span className="text-slate-500">—</span>
+        <input
+          type="time"
+          value={end}
+          onChange={(e) => setEnd(e.target.value)}
+          className="h-10 rounded border border-turquoise/50 bg-navy-900 px-2 text-sm text-slate-200 focus:outline-none"
+        />
+        <button
+          onClick={async () => {
+            await onUpdate(start, end)
+            setEditing(false)
+          }}
+          className="h-10 shrink-0 rounded border border-turquoise/50 px-3 text-xs text-turquoise"
+        >
+          حفظ
+        </button>
+        <button
+          onClick={() => {
+            setStart(workHour.start)
+            setEnd(workHour.end)
+            setEditing(false)
+          }}
+          className="h-10 shrink-0 rounded border border-slate-700 px-3 text-xs text-slate-400"
+        >
+          إلغاء
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center justify-between rounded-md border border-slate-800 bg-navy-900/40 px-3 py-2">
+      <span className="font-mono text-sm text-slate-200">{workHour.label}</span>
+      <div className="flex gap-1.5">
+        <button onClick={() => setEditing(true)} className="rounded px-2 py-1 text-xs text-turquoise active:bg-turquoise/10">
+          تعديل
+        </button>
+        <button
+          onClick={onDelete}
+          disabled={!isLast}
+          title={isLast ? '' : 'يمكن حذف الشريحة الأخيرة فقط'}
+          className="rounded px-2 py-1 text-xs text-status-bad active:bg-status-bad/10 disabled:opacity-30"
+        >
           حذف
         </button>
       </div>

@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid'
 import { get, all, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
 import { todayInFactoryTZ } from '../calc.js'
-import { HOURLY_SLOTS } from '../constants.js'
+import { getWorkHours } from '../workHours.js'
 import { getHourlyEntryTargets } from '../openModels.js'
 
 export const productionRouter = Router()
@@ -28,7 +28,7 @@ productionRouter.get('/models/:id/hourly', async (req, res) => {
   const date = String(req.query.date || todayInFactoryTZ())
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid_date' })
 
-  const entries = await getHourlyEntryTargets(model)
+  const [entries, workHours] = await Promise.all([getHourlyEntryTargets(model), getWorkHours()])
   const hasEntries = entries.length > 1
 
   // Restricted to exactly this chain's current entries (model_id = ANY(...))
@@ -50,7 +50,7 @@ productionRouter.get('/models/:id/hourly', async (req, res) => {
     }
   }
 
-  const hourly = HOURLY_SLOTS.map((s) => {
+  const hourly = workHours.map((s) => {
     const base = { ...s, qty: hourlyMap[s.index] || 0 }
     if (!hasEntries) return base
     const present = byModelMap[s.index] || {}
@@ -72,10 +72,12 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   const { id, slotIndex } = req.params
   const qty = Number(req.body?.qty) || 0
   const idx = Number(slotIndex)
-  if (idx < 0 || idx > 8) return res.status(400).json({ error: 'invalid_slot' })
 
   const model = await get('SELECT chain_number, debut FROM models WHERE id = $1', [id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+
+  const workHours = await getWorkHours()
+  if (idx < 0 || idx >= workHours.length) return res.status(400).json({ error: 'invalid_slot' })
 
   // An entry can target ANY other model sharing this chain — its own
   // Couleur/Variante variants, or (a chain overlap — see openModels.js) a
