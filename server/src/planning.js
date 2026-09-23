@@ -76,7 +76,17 @@ export async function getPlanVsReel(model) {
     realByDate[r.date] = (realByDate[r.date] || 0) + r.qty
   }
 
-  const startDate = model.debut || today
+  // Fall back to the earliest real plan/production date when Début is
+  // blank (it's an optional field) — the old `model.debut || today`
+  // fallback silently collapsed this whole-span comparison down to "today
+  // only" whenever it was blank, hiding real plan/production history from
+  // the "Plan vs Réel" daily table, the same bug shape as "Total sortie"
+  // (see the fix in routes/public.js's fullDashboard()). planRows is
+  // already known non-empty here (see the early return above) and is
+  // ORDER BY date, so its first row is the earliest planned date.
+  const earliestRealDate = realRows.reduce((min, r) => (!min || r.date < min ? r.date : min), null)
+  const earliestKnownDate = earliestRealDate && earliestRealDate < planRows[0].date ? earliestRealDate : planRows[0].date
+  const startDate = model.debut || earliestKnownDate
   const endDate = expectedFinishDate && expectedFinishDate > today ? expectedFinishDate : today
   const spanDays = Math.max(0, Math.round((new Date(`${endDate}T00:00:00Z`) - new Date(`${startDate}T00:00:00Z`)) / 86400000))
 
