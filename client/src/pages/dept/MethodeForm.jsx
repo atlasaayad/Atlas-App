@@ -5,7 +5,7 @@ import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
-import { SPECIALTIES, MACHINES, DELAY_REASONS } from '../../lib/constants'
+import { MACHINES, DELAY_REASONS } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration, hoursToHHMM, hhmmToHours } from '../../lib/calc'
 import { todayInFactoryTZ } from '../../lib/date'
 
@@ -417,7 +417,7 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          {SPECIALTIES.map((sp) => {
+          {Object.keys(model.effectif || {}).map((sp) => {
             const required = model.effectif?.[sp] ?? 0
             const value = attendance[sp] ?? 0
             // Not an error (real over-staffing happens) — just a nudge for the
@@ -968,7 +968,7 @@ function EffectifTab({ token, model, onSaved }) {
   const [saved, setSaved] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
 
-  const nd = useMemo(() => SPECIALTIES.reduce((s, sp) => s + (Number(effectif[sp]) || 0), 0), [effectif])
+  const nd = useMemo(() => Object.values(effectif).reduce((s, v) => s + (Number(v) || 0), 0), [effectif])
 
   async function submit() {
     setSaving(true)
@@ -996,7 +996,7 @@ function EffectifTab({ token, model, onSaved }) {
       </div>
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {SPECIALTIES.map((sp) => (
+        {Object.keys(effectif).map((sp) => (
           <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
             <Stepper label={sp} value={effectif[sp] ?? 0} onChange={(v) => setEffectif({ ...effectif, [sp]: v })} max={999} />
             {voiceMode && (

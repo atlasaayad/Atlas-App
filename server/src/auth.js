@@ -100,3 +100,33 @@ export function requireDept(deptKeyOrKeys) {
     next()
   }
 }
+
+// Like requireDept(), but accepts a valid token from ANY department rather
+// than a specific allow-list — for the one endpoint genuinely meant to be
+// open to whoever happens to be logged in right now (📩 feedback
+// submission, routes/settings.js): any real department's token proves
+// "a real person on the floor submitted this", without hardcoding which
+// departments exist here (unlike requireDept, this never needs updating
+// when a new department is added).
+export function requireAnyDept() {
+  return async (req, res, next) => {
+    const header = req.headers.authorization || ''
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null
+    if (!token) return res.status(401).json({ error: 'missing_token' })
+
+    let payload
+    try {
+      payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
+    } catch {
+      return res.status(401).json({ error: 'invalid_token' })
+    }
+
+    const dept = await get('SELECT pin_hash FROM departments WHERE key = $1', [payload.dept])
+    if (!dept || pinFingerprint(dept.pin_hash) !== payload.pv) {
+      return res.status(401).json({ error: 'pin_rotated' })
+    }
+
+    req.dept = payload.dept
+    next()
+  }
+}

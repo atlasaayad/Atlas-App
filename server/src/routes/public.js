@@ -5,14 +5,13 @@ import {
   DEPARTMENTS,
   CHAIN_NUMBERS,
   HOURLY_SLOTS,
-  SPECIALTIES,
-  FINALE_SPECIALTIES,
   GENERIC_POSTE_DEPARTMENTS,
   WORK_HOURS_PER_DAY,
 } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels } from '../openModels.js'
 import { getPlanVsReel } from '../planning.js'
+import { getSpecialties } from '../specialties.js'
 import {
   computeObjectifJour,
   prodAMaintenant,
@@ -107,13 +106,18 @@ publicRouter.get('/chains', async (req, res) => {
 publicRouter.get('/models/:id', async (req, res) => {
   const model = await get('SELECT * FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
-  const [gamme, effectifRows, launchTimerRow] = await Promise.all([
+  const [gamme, effectifRows, launchTimerRow, chainSpecialties] = await Promise.all([
     all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id]),
     all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
     get('SELECT * FROM launch_timer WHERE model_id = $1', [model.id]),
+    getSpecialties('chain'),
   ])
-  const effectif = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
-  for (const r of effectifRows) effectif[r.specialty] = r.required
+  const effectif = Object.fromEntries(chainSpecialties.map((s) => [s, 0]))
+  // Only overlays a specialty still in the CURRENT list — effectif_requis
+  // can carry an orphaned row for a specialty deleted since (deleting only
+  // removes it from specialty_defs, on purpose — see specialties.js), and
+  // that must never leak back into a live entry screen.
+  for (const r of effectifRows) if (r.specialty in effectif) effectif[r.specialty] = r.required
   res.json({ ...model, gamme, effectif, launchTimer: formatLaunchTimer(launchTimerRow) })
 })
 
@@ -213,6 +217,8 @@ export async function fullDashboard(model) {
     finaleAttendanceRows,
     colorData,
     planning,
+    chainSpecialties,
+    finaleSpecialtiesList,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -294,10 +300,14 @@ export async function fullDashboard(model) {
       // `{hasPlan:false}` when Agent Méthode never entered one, so a normal
       // model's dashboard carries no extra weight for this.
       getPlanVsReel(model),
+      getSpecialties('chain'),
+      getSpecialties('finale'),
     ])
 
-  const effectifRequis = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
-  for (const r of effectifRows) effectifRequis[r.specialty] = r.required
+  const effectifRequis = Object.fromEntries(chainSpecialties.map((s) => [s, 0]))
+  // Same guard as GET /models/:id — never let an orphaned row for a
+  // deleted specialty leak back into the live dashboard.
+  for (const r of effectifRows) if (r.specialty in effectifRequis) effectifRequis[r.specialty] = r.required
 
   // Summed (not overwritten) per slot — with a Couleur/Variante chain, two
   // or more rows can now share the same slot_index (one per color); this is
@@ -336,9 +346,9 @@ export async function fullDashboard(model) {
   const qteTotaleCombined = (model.qte_totale || 0) + variantRows.reduce((s, v) => s + (v.qte_totale || 0), 0)
   const leResteCommande = Math.max(qteTotaleCombined - totalSortie, 0)
 
-  const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
-  for (const r of rhRows) present[r.specialty] = r.present
-  const effectifs = SPECIALTIES.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
+  const present = Object.fromEntries(chainSpecialties.map((s) => [s, 0]))
+  for (const r of rhRows) if (r.specialty in present) present[r.specialty] = r.present
+  const effectifs = chainSpecialties.map((s) => ({ specialty: s, present: present[s] || 0, required: effectifRequis[s] || 0 }))
   const ouvriersPresents = effectifs.reduce((s, e) => s + e.present, 0)
 
   // No row yet means Quality hasn't reported "Reprises" for this model — null
@@ -395,9 +405,9 @@ export async function fullDashboard(model) {
     moyenne_prod_controle_final: 0,
   }
   const depot = depotRow || { total_pieces: 0, effectif_total: 0 }
-  const finaleAttendanceMap = Object.fromEntries(FINALE_SPECIALTIES.map((s) => [s, 0]))
-  for (const r of finaleAttendanceRows) finaleAttendanceMap[r.specialty] = r.present
-  const finaleAttendance = FINALE_SPECIALTIES.map((s) => ({ specialty: s, present: finaleAttendanceMap[s] || 0 }))
+  const finaleAttendanceMap = Object.fromEntries(finaleSpecialtiesList.map((s) => [s, 0]))
+  for (const r of finaleAttendanceRows) if (r.specialty in finaleAttendanceMap) finaleAttendanceMap[r.specialty] = r.present
+  const finaleAttendance = finaleSpecialtiesList.map((s) => ({ specialty: s, present: finaleAttendanceMap[s] || 0 }))
   const exports = exportRows.map((e) => ({ ...e, client: model.client, mod: model.dessin }))
 
   const posteMap = Object.fromEntries(postes.map((p) => [p.dept_key, p]))
@@ -584,7 +594,7 @@ publicRouter.get('/effectifs/overview', async (req, res) => {
   const byChain = {}
   for (const m of active) (byChain[m.chain_number] ??= []).push(m)
 
-  const [rhRows, finaleRows, depotRows, personnelAdmin] = await Promise.all([
+  const [rhRows, finaleRows, depotRows, personnelAdmin, chainSpecialties, finaleSpecialtiesList] = await Promise.all([
     active.length
       ? all(`SELECT model_id, specialty, present FROM rh_attendance WHERE model_id = ANY($1)`, [active.map((m) => m.id)])
       : [],
@@ -593,6 +603,8 @@ publicRouter.get('/effectifs/overview', async (req, res) => {
       : [],
     active.length ? all(`SELECT model_id, effectif_total FROM depot WHERE model_id = ANY($1)`, [active.map((m) => m.id)]) : [],
     getPersonnelAdmin(todayInFactoryTZ()),
+    getSpecialties('chain'),
+    getSpecialties('finale'),
   ])
 
   const rhByModel = {}
@@ -603,7 +615,7 @@ publicRouter.get('/effectifs/overview', async (req, res) => {
     if (models.length === 0) {
       return { chainNumber, model: null, specialties: [], subtotal: 0 }
     }
-    const specialties = SPECIALTIES.map((s) => ({
+    const specialties = chainSpecialties.map((s) => ({
       specialty: s,
       present: models.reduce((sum, m) => sum + (rhByModel[m.id]?.[s] || 0), 0),
     }))
@@ -613,9 +625,9 @@ publicRouter.get('/effectifs/overview', async (req, res) => {
   })
   const chainsTotal = chains.reduce((sum, c) => sum + c.subtotal, 0)
 
-  const finaleTotals = Object.fromEntries(FINALE_SPECIALTIES.map((s) => [s, 0]))
+  const finaleTotals = Object.fromEntries(finaleSpecialtiesList.map((s) => [s, 0]))
   for (const r of finaleRows) finaleTotals[r.specialty] = (finaleTotals[r.specialty] || 0) + r.present
-  const finaleSpecialties = FINALE_SPECIALTIES.map((s) => ({ specialty: s, present: finaleTotals[s] || 0 }))
+  const finaleSpecialties = finaleSpecialtiesList.map((s) => ({ specialty: s, present: finaleTotals[s] || 0 }))
   const finaleSubtotal = finaleSpecialties.reduce((sum, s) => sum + s.present, 0)
 
   const depotTotal = depotRows.reduce((sum, r) => sum + (r.effectif_total || 0), 0)

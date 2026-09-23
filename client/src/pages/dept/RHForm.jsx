@@ -8,7 +8,6 @@ import AuditReportCard from '../../components/AuditReportCard'
 import PersonnelAdminCard from '../../components/PersonnelAdminCard'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
-import { SPECIALTIES } from '../../lib/constants'
 import { todayInFactoryTZ } from '../../lib/date'
 
 export default function RHForm({ token, chainNumber }) {
@@ -143,8 +142,7 @@ export default function RHForm({ token, chainNumber }) {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-              {SPECIALTIES.map((sp) => {
-                const required = dashboard.effectifs.find((e) => e.specialty === sp)?.required ?? 0
+              {dashboard.effectifs.map(({ specialty: sp, required }) => {
                 return (
                   <div key={sp} className="flex flex-col items-center gap-1.5 rounded-md border border-slate-800 bg-navy-900/40 py-3">
                     <Stepper

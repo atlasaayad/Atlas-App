@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import PinPad from '../components/PinPad'
 import LockedScreen from '../components/LockedScreen'
 import ChainPicker from '../components/ChainPicker'
+import FeedbackButton from '../components/FeedbackButton'
 import { DEPARTMENT_META } from '../lib/constants'
 import { api, getDeptToken, setDeptToken, clearDeptToken } from '../lib/api'
 
@@ -111,7 +112,7 @@ export default function DeptGate() {
   if (deptKey === 'patron') {
     return (
       <div>
-        <BackBar onBack={() => navigate('/departements')} onLogout={logout} />
+        <BackBar onBack={() => navigate('/departements')} onLogout={logout} token={token} />
         <FormComponent token={token} />
       </div>
     )
@@ -120,7 +121,7 @@ export default function DeptGate() {
   if (!chainNumber) {
     return (
       <div>
-        <BackBar onBack={() => navigate('/departements')} onLogout={logout} />
+        <BackBar onBack={() => navigate('/departements')} onLogout={logout} token={token} />
         <ChainPicker deptLabel={meta.label} deptKey={deptKey} onSelect={setChainNumber} />
       </div>
     )
@@ -128,24 +129,27 @@ export default function DeptGate() {
 
   return (
     <div>
-      <BackBar onBack={() => setChainNumber(null)} onLogout={logout} label={`Chaîne ${chainNumber}`} />
+      <BackBar onBack={() => setChainNumber(null)} onLogout={logout} label={`Chaîne ${chainNumber}`} token={token} />
       <FormComponent token={token} chainNumber={chainNumber} deptKey={deptKey} />
     </div>
   )
 }
 
-function BackBar({ onBack, onLogout, label }) {
+function BackBar({ onBack, onLogout, label, token }) {
   return (
     <div className="mb-4 flex items-center justify-between">
       <button onClick={onBack} className="text-sm text-turquoise hover:underline">
         ← Retour
       </button>
       {label && <div className="font-display text-sm font-medium text-slate-300">{label}</div>}
-      {onLogout && (
-        <button onClick={onLogout} className="text-xs text-slate-500 hover:text-status-bad">
-          Déconnexion
-        </button>
-      )}
+      <div className="flex items-center gap-3">
+        {token && <FeedbackButton token={token} />}
+        {onLogout && (
+          <button onClick={onLogout} className="text-xs text-slate-500 hover:text-status-bad">
+            Déconnexion
+          </button>
+        )}
+      </div>
     </div>
   )
 }

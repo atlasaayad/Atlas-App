@@ -15,6 +15,14 @@ export default function Departments() {
             </GlowCard>
           </Link>
         ))}
+        {/* Not a real PIN-department (no row in `departments`) — reuses
+            Agent Méthode's or Patron's own existing PIN, see SettingsGate.jsx. */}
+        <Link to="/reglages">
+          <GlowCard className="flex h-28 flex-col items-center justify-center gap-2 transition-transform hover:scale-[1.03]" dim>
+            <span className="text-3xl">⚙️</span>
+            <span className="text-center text-sm font-medium text-slate-200">الإعدادات</span>
+          </GlowCard>
+        </Link>
       </div>
     </div>
   )

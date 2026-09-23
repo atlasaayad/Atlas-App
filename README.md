@@ -424,6 +424,57 @@ automatically, how the real output compares to what was planned.
   app's usual turquoise (live, real data) — reusing that existing color
   language rather than inventing a new one.
 
+### ⚙️ Réglages — editable specialties, feedback log, per-device language (Agent Méthode + Patron)
+
+A new "⚙️ الإعدادات" tile on the Départements page, alongside the normal
+PIN-gated department tiles but not itself a real department — it reuses
+whichever of Agent Méthode's or Patron's own existing PIN the person
+already has (`client/src/pages/SettingsGate.jsx`; server-side
+`requireDept(['methode', 'patron'])`, `server/src/routes/settings.js`).
+Three sections:
+
+- **Specialty management** — the 13 chain specialties (Effectif/Présence)
+  and Finale's own 8 are no longer hardcoded in `constants.js`; they now
+  live in a new `specialty_defs` table (`server/src/specialties.js`),
+  add/renamable/deletable from this screen with no code change and no
+  redeploy. Every server route that used to import `SPECIALTIES`/
+  `FINALE_SPECIALTIES` directly now calls `getSpecialties('chain'
+  |'finale')` live instead (`constants.js`'s arrays are kept only as
+  `seedSpecialtyDefs()`'s one-time seed for a brand-new database, read
+  exactly once). Adding one needs no backfill — every table that reads a
+  specialty list already defaults a missing row to 0. **Deleting one never
+  touches `effectif_requis`/`rh_attendance`/`rh_attendance_history`/
+  `finale_attendance`** — it only stops appearing on the current list
+  those live entry screens render from (each overlay loop explicitly
+  guards `if (r.specialty in <the current list>)` so an orphaned row for a
+  deleted specialty can never leak back onto a live form); the audit
+  report is the one deliberate exception — a BSCI/SMETA compliance report
+  must never silently drop real recorded data, so it renders the union of
+  the current list and whatever specialties actually have a row in the
+  requested date range, even if since deleted. **Renaming** cascades
+  across those same tables with the identical merge-on-conflict pattern
+  `migrateSpecialtyNames()` already used for the old hardcoded rename —
+  reused, not reinvented, just triggered on demand instead of once at
+  deploy.
+- **📩 Reporting a problem** — open to any logged-in department, not just
+  Méthode/Patron: a small 📩 button on every department screen's own top
+  bar (`FeedbackButton.jsx`, rendered from `DeptGate.jsx`'s `BackBar`, so
+  every existing screen gets it with no changes of its own) posts to
+  `feedback_reports` (`requireAnyDept()` in `auth.js` — like
+  `requireDept()` but accepts a valid token from any department, not an
+  allow-list, since this is the one endpoint genuinely meant for whoever's
+  logged in right now). Reviewing the log — plain chronological, newest
+  first, no status/resolved flag — stays Méthode/Patron-only, inside
+  Réglages itself.
+- **🌐 Language preference — personal to this device only** — a small
+  localStorage-backed toggle (`client/src/lib/languagePreference.js`), never
+  sent to the server or shared across devices: each tablet/phone/computer
+  keeps its own choice. This ships the storage + the toggle UI only — ATLAS
+  has no translation catalog anywhere else in the app (every screen's text
+  is still hardcoded exactly as written), so this doesn't yet retranslate
+  anything; wiring real translations through every screen is separate,
+  larger follow-up work.
+
 ### État des effectifs (bottom-nav tab, public)
 
 A fourth bottom-nav tab, between Départements and Ask Atlas — no PIN, same

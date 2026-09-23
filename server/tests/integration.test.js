@@ -1758,3 +1758,117 @@ test('Planning: Agent Méthode planifie heure par heure, comparé automatiquemen
     assert.equal(row, undefined) // la ligne a été supprimée, pas mise à 0
   })
 })
+
+test('⚙️ Réglages: gestion des spécialités (ajout/renommage/suppression) et le journal de feedback', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const patronToken = await login('patron', '3333')
+  const productionToken = await login('production', '2222')
+  const TMP = `TEST_SPEC_${Date.now()}`
+  const TMP_RENAMED = `${TMP}_RENAMED`
+
+  t.after(async () => {
+    // Idempotent cleanup regardless of which step the test reached.
+    await run('DELETE FROM specialty_defs WHERE name = ANY($1)', [[TMP, TMP_RENAMED]])
+    await run('DELETE FROM effectif_requis WHERE specialty = ANY($1)', [[TMP, TMP_RENAMED]])
+  })
+
+  await t.test("un token d'un autre département (ex. Production) ne peut ni lire ni modifier les spécialités", async () => {
+    const getRes = await call('/settings/specialties/chain', { token: productionToken })
+    assert.equal(getRes.status, 403)
+    const postRes = await call('/settings/specialties/chain', { method: 'POST', token: productionToken, body: { name: TMP } })
+    assert.equal(postRes.status, 403)
+  })
+
+  await t.test('groupe invalide → 400', async () => {
+    const res = await call('/settings/specialties/bogus', { token: methodeToken })
+    assert.equal(res.status, 400)
+  })
+
+  let settingsModelId
+  await t.test('Agent Méthode ajoute une nouvelle spécialité → apparaît immédiatement dans la liste ET sur un nouveau modèle', async () => {
+    const add = await call('/settings/specialties/chain', { method: 'POST', token: methodeToken, body: { name: TMP } })
+    assert.equal(add.status, 201)
+    assert.ok(add.data.specialties.includes(TMP))
+
+    const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+    const created = await call('/methode/models', {
+      method: 'POST',
+      token: methodeToken,
+      body: { client: 'SETTINGS_TEST', qteTotale: 100, dessin: 'SET-1', chainNumber: TEST_CHAIN },
+    })
+    assert.equal(created.status, 201)
+    settingsModelId = created.data.id
+    t.after(async () => {
+      await run('DELETE FROM models WHERE id = $1', [settingsModelId])
+      await run('DELETE FROM audit_log WHERE model_id = $1', [settingsModelId])
+      if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+    })
+
+    const model = await call(`/models/${settingsModelId}`)
+    assert.equal(model.data.effectif[TMP], 0) // la nouvelle spécialité apparaît, requis = 0 par défaut
+  })
+
+  // Le Patron (autre département autorisé) peut aussi renommer/supprimer.
+  await t.test('renommer fusionne les données existantes (même mécanisme que la migration historique)', async () => {
+    const putEffectif = await call(`/methode/models/${settingsModelId}/effectif`, {
+      method: 'PUT',
+      token: methodeToken,
+      body: { effectif: { [TMP]: 7 } },
+    })
+    assert.equal(putEffectif.status, 200)
+
+    const rename = await call(`/settings/specialties/chain/${encodeURIComponent(TMP)}`, {
+      method: 'PUT',
+      token: patronToken,
+      body: { name: TMP_RENAMED },
+    })
+    assert.equal(rename.status, 200)
+    assert.ok(rename.data.specialties.includes(TMP_RENAMED))
+    assert.ok(!rename.data.specialties.includes(TMP))
+
+    const row = await get('SELECT required FROM effectif_requis WHERE model_id = $1 AND specialty = $2', [settingsModelId, TMP_RENAMED])
+    assert.equal(row.required, 7) // la valeur a suivi le renommage, pas perdue
+  })
+
+  await t.test("supprimer une spécialité l'enlève de la liste live, SANS toucher aux données déjà enregistrées", async () => {
+    const del = await call(`/settings/specialties/chain/${encodeURIComponent(TMP_RENAMED)}`, {
+      method: 'DELETE',
+      token: methodeToken,
+    })
+    assert.equal(del.status, 200)
+    assert.ok(!del.data.specialties.includes(TMP_RENAMED))
+
+    // La ligne historique reste intacte — seule la liste "live" a changé.
+    const row = await get('SELECT required FROM effectif_requis WHERE model_id = $1 AND specialty = $2', [settingsModelId, TMP_RENAMED])
+    assert.equal(row.required, 7)
+
+    const modelAfter = await call(`/models/${settingsModelId}`)
+    assert.equal(TMP_RENAMED in modelAfter.data.effectif, false) // n'apparaît plus sur un écran de saisie live
+  })
+
+  await t.test('📩 feedback: ouvert à tout département connecté, mais la lecture reste Méthode/Patron', async () => {
+    const submit = await call('/settings/feedback', {
+      method: 'POST',
+      token: productionToken,
+      body: { message: 'TEST_FEEDBACK_MESSAGE' },
+    })
+    assert.equal(submit.status, 201)
+
+    const deniedRead = await call('/settings/feedback', { token: productionToken })
+    assert.equal(deniedRead.status, 403)
+
+    const read = await call('/settings/feedback', { token: methodeToken })
+    assert.equal(read.status, 200)
+    const found = read.data.reports.find((r) => r.message === 'TEST_FEEDBACK_MESSAGE')
+    assert.ok(found)
+    assert.equal(found.dept_key, 'production')
+
+    t.after(async () => run('DELETE FROM feedback_reports WHERE id = $1', [found.id]))
+  })
+
+  await t.test('message vide → 400', async () => {
+    const res = await call('/settings/feedback', { method: 'POST', token: methodeToken, body: { message: '   ' } })
+    assert.equal(res.status, 400)
+  })
+})

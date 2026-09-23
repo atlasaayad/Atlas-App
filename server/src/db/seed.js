@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs'
+import { nanoid } from 'nanoid'
 import { get, run, ensureSchema, logAudit } from './index.js'
 import { DEPARTMENTS, SPECIALTIES, FINALE_SPECIALTIES } from '../constants.js'
 import { computeVTMinutes, computeDT, todayInFactoryTZ } from '../calc.js'
@@ -33,6 +34,28 @@ async function seedDepartments() {
       [dept.key, dept.label, dept.icon, pinHash]
     )
   }
+}
+
+// One-time seed of the live, editable specialty lists (specialty_defs)
+// from the old hardcoded SPECIALTIES/FINALE_SPECIALTIES arrays — only when
+// a group is completely empty, so this never overwrites specialties an
+// admin has already added/renamed/deleted via ⚙️ Réglages (specialties.js)
+// on a later boot. Safe to call on every cold start.
+async function seedSpecialtyDefs() {
+  async function seedGroup(groupKey, names) {
+    const existing = await get('SELECT COUNT(*) c FROM specialty_defs WHERE group_key = $1', [groupKey])
+    if (Number(existing.c) > 0) return
+    const now = new Date().toISOString()
+    for (let i = 0; i < names.length; i++) {
+      await run(
+        `INSERT INTO specialty_defs (id, group_key, name, sort_order, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT (group_key, name) DO NOTHING`,
+        [`spc_${nanoid(10)}`, groupKey, names[i], i, now]
+      )
+    }
+  }
+  await seedGroup('chain', SPECIALTIES)
+  await seedGroup('finale', FINALE_SPECIALTIES)
 }
 
 async function seedConfig() {
@@ -201,6 +224,7 @@ export async function runSeed({ log = false } = {}) {
   await ensureSchema()
   await seedDepartments()
   await seedConfig()
+  await seedSpecialtyDefs()
   await seedDemoModel()
 
   if (log) {

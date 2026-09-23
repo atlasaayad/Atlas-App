@@ -169,4 +169,17 @@ export const api = {
       return res.blob()
     },
   },
+  settings: {
+    getSpecialties: (token, groupKey) => request(`/settings/specialties/${groupKey}`, { token }),
+    addSpecialty: (token, groupKey, name) =>
+      request(`/settings/specialties/${groupKey}`, { method: 'POST', body: { name }, token }),
+    renameSpecialty: (token, groupKey, name, newName) =>
+      request(`/settings/specialties/${groupKey}/${encodeURIComponent(name)}`, { method: 'PUT', body: { name: newName }, token }),
+    deleteSpecialty: (token, groupKey, name) =>
+      request(`/settings/specialties/${groupKey}/${encodeURIComponent(name)}`, { method: 'DELETE', token }),
+    getFeedback: (token) => request('/settings/feedback', { token }),
+  },
+  feedback: {
+    submit: (token, message) => request('/settings/feedback', { method: 'POST', body: { message }, token }),
+  },
 }

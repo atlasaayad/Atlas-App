@@ -16,13 +16,18 @@ export const DEPARTMENTS = [
 // Departments whose only input is a generic "État du poste %" slider + note.
 export const GENERIC_POSTE_DEPARTMENTS = ['coupe', 'magasin', 'mecanicien', 'echantillon']
 
-// Renamed from the old 15-code shorthand (301/502/504/516/Main/Sp/M-sp/
-// Control/Stg/Fer/"Mach retouche"/Trns) to clear French names. 301/502/504/
-// 516 merged into one "Machinistes" specialty (their values summed); the old
-// "Stg" code split conceptually into two new specialties, but since it never
-// distinguished machinist vs. fer trainees, its historical values all moved
-// to "Machiniste stagiaire" — "Stagiaire fer" starts empty from this
-// deploy's data. See the DB migration in db/index.js and README "État des
+// ⚠️ Default/seed values ONLY — the live, admin-editable list now lives in
+// the specialty_defs table (see specialties.js and the new "⚙️ Réglages"
+// screen, Agent Méthode/Patron only). This array is read exactly once, by
+// seedSpecialtyDefs() in db/seed.js, to populate a brand-new database; no
+// other runtime code imports it anymore. Renamed from the old 15-code
+// shorthand (301/502/504/516/Main/Sp/M-sp/Control/Stg/Fer/"Mach
+// retouche"/Trns) to clear French names. 301/502/504/516 merged into one
+// "Machinistes" specialty (their values summed); the old "Stg" code split
+// conceptually into two new specialties, but since it never distinguished
+// machinist vs. fer trainees, its historical values all moved to
+// "Machiniste stagiaire" — "Stagiaire fer" starts empty from this deploy's
+// data. See the DB migration in db/index.js and README "État des
 // effectifs" for the full mapping and this assumption.
 export const SPECIALTIES = [
   'Machinistes', 'Machiniste stagiaire', 'Repassage préparation', 'Stagiaire fer', 'Traçage',
@@ -48,9 +53,11 @@ export const SPECIALTY_MIGRATION_MAP = {
   Trns: 'Transport',
 }
 
-// Finale's own headcount specialties — separate from the 13 chain
-// specialties above (Finale is a distinct finishing stage with different
-// job roles), entered per chain by the Finale department itself.
+// ⚠️ Default/seed values ONLY — same caveat as SPECIALTIES above; the live
+// list is specialty_defs's 'finale' group. Finale's own headcount
+// specialties, separate from the 13 chain specialties above (Finale is a
+// distinct finishing stage with different job roles), entered per chain by
+// the Finale department itself.
 export const FINALE_SPECIALTIES = [
   'Repassage Finale', 'Contrôle Finale', 'Stagiaire', 'Main', 'Transport', 'Nettoyage', 'Mesure', 'Machiniste',
 ]

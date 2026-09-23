@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid'
 import { get, all, run, logAudit } from './db/index.js'
-import { SPECIALTIES } from './constants.js'
+import { getSpecialties } from './specialties.js'
 import { todayInFactoryTZ } from './calc.js'
 
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -33,8 +33,9 @@ export async function saveAttendance({ deptKey, id, attendance, date }) {
 
   const now = new Date().toISOString()
   const isBackdated = targetDate !== today
+  const specialties = await getSpecialties('chain')
 
-  for (const spec of SPECIALTIES) {
+  for (const spec of specialties) {
     if (!(spec in attendance)) continue
     const present = Number(attendance[spec]) || 0
 
@@ -66,13 +67,13 @@ export async function saveAttendance({ deptKey, id, attendance, date }) {
 // read straight from rh_attendance_history, the permanent record (same
 // architecture as Agent Production's/Quality's "get hourly for date X").
 // Specialties with no record yet for that date come back as 0, never
-// omitted, so the caller can always render all of SPECIALTIES.
+// omitted, so the caller can always render the current specialty list.
 export async function getAttendanceForDate(chainNumber, date) {
-  const rows = await all('SELECT specialty, present FROM rh_attendance_history WHERE chain_number = $1 AND date = $2', [
-    chainNumber,
-    date,
+  const [rows, specialties] = await Promise.all([
+    all('SELECT specialty, present FROM rh_attendance_history WHERE chain_number = $1 AND date = $2', [chainNumber, date]),
+    getSpecialties('chain'),
   ])
-  const present = Object.fromEntries(SPECIALTIES.map((s) => [s, 0]))
+  const present = Object.fromEntries(specialties.map((s) => [s, 0]))
   for (const r of rows) present[r.specialty] = r.present
   return present
 }
