@@ -165,6 +165,15 @@ methodeRouter.put('/models/:id/image', async (req, res) => {
   try {
     imageUrl = await uploadModelImage(model.id, req.body?.imageBase64)
   } catch (err) {
+    // err.code is only set for the typed validation errors imageUpload.js
+    // throws itself (storage_not_configured/invalid_image/unsupported_type/
+    // image_too_large) — anything else here is a REAL failure from
+    // @vercel/blob's own put() call (bad/expired token, store not found,
+    // a transient network error to the Blob API, ...) and would otherwise
+    // be completely invisible: nothing else in this path ever logs it, so
+    // Vercel's Function Logs would show nothing for a genuine upload
+    // failure without this.
+    if (err.code !== 'storage_not_configured') console.error('model image upload failed:', err)
     const status = err.code === 'storage_not_configured' ? 503 : 400
     return res.status(status).json({ error: err.code || 'upload_failed' })
   }
