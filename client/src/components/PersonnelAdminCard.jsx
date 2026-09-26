@@ -23,7 +23,7 @@ export default function PersonnelAdminCard({ token, updateFn }) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api.getPersonnelAdmin(selectedDate).then((r) => {
+    api.getPersonnelAdmin(token, selectedDate).then((r) => {
       if (cancelled) return
       setTotal(r.total)
       setCumulativeTotal(r.cumulativeTotal)
@@ -32,7 +32,7 @@ export default function PersonnelAdminCard({ token, updateFn }) {
     return () => {
       cancelled = true
     }
-  }, [selectedDate])
+  }, [token, selectedDate])
 
   function handleDateChange(value) {
     if (value > TODAY) {
@@ -49,7 +49,7 @@ export default function PersonnelAdminCard({ token, updateFn }) {
     try {
       await updateFn(token, selectedDate, Number(total) || 0)
       setSaved(true)
-      const r = await api.getPersonnelAdmin(selectedDate)
+      const r = await api.getPersonnelAdmin(token, selectedDate)
       setCumulativeTotal(r.cumulativeTotal)
       setTimeout(() => setSaved(false), 2000)
     } finally {

@@ -7,7 +7,9 @@
   "scripts": {
     "dev:server": "node --watch server/src/index.js",
     "seed": "node server/src/db/seed.js",
-    "test": "node --env-file-if-exists=.env --test"
+    "test": "node --env-file-if-exists=.env --test",
+    "lint": "npm --prefix client run lint",
+    "build": "npm --prefix client run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

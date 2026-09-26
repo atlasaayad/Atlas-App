@@ -432,7 +432,7 @@ exactly like it did before this feature.
   returns `503 storage_not_configured` and the Identité tab shows a clear
   message instead of erroring — model creation/editing itself is
   completely unaffected either way, matching the same "optional API key,
-  clean degradation" pattern as Ask Atlas/ATLAS PREDICT.
+  clean degradation" pattern as Ask Atlas.
 - Replacing or deleting an image best-effort deletes the old Blob object
   too (`deleteModelImage()`), but a failed delete there never blocks
   clearing/replacing the DB reference — the card always reflects

@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { requireAnyDept } from '../auth.js'
 import Anthropic from '@anthropic-ai/sdk'
 import { get } from '../db/index.js'
 import { CHAIN_NUMBERS } from '../constants.js'
@@ -83,7 +84,9 @@ export async function incrementDailyUsage() {
   return row.count
 }
 
-askRouter.post('/ask', async (req, res) => {
+// Any logged-in department (a real person on the floor), never an anonymous
+// visitor — otherwise anyone with the URL could burn the day's AI budget.
+askRouter.post('/ask', requireAnyDept(), async (req, res) => {
   const question = String(req.body?.question || '').slice(0, 2000).trim()
   const chainNumber = Number(req.body?.chainNumber) || null
   if (!question) return res.status(400).json({ error: 'question_required' })

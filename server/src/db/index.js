@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS departments (
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS locked_until TEXT;
 
+-- Failed-PIN lockout counters, per (department, client IP) — see
+-- verifyPin() in auth.js. Supersedes departments.failed_attempts /
+-- locked_until above (left in place, no longer read or written), which
+-- locked a whole department out for every device at once.
+CREATE TABLE IF NOT EXISTS login_attempts (
+  dept_key TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  PRIMARY KEY (dept_key, ip)
+);
+
 -- One row per factory-local day, counting "اسأل أطلس" calls system-wide —
 -- caps the daily Anthropic API spend. Keyed by date (Africa/Casablanca, see
 -- todayInFactoryTZ) rather than a rolling window, so the cap always resets
@@ -89,28 +101,6 @@ ALTER TABLE departments ADD COLUMN IF NOT EXISTS locked_until TEXT;
 CREATE TABLE IF NOT EXISTS ask_usage (
   date TEXT PRIMARY KEY,
   count INTEGER NOT NULL DEFAULT 0
-);
-
--- Same shape and purpose as ask_usage above, but for ATLAS PREDICT's
--- "تحليل وتوقعات" report generation (client/src/predict, server/src/routes/
--- predict.js) — a separate counter, unrelated to the factory tracker's
--- Ask Atlas feature.
-CREATE TABLE IF NOT EXISTS predict_analysis_usage (
-  date TEXT PRIMARY KEY,
-  count INTEGER NOT NULL DEFAULT 0
-);
-
--- Shared cache for football-data.org responses (free tier: 10 requests/
--- minute, system-wide). A plain in-memory cache doesn't work here — Vercel
--- doesn't guarantee the same warm instance handles the next request, so two
--- requests seconds apart can land on different cold instances with no
--- shared memory. Postgres is the one thing every instance actually shares.
--- Keyed by a descriptive string (e.g. "match:12345", "standings:PL") built
--- in predict.js; predict.js also owns the TTL check against fetched_at.
-CREATE TABLE IF NOT EXISTS predict_football_cache (
-  cache_key TEXT PRIMARY KEY,
-  data JSONB NOT NULL,
-  fetched_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS models (
