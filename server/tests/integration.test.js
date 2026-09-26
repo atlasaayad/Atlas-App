@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import bcrypt from 'bcryptjs'
 import { app } from '../src/app.js'
 import { runSeed } from '../src/db/seed.js'
-import { get, run, all, pool } from '../src/db/index.js'
+import { get, run, all, pool, migrateModelStatus } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
 import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
 import { SPECIALTIES, HOURLY_SLOTS } from '../src/constants.js'
@@ -1354,141 +1354,203 @@ test("un nouveau modèle sur une chaîne déjà occupée n'écrase ni ne contami
 // "close" action anywhere), (4) Home's chain-dashboard shows both clearly
 // while they overlap, and goes back to a single dashboard once the old one
 // finishes.
-test('Chevauchement de modèles: un ancien qui finit et un nouveau qui démarre sur la même chaîne', async (t) => {
+test('Fin de série / Démarrage: deux modèles sur la même chaîne, saisie par modèle, Rendement chaîne, clôture confirmée', async (t) => {
   const TEST_CHAIN = 8
   const methodeToken = await login('methode', '1111')
+  const patronToken = await login('patron', '3333')
   const productionToken = await login('production', '2222')
+  const rhToken = await login('rh', '8888')
   const today = todayInFactoryTZ()
 
-  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
-
-  const oldModel = await call('/methode/models', {
-    method: 'POST',
-    token: methodeToken,
-    body: { client: 'TEST_OVERLAP_OLD', qteTotale: 100, dessin: 'OV-OLD', chainNumber: TEST_CHAIN, debut: today },
-  })
-  assert.equal(oldModel.status, 201)
-  const oldId = oldModel.data.id
-  // Gamme totalling 200s -> VT = 200/60 ≈ 3.33min, independent of the new model's.
-  await call(`/methode/models/${oldId}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', machine: 'x', tps: 200 }] } })
-
-  let newId
+  const created = []
   t.after(async () => {
-    await run('DELETE FROM models WHERE id = $1', [oldId])
-    if (newId) await run('DELETE FROM models WHERE id = $1', [newId])
-    await run('DELETE FROM audit_log WHERE model_id = $1', [oldId])
-    if (newId) await run('DELETE FROM audit_log WHERE model_id = $1', [newId])
-    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+    for (const id of created) {
+      await run('DELETE FROM models WHERE id = $1', [id])
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+    }
   })
 
-  // Old model's Entré has reached its target (100) -- it's still mid-process
-  // (En cours = 100, nothing sorti yet) when the new model starts.
-  await call(`/production/models/${oldId}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 100 } })
+  async function createModel(body) {
+    const res = await call('/methode/models', { method: 'POST', token: methodeToken, body: { chainNumber: TEST_CHAIN, debut: today, ...body } })
+    if (res.status === 201) created.push(res.data.id)
+    return res
+  }
 
-  await t.test("un nouveau modèle peut être créé sur la chaîne SANS retirer l'ancien — les deux ont leur propre gamme indépendante", async () => {
-    const created = await call('/methode/models', {
-      method: 'POST',
-      token: methodeToken,
-      body: { client: 'TEST_OVERLAP_NEW', qteTotale: 200, dessin: 'OV-NEW', chainNumber: TEST_CHAIN, debut: today },
-    })
-    assert.equal(created.status, 201)
-    newId = created.data.id
-    // Gamme totalling 400s -> VT = 400/60 ≈ 6.67min -- a completely different
-    // value from the old model's, proving no gamme/VT/DT sharing occurs.
-    const gamme = await call(`/methode/models/${newId}/gamme`, {
-      method: 'PUT',
-      token: methodeToken,
-      body: { lines: [{ operation: 'B', machine: 'y', tps: 400 }] },
-    })
-    assert.equal(gamme.status, 200)
+  // Old model (fin de série): gamme 200s -> VT = 200/60 min, Qté totale 100.
+  const oldRes = await createModel({ client: 'TEST_OVERLAP_OLD', qteTotale: 100, dessin: 'OV-OLD' })
+  assert.equal(oldRes.status, 201)
+  const oldId = oldRes.data.id
+  await call(`/methode/models/${oldId}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', machine: 'x', tps: 200 }] } })
+  let newId
+
+  await t.test("un nouveau modèle (démarrage) peut être créé SANS clôturer l'ancien — chacun sa propre gamme", async () => {
+    const res = await createModel({ client: 'TEST_OVERLAP_NEW', qteTotale: 200, dessin: 'OV-NEW' })
+    assert.equal(res.status, 201)
+    newId = res.data.id
+    const gamme = await call(`/methode/models/${newId}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'B', machine: 'y', tps: 400 }] } })
     assert.equal(gamme.data.vt, 400 / 60)
-
-    // The old model is still there, untouched, still active.
-    const oldStill = await get('SELECT active FROM models WHERE id = $1', [oldId])
-    assert.equal(oldStill.active, 1)
-    const oldDash = await call(`/models/${oldId}/dashboard`)
-    assert.equal(oldDash.status, 200)
-    assert.notEqual(oldDash.data.vt, gamme.data.vt) // never shares the new model's gamme
+    const old = await get('SELECT status FROM models WHERE id = $1', [oldId])
+    assert.equal(old.status, 'active')
   })
 
-  await t.test('les deux modèles peuvent saisir une quantité réelle et séparée pour la MÊME heure (comme les couleurs)', async () => {
-    const putOld = await call(`/production/models/${oldId}/hourly/4`, { method: 'PUT', token: productionToken, body: { qty: 5, date: today } })
-    assert.equal(putOld.status, 200)
-    // Targeting the sibling root via targetModelId, same mechanism as a colour variant.
-    const putNew = await call(`/production/models/${oldId}/hourly/4`, {
-      method: 'PUT',
-      token: productionToken,
-      body: { qty: 10, date: today, targetModelId: newId },
-    })
-    assert.equal(putNew.status, 200)
+  await t.test('un 3e modèle est refusé tant que les deux sont ouverts (chain_full)', async () => {
+    const res = await createModel({ client: 'TEST_OVERLAP_THIRD', qteTotale: 10, dessin: 'OV-3' })
+    assert.equal(res.status, 409)
+    assert.equal(res.data.error, 'chain_full')
+  })
 
-    const rows = await all(
-      'SELECT model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2 AND slot_index = 4',
-      [TEST_CHAIN, today]
-    )
-    assert.equal(rows.length, 2) // both rows exist, neither overwrote the other
+  await t.test('chaque modèle saisit sa propre production pour la MÊME heure, sans mélange ni écrasement', async () => {
+    assert.equal((await call(`/production/models/${oldId}/hourly/4`, { method: 'PUT', token: productionToken, body: { qty: 5, date: today } })).status, 200)
+    assert.equal((await call(`/production/models/${newId}/hourly/4`, { method: 'PUT', token: productionToken, body: { qty: 10, date: today } })).status, 200)
+
+    const rows = await all('SELECT model_id, qty FROM production_history WHERE chain_number = $1 AND date = $2 AND slot_index = 4', [TEST_CHAIN, today])
     const byModel = Object.fromEntries(rows.map((r) => [r.model_id, r.qty]))
     assert.equal(byModel[oldId], 5)
     assert.equal(byModel[newId], 10)
 
-    // Agent Production's own hourly-entry screen shows BOTH as selectable
-    // entries with the combined qty for that hour, and the correct
-    // per-model breakdown -- the exact same mechanism as Couleur/Variante,
-    // generalized to two independent models instead of two colours of one.
-    const hourly = await call(`/production/models/${oldId}/hourly?date=${today}`, { token: productionToken })
-    assert.equal(hourly.data.variants.length, 1)
-    assert.equal(hourly.data.variants[0].id, newId)
-    const slot4 = hourly.data.hourly.find((s) => s.index === 4)
-    assert.equal(slot4.qty, 15) // 5 + 10 combined
-    const bySlotModel = Object.fromEntries(slot4.byModel.map((c) => [c.modelId, c.qty]))
-    assert.equal(bySlotModel[oldId], 5)
-    assert.equal(bySlotModel[newId], 10)
+    // Each model's hourly screen shows ONLY its own hours — no interleaving.
+    const oldHourly = await call(`/production/models/${oldId}/hourly?date=${today}`, { token: productionToken })
+    assert.equal(oldHourly.data.hourly.find((s) => s.index === 4).qty, 5)
+    assert.equal(oldHourly.data.hourly[0].byModel, undefined)
+    const newHourly = await call(`/production/models/${newId}/hourly?date=${today}`, { token: productionToken })
+    assert.equal(newHourly.data.hourly.find((s) => s.index === 4).qty, 10)
   })
 
-  await t.test("l'ancien modèle disparaît tout seul de la sélection active une fois vraiment fini (Entré >= cible ET En cours = 0) — aucun bouton manuel", async () => {
-    // Old model: Entré=100 (already at target), Sortie so far = 5 (from the
-    // hour above) -> En cours = 95, still open.
-    let open = await call(`/production/models/${oldId}/hourly?date=${today}`, { token: productionToken })
-    assert.equal(open.data.variants.length, 1) // both still open
-
-    // Finish exiting the old model's remaining 95 pieces.
-    await call(`/production/models/${oldId}/hourly/5`, { method: 'PUT', token: productionToken, body: { qty: 95, date: today } })
-
-    // Now old model: Entré=100, Sortie=5+95=100 -> En cours=0, Entré>=cible -> finished.
-    open = await call(`/production/models/${newId}/hourly?date=${today}`, { token: productionToken })
-    assert.equal(open.data.variants.length, 0) // the old model dropped out on its own
-    assert.equal(open.data.hourly.find((s) => s.index === 5).qty, 0) // and it's no longer part of the (now single-model) combined qty either
-
-    // Still fully queryable by its own id -- "finished" ≠ "deleted".
-    const oldDash = await call(`/models/${oldId}/dashboard`)
-    assert.equal(oldDash.status, 200)
-    assert.equal(oldDash.data.bilan.totalSortie, 100)
+  await t.test('le sélecteur de modèle: [fin de série, démarrage] avec le nombre d’heures saisies aujourd’hui', async () => {
+    const res = await call(`/chains/${TEST_CHAIN}/open-models?kind=production`)
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.data.models.map((m) => [m.id, m.role, m.filledSlots]), [
+      [oldId, 'fin_de_serie', 1],
+      [newId, 'demarrage', 1],
+    ])
+    assert.equal(res.data.totalSlots, TEST_WORK_HOURS.length)
   })
 
-  await t.test("Home (le dashboard de la chaîne) montre les deux clairement pendant le chevauchement, puis redevient un seul après", async () => {
-    // Roll back to the overlapping state to verify the `multi` shape (undo
-    // the previous subtest's closing production, since it only mutated
-    // production_history for slot 5 -- delete that row directly).
-    await run('DELETE FROM production_history WHERE model_id = $1 AND slot_index = 5', [oldId])
+  await t.test('Home: deux dashboards (démarrage en premier, chacun ses propres chiffres) + Rendement de la chaîne', async () => {
+    // One shared workforce: 10 workers entered on the chain.
+    const rh = await call(`/rh/models/${oldId}/attendance`, { method: 'PUT', token: rhToken, body: { attendance: { Machinistes: 10 }, date: today } })
+    assert.equal(rh.status, 200)
 
     const multi = await call(`/chains/${TEST_CHAIN}/dashboard`)
     assert.equal(multi.status, 200)
     assert.equal(multi.data.multi, true)
-    assert.equal(multi.data.dashboards.length, 2)
-    const ids = multi.data.dashboards.map((d) => d.id).sort()
-    assert.deepEqual(ids, [newId, oldId].sort())
-    // Never merged into one combined number -- each keeps its own bilan.
-    const oldEntry = multi.data.dashboards.find((d) => d.id === oldId)
-    assert.equal(oldEntry.bilan.totalSortie, 5)
+    assert.deepEqual(multi.data.dashboards.map((d) => [d.id, d.role]), [
+      [newId, 'demarrage'],
+      [oldId, 'fin_de_serie'],
+    ])
+    assert.equal(multi.data.dashboards.find((d) => d.id === oldId).bilan.totalSortie, 5)
+    assert.equal(multi.data.dashboards.find((d) => d.id === newId).bilan.totalSortie, 10)
 
-    // Re-finish the old model the same way as before.
+    // Σ(qty × VT) / (effectif × minutes): last hour = (5 × 200/60 + 10 × 400/60) / (10 × 60) × 100
+    const chain = multi.data.chainRendement
+    assert.equal(chain.modelsCount, 2)
+    assert.equal(chain.effectif, 10)
+    assert.equal(chain.hourly.productionPct, computeRendementProduction(1, 5 * (200 / 60) + 10 * (400 / 60), 10, 60))
+    assert.equal(chain.hourly.productionPct, 13.9)
+    assert.equal(chain.hourly.qualityPct, 100)
+    const earnedToday =
+      prodAMaintenant({ 4: 5 }, TEST_WORK_HOURS) * (200 / 60) + prodAMaintenant({ 4: 10 }, TEST_WORK_HOURS) * (400 / 60)
+    assert.equal(chain.daily.productionPct, computeRendementProduction(1, earnedToday, 10, TEST_WORK_HOURS.length * 60))
+
+    // Classement ranks the chain on that same combined figure.
+    const ranking = await call('/chains/ranking')
+    const entry = ranking.data.find((e) => e.chainNumber === TEST_CHAIN)
+    assert.equal(entry.modelsCount, 2)
+    assert.deepEqual(entry.rendement.daily, chain.daily)
+  })
+
+  await t.test('Qté atteinte → proposition de clôture à Méthode (jamais automatique), "ماشي دابا" la reporte', async () => {
+    let prompts = await call(`/chains/${TEST_CHAIN}/close-prompts`, { token: methodeToken })
+    assert.equal(prompts.status, 200)
+    assert.equal(prompts.data.prompts.length, 0) // 5/100, not yet
+
     await call(`/production/models/${oldId}/hourly/5`, { method: 'PUT', token: productionToken, body: { qty: 95, date: today } })
+    prompts = await call(`/chains/${TEST_CHAIN}/close-prompts`, { token: methodeToken })
+    assert.equal(prompts.data.prompts.length, 1)
+    assert.equal(prompts.data.prompts[0].id, oldId)
+    assert.equal(prompts.data.prompts[0].totalSortie, 100)
+    assert.equal(prompts.data.prompts[0].qteTotale, 100)
+
+    // Reaching the target never closes anything by itself.
+    assert.equal((await get('SELECT status FROM models WHERE id = $1', [oldId])).status, 'active')
+
+    assert.equal((await call(`/chains/${TEST_CHAIN}/close-prompts`, { token: productionToken })).status, 403)
+    const dismiss = await call(`/models/${oldId}/close-prompt/dismiss`, { method: 'POST', token: methodeToken })
+    assert.equal(dismiss.status, 200)
+    prompts = await call(`/chains/${TEST_CHAIN}/close-prompts`, { token: methodeToken })
+    assert.equal(prompts.data.prompts.length, 0) // back tomorrow
+    assert.equal((await get('SELECT status FROM models WHERE id = $1', [oldId])).status, 'active')
+  })
+
+  await t.test('clôture confirmée: disparaît de la saisie et de Home, toutes ses données restent', async () => {
+    assert.equal((await call(`/models/${oldId}/close`, { method: 'POST', token: productionToken })).status, 403)
+
+    const close = await call(`/models/${oldId}/close`, { method: 'POST', token: patronToken })
+    assert.equal(close.status, 200)
+    assert.equal(close.data.status, 'closed')
+    assert.ok(close.data.closedAt)
+    assert.equal((await call(`/models/${oldId}/close`, { method: 'POST', token: methodeToken })).status, 409)
+
+    const open = await call(`/chains/${TEST_CHAIN}/open-models`)
+    assert.deepEqual(open.data.models.map((m) => [m.id, m.role]), [[newId, null]])
 
     const single = await call(`/chains/${TEST_CHAIN}/dashboard`)
-    assert.equal(single.status, 200)
-    assert.equal(single.data.multi, undefined) // back to the plain single-dashboard shape
+    assert.equal(single.data.multi, undefined)
     assert.equal(single.data.id, newId)
+
+    // Nothing deleted: the closed model is still fully readable by id.
+    const oldDash = await call(`/models/${oldId}/dashboard`)
+    assert.equal(oldDash.status, 200)
+    assert.equal(oldDash.data.bilan.totalSortie, 100)
+    const rows = await all('SELECT qty FROM production_history WHERE model_id = $1', [oldId])
+    assert.equal(rows.length, 2)
   })
+
+  await t.test('"Clôturer le modèle" manuel, même sans avoir atteint la quantité', async () => {
+    const res = await createModel({ client: 'TEST_OVERLAP_MANUAL', qteTotale: 500, dessin: 'OV-MAN' })
+    assert.equal(res.status, 201) // one slot free again since the old one closed
+    const close = await call(`/models/${res.data.id}/close`, { method: 'POST', token: methodeToken })
+    assert.equal(close.status, 200)
+    const open = await call(`/chains/${TEST_CHAIN}/open-models`)
+    assert.deepEqual(open.data.models.map((m) => m.id), [newId])
+  })
+})
+
+test('Migration status: les modèles existants restent exactement comme avant (fini → closed, le reste → active)', async (t) => {
+  const now = new Date().toISOString()
+  const ids = { finished: 'mdl_mig_fin', running: 'mdl_mig_run', inactive: 'mdl_mig_off', variant: 'mdl_mig_var' }
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = ANY($1)', [Object.values(ids)])
+  })
+  const insert = (id, active, qte, parent = null) =>
+    run(
+      `INSERT INTO models (id, client, qte_totale, chain_number, active, parent_model_id, status, created_at, updated_at)
+       VALUES ($1, 'TEST_MIG', $2, 7, $3, $4, 'active', $5, $5)`,
+      [id, qte, active, parent, now]
+    )
+  // Before this feature, "finished" = Entré reached Qté totale AND En cours = 0.
+  await insert(ids.finished, 1, 50)
+  await run('INSERT INTO production_totals (model_id, total_entree, updated_at) VALUES ($1, 50, $2)', [ids.finished, now])
+  await run(`INSERT INTO production_history (id, model_id, chain_number, date, slot_index, qty) VALUES ('ph_mig_1', $1, 7, '2026-01-10', 0, 50)`, [ids.finished])
+  await insert(ids.variant, 1, 10, ids.finished)
+  await insert(ids.running, 1, 100)
+  await run('INSERT INTO production_totals (model_id, total_entree, updated_at) VALUES ($1, 50, $2)', [ids.running, now])
+  await insert(ids.inactive, 0, 100)
+
+  const flag = await get('SELECT value FROM config WHERE key = $1', ['models_status_backfilled'])
+  await run('DELETE FROM config WHERE key = $1', ['models_status_backfilled'])
+  try {
+    await migrateModelStatus()
+  } finally {
+    if (flag) await run(`INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, ['models_status_backfilled', flag.value])
+  }
+
+  const status = Object.fromEntries((await all('SELECT id, status FROM models WHERE id = ANY($1)', [Object.values(ids)])).map((r) => [r.id, r.status]))
+  assert.equal(status[ids.finished], 'closed')
+  assert.equal(status[ids.variant], 'closed')
+  assert.equal(status[ids.inactive], 'closed')
+  assert.equal(status[ids.running], 'active') // still running before → still open after
+  assert.ok(await get('SELECT id FROM production_history WHERE model_id = $1', [ids.finished])) // data untouched
 })
 
 // Bug found in the same exercise: Présence (rh_attendance/rh_attendance_history)

@@ -4,11 +4,12 @@ import NoModel from '../../components/NoModel'
 import ExportTable from '../../components/ExportTable'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
 export default function LogisticsForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [form, setForm] = useState({ description: '', quantite: '', date: '' })
   const [saving, setSaving] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
@@ -35,6 +36,7 @@ export default function LogisticsForm({ token, chainNumber }) {
 
   return (
     <div className="space-y-4">
+      <ModelSwitcher openModels={openModels} selectedId={modelId} onSelect={selectModel} />
       <GlowCard title="Nouvelle expédition">
         <p className="mb-3 text-sm text-slate-400">Client وModèle يُضافون تلقائياً من بيانات الموديل الحالي.</p>
         <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />

@@ -4,13 +4,17 @@ import NoModel from '../../components/NoModel'
 import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 import { todayInFactoryTZ } from '../../lib/date'
 import { computeQualityPct } from '../../lib/calc'
 
 export default function QualityForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, refresh, openModels, totalSlots, selectModel } = useChainModel(chainNumber, {
+    selectable: true,
+    badgeKind: 'quality',
+  })
   const TODAY = todayInFactoryTZ()
   const [selectedDate, setSelectedDate] = useState(TODAY)
   const [dateError, setDateError] = useState('')
@@ -30,6 +34,12 @@ export default function QualityForm({ token, chainNumber }) {
   useEffect(() => {
     if (dashboard) setReprises(dashboard.quality.reprises || 0)
   }, [dashboard])
+
+  // Switching model can land on one that started after the picked date.
+  const selectedDebut = dashboard?.identity.debut
+  useEffect(() => {
+    if (selectedDebut && selectedDate < selectedDebut) setSelectedDate(TODAY)
+  }, [selectedDebut, selectedDate, TODAY])
 
   // Load the selected day's "Pièces retouche" — today's or any previous
   // day's — joined against Agent Production's real qty for that same
@@ -158,6 +168,7 @@ export default function QualityForm({ token, chainNumber }) {
 
   return (
     <div className="space-y-4">
+      <ModelSwitcher openModels={openModels} selectedId={modelId} onSelect={selectModel} totalSlots={totalSlots} />
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
 
       <GlowCard title="Qualité — résumé">

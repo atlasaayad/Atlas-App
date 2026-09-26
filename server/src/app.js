@@ -17,6 +17,7 @@ import { logisticsRouter } from './routes/logistics.js'
 import { posteRouter } from './routes/poste.js'
 import { patronRouter } from './routes/patron.js'
 import { settingsRouter } from './routes/settings.js'
+import { lifecycleRouter } from './routes/lifecycle.js'
 
 export const app = express()
 app.use(cors())
@@ -63,6 +64,7 @@ app.use('/api/logistics', logisticsRouter)
 app.use('/api/poste', posteRouter)
 app.use('/api/patron', patronRouter)
 app.use('/api', settingsRouter)
+app.use('/api', lifecycleRouter)
 
 app.get('/api/health', (req, res) => res.json({ ok: true }))
 

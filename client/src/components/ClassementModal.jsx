@@ -38,7 +38,7 @@ export default function ClassementModal({ onClose }) {
 }
 
 function RankingRow({ entry }) {
-  const { rank, chainNumber, model, rendement } = entry
+  const { rank, chainNumber, model, rendement, modelsCount } = entry
   const noModel = !model
   // "noScore" only gates the ranking position (sort key = daily score) — it
   // never hides the cumulative figures, which are computed independently
@@ -57,6 +57,9 @@ function RankingRow({ entry }) {
             <div className="text-sm font-medium text-slate-200">
               Chaîne {chainNumber}
               {model && <span className="text-slate-500"> — {model.client} ({model.dessin})</span>}
+              {modelsCount > 1 && (
+                <span className="ml-1.5 rounded-full border border-amber px-1.5 py-0.5 text-[10px] text-amber">{modelsCount} modèles</span>
+              )}
             </div>
             {noModel && <div className="text-xs text-slate-500">لا يوجد نشاط</div>}
           </div>

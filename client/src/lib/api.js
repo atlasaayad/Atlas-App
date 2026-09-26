@@ -80,6 +80,13 @@ export const api = {
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
+  getChainOpenModels: (chainNumber, kind) =>
+    request(`/chains/${chainNumber}/open-models${kind ? `?kind=${kind}` : ''}`),
+  lifecycle: {
+    getClosePrompts: (token, chainNumber) => request(`/chains/${chainNumber}/close-prompts`, { token }),
+    closeModel: (token, id) => request(`/models/${id}/close`, { method: 'POST', token }),
+    dismissClosePrompt: (token, id) => request(`/models/${id}/close-prompt/dismiss`, { method: 'POST', token }),
+  },
   getEarlyWarnings: () => request('/early-warnings'),
   history: {
     day: (chainNumber, date) => request(`/chains/${chainNumber}/history/day?date=${date}`),

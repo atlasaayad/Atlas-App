@@ -45,6 +45,8 @@ export default function MethodeForm({ token, chainNumber }) {
   const [model, setModel] = useState(null)
   const [dashboard, setDashboard] = useState(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [closePrompts, setClosePrompts] = useState([])
+  const [chainFullWarning, setChainFullWarning] = useState(false)
 
   // Silent re-fetch (no `loading` flip) — used after every save so a tab
   // doesn't unmount/remount and lose its own state (which tab is open, an
@@ -54,10 +56,14 @@ export default function MethodeForm({ token, chainNumber }) {
   // caller (picking a pill, or a just-created model) steer which model
   // becomes selected once the fresh list comes back.
   async function refresh(preferredModelId) {
-    const chains = await api.getChains()
-    const info = chains.find((c) => c.chainNumber === chainNumber)
-    const models = info?.models || (info?.model ? [info.model] : [])
+    const [openList, prompts] = await Promise.all([
+      api.getChainOpenModels(chainNumber),
+      api.lifecycle.getClosePrompts(token, chainNumber).catch(() => ({ prompts: [] })),
+    ])
+    const models = openList.models
     setOpenModels(models)
+    setClosePrompts(prompts.prompts)
+    setChainFullWarning(false)
 
     const isOpen = (id) => id && models.some((m) => m.id === id)
     const targetId = isOpen(preferredModelId) ? preferredModelId : isOpen(selectedModelId) ? selectedModelId : models[0]?.id || null
@@ -88,20 +94,42 @@ export default function MethodeForm({ token, chainNumber }) {
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
 
+  // A chain holds at most two open models (fin de série + démarrage) — a
+  // third is refused here and server-side (409 chain_full) until one closes.
+  function requestAddNew() {
+    if (openModels.length >= MAX_OPEN_PER_CHAIN) {
+      setChainFullWarning(true)
+      return
+    }
+    setShowCreateForm(true)
+  }
+
+  const header = (
+    <>
+      <ClosePrompts token={token} prompts={closePrompts} onDone={() => refresh()} />
+      {openModels.length > 0 && (
+        <ModelOverlapBar
+          openModels={openModels}
+          selectedModelId={showCreateForm ? null : selectedModelId}
+          onSelect={(id) => refresh(id)}
+          onAddNew={requestAddNew}
+        />
+      )}
+      {chainFullWarning && (
+        <div className="rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
+          ⚠️ خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين (Fin de série + Démarrage).
+        </div>
+      )}
+    </>
+  )
+
   // Nothing open on this chain yet, or explicitly starting a new one —
   // the overlap bar (if there's already something open) stays visible above
   // the create form, so switching back to an existing model is one tap away.
   if (!model || showCreateForm) {
     return (
       <div className="space-y-4">
-        {openModels.length > 0 && (
-          <ModelOverlapBar
-            openModels={openModels}
-            selectedModelId={showCreateForm ? null : selectedModelId}
-            onSelect={(id) => refresh(id)}
-            onAddNew={() => setShowCreateForm(true)}
-          />
-        )}
+        {header}
         <CreateModelForm
           token={token}
           chainNumber={chainNumber}
@@ -114,17 +142,123 @@ export default function MethodeForm({ token, chainNumber }) {
 
   return (
     <div className="space-y-4">
-      <ModelOverlapBar openModels={openModels} selectedModelId={selectedModelId} onSelect={(id) => refresh(id)} onAddNew={() => setShowCreateForm(true)} />
+      {header}
       <EditModel token={token} model={model} dashboard={dashboard} onSaved={() => refresh()} />
+      <CloseModelCard token={token} model={model} dashboard={dashboard} onClosed={() => refresh()} />
     </div>
   )
 }
 
-// Pills to switch between this chain's open models (only rendered when
-// there's more than one) plus an "add a new one in parallel" action that's
-// ALWAYS available — even with just one open model — since that's exactly
-// how a second one gets started: not by closing the first (there is no such
-// action anywhere), just by creating a new model on the same chain.
+const MAX_OPEN_PER_CHAIN = 2
+
+// "الموديل X وصل للكمية المطلوبة — واش نسدوه؟" — one per open model whose
+// Sortie reached its Qté totale and that nobody answered "ماشي دابا" for
+// today (server-side: GET /chains/:n/close-prompts). Never closes anything
+// on its own.
+function ClosePrompts({ token, prompts, onDone }) {
+  const [busyId, setBusyId] = useState(null)
+  const [error, setError] = useState(null)
+  if (!prompts || prompts.length === 0) return null
+
+  async function act(id, action) {
+    setBusyId(id)
+    setError(null)
+    try {
+      if (action === 'close') await api.lifecycle.closeModel(token, id)
+      else await api.lifecycle.dismissClosePrompt(token, id)
+      await onDone()
+    } catch {
+      setError('فشلت العملية — تحقق من الاتصال.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      {prompts.map((p) => (
+        <div key={p.id} className="rounded-md border border-status-good/50 bg-status-good/10 px-3 py-3 text-sm">
+          <div className="text-slate-200">
+            ✅ الموديل <b>{p.dessin || p.client}</b> وصل للكمية المطلوبة ({p.totalSortie.toLocaleString('fr-FR')}/
+            {p.qteTotale.toLocaleString('fr-FR')}). واش نسدوه؟
+          </div>
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => act(p.id, 'close')}
+              disabled={busyId === p.id}
+              className="rounded-md border border-status-good bg-status-good/20 px-4 py-2 font-medium text-status-good disabled:opacity-50"
+            >
+              تأكيد
+            </button>
+            <button
+              onClick={() => act(p.id, 'dismiss')}
+              disabled={busyId === p.id}
+              className="rounded-md border border-slate-600 px-4 py-2 text-slate-300 disabled:opacity-50"
+            >
+              ماشي دابا
+            </button>
+          </div>
+        </div>
+      ))}
+      {error && <div className="text-xs text-status-bad">{error}</div>}
+    </div>
+  )
+}
+
+// "Clôturer le modèle" — always available to Agent Méthode, target reached
+// or not (fabric shortage, reduced order...). Closing hides the model from
+// every entry screen and from Home, but deletes nothing: its production,
+// Planning, quality and photo stay in history and reports.
+function CloseModelCard({ token, model, dashboard, onClosed }) {
+  const [closing, setClosing] = useState(false)
+  const [error, setError] = useState(null)
+  const sortie = dashboard?.bilan.totalSortie ?? 0
+  const qte = dashboard?.qteTotaleCombined ?? model.qte_totale ?? 0
+
+  async function close() {
+    const label = model.dessin || model.client
+    const warning =
+      qte > 0 && sortie < qte
+        ? `\nالكمية ما تكملاتش بعد (${sortie}/${qte}).`
+        : ''
+    if (!confirm(`تسد الموديل ${label}؟${warning}\nغادي يختفي من شاشات الإدخال ومن Home، والبيانات ديالو كتبقى محفوظة فالتاريخ.`)) return
+    setClosing(true)
+    setError(null)
+    try {
+      await api.lifecycle.closeModel(token, model.id)
+      await onClosed()
+    } catch {
+      setError('فشل الإغلاق — تحقق من الاتصال.')
+      setClosing(false)
+    }
+  }
+
+  return (
+    <GlowCard>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-slate-400">
+          Sortie: <span className="font-mono text-slate-200">{sortie.toLocaleString('fr-FR')}</span> /{' '}
+          <span className="font-mono">{qte.toLocaleString('fr-FR')}</span>
+        </div>
+        <button
+          onClick={close}
+          disabled={closing}
+          className="rounded-md border border-status-bad/60 px-4 py-2 text-sm font-medium text-status-bad active:bg-status-bad/10 disabled:opacity-50"
+        >
+          {closing ? 'Clôture…' : '🔒 Clôturer le modèle'}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-xs text-status-bad">{error}</div>}
+    </GlowCard>
+  )
+}
+
+// Pills to switch between this chain's open models (only rendered when two
+// run at once: fin de série + démarrage) plus the "start a new model in
+// parallel" action — that's how a démarrage begins while the old model is
+// still finishing. A third one is refused (see requestAddNew above).
+const ROLE_PILL = { fin_de_serie: '🟠 Fin de série', demarrage: '🟢 Démarrage' }
+
 function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
   if (openModels.length === 0) return null
   return (
@@ -138,6 +272,7 @@ function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
               selectedModelId === m.id ? 'border-turquoise bg-turquoise/10 text-turquoise' : 'border-slate-700 text-slate-400'
             }`}
           >
+            {ROLE_PILL[m.role] ? `${ROLE_PILL[m.role]} · ` : ''}
             {m.client} ({m.dessin})
           </button>
         ))}
@@ -147,11 +282,6 @@ function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
       >
         ➕ نموذج جديد بالتوازي
       </button>
-      {openModels.length > 1 && (
-        <span className="text-xs text-slate-500">
-          {openModels.length} موديلات نشطة بهذه السلسلة (تداخل — عادي وقت انتهاء موديل وبدء آخر)
-        </span>
-      )}
     </div>
   )
 }
@@ -159,14 +289,22 @@ function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
 function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
   const [form, setForm] = useState({ client: '', qteTotale: '', debut: '', finPrevue: '', dessin: '', commande: '' })
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
   const [voiceMode, setVoiceMode] = useState(false)
 
   async function submit(e) {
     e.preventDefault()
     setSaving(true)
+    setError(null)
     try {
       const res = await api.methode.createModel(token, { ...form, chainNumber })
       onCreated(res.id)
+    } catch (err) {
+      setError(
+        err?.data?.error === 'chain_full'
+          ? 'خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين.'
+          : 'فشل إنشاء الموديل — تحقق من الاتصال.'
+      )
     } finally {
       setSaving(false)
     }
@@ -217,6 +355,7 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
         />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
+        {error && <div className="col-span-full text-sm text-status-bad">{error}</div>}
         <button
           type="submit"
           disabled={saving}

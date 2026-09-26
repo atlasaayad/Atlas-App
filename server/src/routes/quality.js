@@ -13,11 +13,10 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 // A specific day's hourly "Pièces retouche" (defaults to today), joined
 // against Agent Production's real qty for the same chain/date/slot so each
-// row can show its own computed Qualité% — never a manual entry. Selectable
-// entries for this chain: this model's own Couleur/Variante variants PLUS,
-// since a chain overlap is real (see openModels.js), any OTHER root model
-// still open on the same chain (and that root's own variants too) — same
-// generalization as Agent Production's own GET /hourly. For each entry, qty
+// row can show its own computed Qualité% — never a manual entry. Scoped to
+// this root model and its own Couleur/Variante colors — during a fin de
+// série / démarrage overlap the client picks the model first, exactly like
+// Agent Production's own GET /hourly. For each entry, qty
 // and pieceRetouche are summed by model_id first (so two entries logging
 // the same hour combine correctly into the chain-wide qty/Qualité% instead
 // of one silently overwriting the other — see quality_history's widened

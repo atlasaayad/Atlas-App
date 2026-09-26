@@ -3,11 +3,12 @@ import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
 export default function DepotForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [totalPieces, setTotalPieces] = useState(0)
   const [effectifTotal, setEffectifTotal] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -39,6 +40,9 @@ export default function DepotForm({ token, chainNumber }) {
 
   return (
     <GlowCard title="Dépôt">
+      <div className="mb-3">
+        <ModelSwitcher openModels={openModels} selectedId={modelId} onSelect={selectModel} />
+      </div>
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="space-y-4">
         <label className="block">

@@ -9,6 +9,7 @@ import { getPlanningSummary } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
 import { getWorkHours } from '../workHours.js'
 import { uploadModelImage, deleteModelImage } from '../imageUpload.js'
+import { getOpenModelsForChain, MAX_OPEN_PER_CHAIN } from '../openModels.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -48,23 +49,19 @@ async function recompute(modelId) {
   return { nd, vt, dt }
 }
 
-// Create a new model and assign it to a chain. Does NOT deactivate/replace
-// whatever was already running there — a chain overlap (a model's Entré
-// reaching its target while it's still mid-process/exiting, and a new model
-// starting to be fed in at the same time) is real, ordinary factory
-// operation, not an exception to design around. The new model gets its own
-// completely independent gamme/effectif/VT/DT — it never shares anything
-// with whatever else is running on the chain (that's the difference from a
-// Couleur/Variante variant, which deliberately DOES share its root's
-// gamme). See openModels.js for how "which models are this chain's current
-// work" is resolved — the answer to that is what changed, not model
-// creation itself. A model, once created, simply stays `active=1` forever;
-// there is no manual "close/archive" action anywhere — see
-// isModelFinished() in openModels.js for how it naturally drops out of
-// consideration once its own Entré has reached target and En cours hits 0.
+// Create a new model and assign it to a chain. Does NOT close whatever is
+// already running there — a fin de série / démarrage overlap (the old model
+// still finishing while the new one starts) is ordinary factory operation.
+// The new model gets its own completely independent gamme/effectif/VT/DT
+// (unlike a Couleur/Variante variant, which shares its root's gamme). A
+// chain holds at most MAX_OPEN_PER_CHAIN open roots: a third is refused
+// until one of the two is closed (see routes/lifecycle.js).
 methodeRouter.post('/models', async (req, res) => {
   const { client, qteTotale, debut, finPrevue, dessin, commande, chainNumber } = req.body || {}
   if (!client || !chainNumber) return res.status(400).json({ error: 'client_and_chain_required' })
+
+  const openOnChain = await getOpenModelsForChain(Number(chainNumber))
+  if (openOnChain.length >= MAX_OPEN_PER_CHAIN) return res.status(409).json({ error: 'chain_full' })
 
   const now = new Date().toISOString()
   const id = `mdl_${nanoid(10)}`

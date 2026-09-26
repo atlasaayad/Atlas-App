@@ -53,6 +53,7 @@ export function ensureSchema() {
       .then(migrateProductionHistoryUniqueKey)
       .then(migrateQualityHistoryUniqueKey)
       .then(migratePlanningDaysBackfill)
+      .then(migrateModelStatus)
       .catch((err) => {
         schemaReady = null
         throw err
@@ -145,6 +146,20 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS variant_label TEXT;
 -- a public Vercel Blob URL (see imageUpload.js) — the DB only ever holds the
 -- URL, never the image bytes themselves.
 ALTER TABLE models ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+-- Fin de série / Démarrage: a root model is explicitly open ('active') until
+-- Agent Méthode or the Patron closes it ('closed' + closed_at) — either by
+-- confirming the "target reached" prompt or with the manual "Clôturer le
+-- modèle" button. A chain holds at most 2 open roots at once (old one
+-- finishing + new one starting). Closing never deletes anything: production,
+-- Planning, quality, photo all stay queryable by id for history/reports.
+-- close_prompt_dismissed_on is the factory-local date of the last "ماشي
+-- دابا" answer, so the prompt comes back at most once per day.
+-- Backfilled once by migrateModelStatus() below so the set of open models
+-- right after this ships is exactly what was open before.
+ALTER TABLE models ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE models ADD COLUMN IF NOT EXISTS closed_at TEXT;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS close_prompt_dismissed_on TEXT;
 
 CREATE TABLE IF NOT EXISTS gamme_lines (
   id TEXT PRIMARY KEY,
@@ -593,6 +608,39 @@ async function migratePlanningDaysBackfill() {
     FROM planning_hourly ph
     ON CONFLICT (model_id, date) DO NOTHING
   `, [new Date().toISOString()])
+}
+
+// One-time backfill for the explicit models.status column. Before it existed,
+// "open" was computed live: a root with active = 1 was open unless its own
+// Entré had reached its Qté totale AND everything that entered had exited
+// (En cours = 0). This marks exactly those computed-finished roots (plus any
+// root already deactivated, active = 0) as 'closed', together with their
+// Couleur/Variante variants, so nothing that was hidden before reappears.
+// Guarded by a config flag so it runs once per database — after that,
+// closing is only ever the explicit, confirmed action, never automatic.
+export async function migrateModelStatus() {
+  const done = await get('SELECT value FROM config WHERE key = $1', ['models_status_backfilled'])
+  if (done) return
+  const now = new Date().toISOString()
+  await run(
+    `UPDATE models m SET status = 'closed', closed_at = COALESCE(m.updated_at, $1)
+     WHERE m.parent_model_id IS NULL AND m.status = 'active' AND (
+       m.active = 0 OR EXISTS (
+         SELECT 1 FROM production_totals pt
+         WHERE pt.model_id = m.id
+           AND pt.total_entree > 0
+           AND pt.total_entree >= COALESCE(m.qte_totale, 0)
+           AND pt.total_entree - (SELECT COALESCE(SUM(ph.qty), 0) FROM production_history ph WHERE ph.model_id = m.id) <= 0
+       )
+     )`,
+    [now]
+  )
+  await run(
+    `UPDATE models v SET status = 'closed', closed_at = p.closed_at
+     FROM models p
+     WHERE v.parent_model_id = p.id AND p.status = 'closed' AND v.status = 'active'`
+  )
+  await run(`INSERT INTO config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, ['models_status_backfilled', now])
 }
 
 export async function logAudit({ deptKey, modelId, action, details }) {
