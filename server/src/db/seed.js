@@ -24,7 +24,27 @@ const DEFAULT_PINS = {
   echantillon: '1212',
 }
 
+// Production safeguard: every department whose PIN_<DEPT> env var is unset
+// silently falls back to DEFAULT_PINS above — publicly known values. This
+// never changes which PIN is used (local dev keeps its defaults); it only
+// makes the situation impossible to miss in production logs. Returns the
+// warning text, or null when there is nothing to warn about.
+export function productionPinWarning(env = process.env) {
+  const isProduction = env.VERCEL_ENV === 'production' || env.NODE_ENV === 'production'
+  if (!isProduction) return null
+  const missing = DEPARTMENTS.map((d) => `PIN_${d.key.toUpperCase()}`).filter((name) => !env[name])
+  if (missing.length === 0) return null
+  return (
+    `⚠️  SECURITY WARNING: production is running WITHOUT these PIN env vars: ${missing.join(', ')}.\n` +
+    '⚠️  Those departments are using the default/fallback PINs from server/src/db/seed.js, which are publicly known.\n' +
+    '⚠️  Define every PIN_<DEPT> variable in the Vercel project (Settings → Environment Variables) and redeploy.'
+  )
+}
+
 async function seedDepartments() {
+  const warning = productionPinWarning()
+  if (warning) console.warn(warning)
+
   for (const dept of DEPARTMENTS) {
     const pin = process.env[`PIN_${dept.key.toUpperCase()}`] || DEFAULT_PINS[dept.key]
     const pinHash = bcrypt.hashSync(pin, 10)

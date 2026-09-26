@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { all, get } from '../db/index.js'
-import { verifyPin, issueToken } from '../auth.js'
+import { verifyPin, issueToken, requireDept, clientIp } from '../auth.js'
 import { DEPARTMENTS, CHAIN_NUMBERS, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels, getFamilyIds, roleInChain } from '../openModels.js'
@@ -33,7 +33,7 @@ publicRouter.post('/auth/:deptKey/login', async (req, res) => {
   const { pin } = req.body || {}
   if (!pin) return res.status(400).json({ error: 'pin_required' })
 
-  const result = await verifyPin(deptKey, pin)
+  const result = await verifyPin(deptKey, pin, clientIp(req))
   if (!result.ok) {
     if (result.reason === 'locked') {
       return res.status(423).json({ error: 'locked', retryAfterSeconds: result.retryAfterSeconds })
@@ -47,7 +47,9 @@ publicRouter.post('/auth/:deptKey/login', async (req, res) => {
 
 publicRouter.get('/models', async (req, res) => {
   const rows = await all(
-    'SELECT id, client, dessin, chain_number, active FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number'
+    // Currently open models only — a closed model keeps active = 1 (see
+    // openModels.js), so active alone would still list it.
+    "SELECT id, client, dessin, chain_number, active FROM models WHERE active = 1 AND status = 'active' AND parent_model_id IS NULL ORDER BY chain_number"
   )
   res.json(rows)
 })
@@ -72,7 +74,7 @@ publicRouter.get('/chains', async (req, res) => {
   const recentLogs = await all(
     `SELECT a.created_at, m.chain_number FROM audit_log a
      JOIN models m ON m.id = a.model_id
-     WHERE a.created_at >= $1 AND m.active = 1 AND a.dept_key <> 'system'
+     WHERE a.created_at >= $1 AND m.active = 1 AND m.status = 'active' AND a.dept_key <> 'system'
      ORDER BY a.created_at DESC`,
     [since]
   )
@@ -706,10 +708,11 @@ publicRouter.get('/chains/ranking', async (req, res) => {
   res.json(entries.map((e, i) => ({ rank: i + 1, ...e })))
 })
 
-// Personnel administratif — read side, shared by RH's/Patron's own entry
-// screens and the "État des effectifs" overview page below. Write side is
-// gated per-department (routes/rh.js primary, routes/patron.js backup).
-publicRouter.get('/personnel-admin', async (req, res) => {
+// Personnel administratif — read side of RH's/Patron's own entry screens,
+// so gated to exactly those two departments (same as the write side:
+// routes/rh.js primary, routes/patron.js backup). The "État des effectifs"
+// overview below reads the day's figure server-side, not through here.
+publicRouter.get('/personnel-admin', requireDept(['rh', 'patron']), async (req, res) => {
   const date = req.query.date || todayInFactoryTZ()
   res.json(await getPersonnelAdmin(date))
 })

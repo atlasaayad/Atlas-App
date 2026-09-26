@@ -41,7 +41,9 @@ export default function Ask() {
       setMessages((m) => [...m, { role: 'assistant', text: res.answer }])
     } catch (err) {
       const text =
-        err?.data?.error === 'ai_not_configured'
+        err?.status === 401
+          ? 'خاصك تدخل برمز PIN ديال شي قسم (الأقسام) باش تستعمل "اسأل أطلس".'
+          : err?.data?.error === 'ai_not_configured'
           ? 'ميزة "اسأل أطلس" غير مفعّلة حالياً بهذا السيرفر.'
           : err?.data?.error === 'daily_limit_reached'
             ? 'تم الوصول للحد اليومي، جرب بكرة 🙏'

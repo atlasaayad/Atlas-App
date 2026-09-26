@@ -32,9 +32,11 @@ auditRouter.get('/audit/report', requireDept(['patron', 'rh']), async (req, res)
   // this report stays chain-wide (deliberately spans a model change/overlap
   // within the picked date range, same as Historique), so "Requis" here
   // just needs ONE deterministic reference model rather than an arbitrary
-  // implicit DB row order: the primary (oldest created) one.
+  // implicit DB row order: the primary (oldest created) one. Only a model
+  // that is still open counts — a closed (fin de série finished) model
+  // keeps active = 1 but must never be picked as the chain's current one.
   const model = await get(
-    'SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL ORDER BY created_at ASC LIMIT 1',
+    "SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND status = 'active' AND parent_model_id IS NULL ORDER BY created_at ASC LIMIT 1",
     [chainNumber]
   )
 

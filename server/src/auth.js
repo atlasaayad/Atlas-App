@@ -30,39 +30,68 @@ function pinFingerprint(pinHash) {
 const MAX_ATTEMPTS = 5
 const LOCKOUT_MINUTES = 10
 
+// The client IP a failed-PIN counter is keyed on (together with the
+// department). On Vercel, the platform's own edge sets x-vercel-forwarded-for
+// / x-real-ip to the real client address and overwrites whatever the client
+// sent, so those are trustworthy there — and ONLY there: anywhere else (local
+// dev, tests, any other host) a client could forge them, so the raw socket
+// address is used instead and forwarded headers are ignored entirely.
+export function clientIp(req) {
+  if (process.env.VERCEL) {
+    const forwarded = req.headers['x-vercel-forwarded-for'] || req.headers['x-real-ip'] || ''
+    const ip = String(forwarded).split(',')[0].trim()
+    if (ip) return ip
+  }
+  return req.socket?.remoteAddress || 'unknown'
+}
+
+// Failed attempts are counted per (department, client IP) in login_attempts
+// — not per department alone — so one device hammering wrong PINs locks
+// only itself out of that department, never every legitimate device on the
+// floor along with it.
+//
 // Result shapes:
 //   { ok: true, dept }
 //   { ok: false, reason: 'locked', retryAfterSeconds }
 //   { ok: false, reason: 'invalid', attemptsRemaining }
-export async function verifyPin(deptKey, pin) {
+export async function verifyPin(deptKey, pin, ip = 'unknown') {
   const dept = await get('SELECT * FROM departments WHERE key = $1', [deptKey])
   // Department keys aren't secret (the whole list is public via
   // /api/departments) — treat "no such department" as just another wrong
   // PIN rather than a distinct case, so there's nothing to enumerate.
   if (!dept) return { ok: false, reason: 'invalid', attemptsRemaining: MAX_ATTEMPTS - 1 }
 
-  if (dept.locked_until) {
-    const remainingMs = new Date(dept.locked_until).getTime() - Date.now()
+  const attempt = await get('SELECT * FROM login_attempts WHERE dept_key = $1 AND ip = $2', [deptKey, ip])
+  if (attempt?.locked_until) {
+    const remainingMs = new Date(attempt.locked_until).getTime() - Date.now()
     if (remainingMs > 0) {
       return { ok: false, reason: 'locked', retryAfterSeconds: Math.ceil(remainingMs / 1000) }
     }
   }
 
   if (bcrypt.compareSync(String(pin), dept.pin_hash)) {
-    if (dept.failed_attempts > 0 || dept.locked_until) {
-      await run('UPDATE departments SET failed_attempts = 0, locked_until = NULL WHERE key = $1', [deptKey])
-    }
+    if (attempt) await run('DELETE FROM login_attempts WHERE dept_key = $1 AND ip = $2', [deptKey, ip])
     return { ok: true, dept }
   }
 
-  const attempts = (dept.failed_attempts || 0) + 1
+  // An expired lock starts a fresh count rather than carrying the old one.
+  const previous = attempt?.locked_until ? 0 : attempt?.failed_attempts || 0
+  const attempts = previous + 1
   if (attempts >= MAX_ATTEMPTS) {
     const lockedUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000).toISOString()
-    await run('UPDATE departments SET failed_attempts = 0, locked_until = $1 WHERE key = $2', [lockedUntil, deptKey])
+    await run(
+      `INSERT INTO login_attempts (dept_key, ip, failed_attempts, locked_until) VALUES ($1, $2, 0, $3)
+       ON CONFLICT (dept_key, ip) DO UPDATE SET failed_attempts = 0, locked_until = excluded.locked_until`,
+      [deptKey, ip, lockedUntil]
+    )
     return { ok: false, reason: 'locked', retryAfterSeconds: LOCKOUT_MINUTES * 60 }
   }
 
-  await run('UPDATE departments SET failed_attempts = $1 WHERE key = $2', [attempts, deptKey])
+  await run(
+    `INSERT INTO login_attempts (dept_key, ip, failed_attempts, locked_until) VALUES ($1, $2, $3, NULL)
+     ON CONFLICT (dept_key, ip) DO UPDATE SET failed_attempts = excluded.failed_attempts, locked_until = NULL`,
+    [deptKey, ip, attempts]
+  )
   return { ok: false, reason: 'invalid', attemptsRemaining: MAX_ATTEMPTS - attempts }
 }
 

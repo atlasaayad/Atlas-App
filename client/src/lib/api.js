@@ -22,6 +22,17 @@ export function clearDeptToken(deptKey) {
   sessionStorage.removeItem(tokenKey(deptKey))
 }
 
+// Any department's token currently held by this browser tab — for the
+// endpoints open to whoever is logged in right now, whatever their
+// department (Ask Atlas). null when no department has entered its PIN yet.
+export function getAnyDeptToken() {
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i)
+    if (key?.startsWith('atlas_token_')) return sessionStorage.getItem(key)
+  }
+  return null
+}
+
 // A dropped/hanging connection (common on a factory floor's WiFi) would
 // otherwise leave `fetch` pending indefinitely — the caller's "…" saving
 // state never resolving into either a confirmation or an error, which reads
@@ -75,7 +86,7 @@ export const api = {
   getModels: () => request('/models'),
   getChains: () => request('/chains'),
   getRanking: () => request('/chains/ranking'),
-  getPersonnelAdmin: (date) => request(`/personnel-admin?date=${date}`),
+  getPersonnelAdmin: (token, date) => request(`/personnel-admin?date=${date}`, { token }),
   getEffectifsOverview: () => request('/effectifs/overview'),
   getModel: (id) => request(`/models/${id}`),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
@@ -97,7 +108,8 @@ export const api = {
 
   // Longer timeout: this hits Claude synchronously and a normal reply can
   // take well past the default request timeout.
-  ask: (question, chainNumber) => request('/ask', { method: 'POST', body: { question, chainNumber }, timeoutMs: 45000 }),
+  ask: (question, chainNumber) =>
+    request('/ask', { method: 'POST', body: { question, chainNumber }, token: getAnyDeptToken(), timeoutMs: 45000 }),
 
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),

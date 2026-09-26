@@ -7,8 +7,14 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import bcrypt from 'bcryptjs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import ExcelJS from 'exceljs'
 import { app } from '../src/app.js'
-import { runSeed } from '../src/db/seed.js'
+import { isOriginAllowed } from '../src/cors.js'
+import { runSeed, productionPinWarning } from '../src/db/seed.js'
 import { get, run, all, pool, migrateModelStatus } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
 import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
@@ -44,6 +50,7 @@ async function call(path, opts = {}) {
     headers: {
       'Content-Type': 'application/json',
       ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+      ...(opts.headers || {}),
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   })
@@ -64,7 +71,11 @@ test('connexion par PIN — code correct, code faux, verrouillage après 5 éche
      ON CONFLICT (key) DO UPDATE SET pin_hash = excluded.pin_hash, failed_attempts = 0, locked_until = NULL`,
     [deptKey, 'Test', '🧪', pinHash]
   )
-  t.after(async () => run('DELETE FROM departments WHERE key = $1', [deptKey]))
+  await run('DELETE FROM login_attempts WHERE dept_key = $1', [deptKey])
+  t.after(async () => {
+    await run('DELETE FROM departments WHERE key = $1', [deptKey])
+    await run('DELETE FROM login_attempts WHERE dept_key = $1', [deptKey])
+  })
 
   await t.test('code correct connecte et renvoie un token', async () => {
     const { status, data } = await call(`/auth/${deptKey}/login`, { method: 'POST', body: { pin: '0000' } })
@@ -79,7 +90,7 @@ test('connexion par PIN — code correct, code faux, verrouillage après 5 éche
   })
 
   await t.test('5 échecs verrouillent le compte, même le bon code est refusé ensuite', async () => {
-    await run('UPDATE departments SET failed_attempts = 0, locked_until = NULL WHERE key = $1', [deptKey])
+    await run('DELETE FROM login_attempts WHERE dept_key = $1', [deptKey])
     let last
     for (let i = 0; i < 5; i++) {
       last = await call(`/auth/${deptKey}/login`, { method: 'POST', body: { pin: '9999' } })
@@ -979,14 +990,14 @@ test('Personnel administratif: RH (primaire) + Patron (secours) sur la même lig
   await t.test("RH enregistre 20 aujourd'hui", async () => {
     const put = await call('/rh/personnel-admin', { method: 'PUT', token: rhToken, body: { date: today, total: 20 } })
     assert.equal(put.status, 200)
-    const read = await call(`/personnel-admin?date=${today}`)
+    const read = await call(`/personnel-admin?date=${today}`, { token: rhToken })
     assert.equal(read.data.total, 20)
   })
 
   await t.test("Patron écrase avec 25 — dernier enregistrement (peu importe le département) qui compte", async () => {
     const put = await call('/patron/personnel-admin', { method: 'PUT', token: patronToken, body: { date: today, total: 25 } })
     assert.equal(put.status, 200)
-    const read = await call(`/personnel-admin?date=${today}`)
+    const read = await call(`/personnel-admin?date=${today}`, { token: rhToken })
     assert.equal(read.data.total, 25)
   })
 
@@ -994,13 +1005,13 @@ test('Personnel administratif: RH (primaire) + Patron (secours) sur la même lig
     const put = await call('/rh/personnel-admin', { method: 'PUT', token: rhToken, body: { date: pastDate, total: 7 } })
     assert.equal(put.status, 200)
 
-    const readPast = await call(`/personnel-admin?date=${pastDate}`)
+    const readPast = await call(`/personnel-admin?date=${pastDate}`, { token: rhToken })
     assert.equal(readPast.data.total, 7)
     // cumulativeTotal = somme de TOUS les jours enregistrés, pas seulement
     // celui demandé — donc identique quelle que soit la date interrogée.
     assert.equal(readPast.data.cumulativeTotal, 25 + 7)
 
-    const readToday = await call(`/personnel-admin?date=${today}`)
+    const readToday = await call(`/personnel-admin?date=${today}`, { token: rhToken })
     assert.equal(readToday.data.total, 25) // inchangé par la correction du jour passé
     assert.equal(readToday.data.cumulativeTotal, 25 + 7)
   })
@@ -2223,4 +2234,367 @@ test('📷 صورة الموديل: upload/delete gated to Agent Méthode, degra
     const res = await call(`/methode/models/${modelId}/image`, { method: 'DELETE', token: methodeToken })
     assert.equal(res.status, 200)
   })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 1 hardening — regression tests for each fix in that batch.
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+
+function listSourceFiles(dir) {
+  const out = []
+  for (const name of readdirSync(dir)) {
+    if (name === 'node_modules' || name === 'dist') continue
+    const full = path.join(dir, name)
+    if (statSync(full).isDirectory()) out.push(...listSourceFiles(full))
+    else if (/\.(js|jsx|json|html)$/.test(name)) out.push(full)
+  }
+  return out
+}
+
+test('Predict (football) supprimé: aucun fichier, route, import ni config restant', async (t) => {
+  await t.test('les dossiers/fichiers Predict n’existent plus', () => {
+    assert.equal(existsSync(path.join(REPO_ROOT, 'client/src/predict')), false)
+    assert.equal(existsSync(path.join(REPO_ROOT, 'server/src/routes/predict.js')), false)
+  })
+
+  await t.test('aucune référence football/Predict dans le code, la config ou le déploiement', () => {
+    const files = [
+      ...listSourceFiles(path.join(REPO_ROOT, 'client/src')),
+      ...listSourceFiles(path.join(REPO_ROOT, 'server/src')),
+      ...listSourceFiles(path.join(REPO_ROOT, 'api')),
+      path.join(REPO_ROOT, 'client/index.html'),
+      path.join(REPO_ROOT, 'vercel.json'),
+      path.join(REPO_ROOT, '.env.example'),
+      path.join(REPO_ROOT, 'package.json'),
+      path.join(REPO_ROOT, 'client/package.json'),
+    ]
+    const offenders = files.filter((f) => /predict|football|FOOTBALL_DATA_KEY/i.test(readFileSync(f, 'utf8')))
+    assert.deepEqual(offenders.map((f) => path.relative(REPO_ROOT, f)), [])
+  })
+
+  await t.test('les anciennes routes /api/predict/* ne répondent plus (404)', async () => {
+    assert.equal((await call('/predict/leagues')).status, 404)
+    assert.equal((await call('/predict/matches')).status, 404)
+    assert.equal((await call('/predict/analyze', { method: 'POST', body: { matchId: 1 } })).status, 404)
+  })
+})
+
+test('/api/ask exige une connexion département (requireAnyDept)', async (t) => {
+  const today = todayInFactoryTZ()
+  const usage = async () => Number((await get('SELECT count FROM ask_usage WHERE date = $1', [today]))?.count || 0)
+
+  await t.test('sans token → 401, et le quota journalier n’est PAS consommé', async () => {
+    const before = await usage()
+    const res = await call('/ask', { method: 'POST', body: { question: 'test' } })
+    assert.equal(res.status, 401)
+    assert.equal(res.data.error, 'missing_token')
+    assert.equal(await usage(), before)
+  })
+
+  await t.test('token invalide → 401', async () => {
+    const res = await call('/ask', { method: 'POST', token: 'not-a-real-token', body: { question: 'test' } })
+    assert.equal(res.status, 401)
+  })
+
+  await t.test('n’importe quel département connecté passe l’authentification', async () => {
+    for (const [dept, pin] of [['production', '2222'], ['quality', '7777']]) {
+      const res = await call('/ask', { method: 'POST', token: await login(dept, pin), body: { question: 'test' } })
+      assert.notEqual(res.status, 401)
+      assert.notEqual(res.status, 403)
+      // Test DB has no ANTHROPIC_API_KEY: past auth, the route's own
+      // "not configured" answer is exactly what comes back.
+      if (!process.env.ANTHROPIC_API_KEY) {
+        assert.equal(res.status, 503)
+        assert.equal(res.data.error, 'ai_not_configured')
+      }
+    }
+  })
+
+  await t.test('question vide toujours refusée (400) une fois authentifié', async () => {
+    const res = await call('/ask', { method: 'POST', token: await login('production', '2222'), body: { question: '' } })
+    assert.equal(res.status, 400)
+  })
+})
+
+test('Modèle courant = status active: un modèle clôturé (active=1) n’est plus pris pour le modèle en cours', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const patronToken = await login('patron', '3333')
+  const rhToken = await login('rh', '8888')
+  const today = todayInFactoryTZ()
+
+  const openBefore = await call(`/chains/${TEST_CHAIN}/open-models`)
+  assert.equal(openBefore.data.models.length, 0, `chaîne ${TEST_CHAIN} doit être libre pour ce test`)
+
+  const created = []
+  t.after(async () => {
+    for (const id of created) {
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+      await run('DELETE FROM models WHERE id = $1', [id])
+    }
+  })
+  async function createModel(client) {
+    const res = await call('/methode/models', { method: 'POST', token: methodeToken, body: { chainNumber: TEST_CHAIN, debut: today, client, qteTotale: 100, dessin: client } })
+    assert.equal(res.status, 201)
+    created.push(res.data.id)
+    return res.data.id
+  }
+  async function auditReportModelLine() {
+    const res = await fetch(`${base}/audit/report?chainNumber=${TEST_CHAIN}&from=${today}&to=${today}`, {
+      headers: { Authorization: `Bearer ${rhToken}` },
+    })
+    assert.equal(res.status, 200)
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(Buffer.from(await res.arrayBuffer()))
+    return String(wb.getWorksheet('Résumé').getRow(3).getCell(2).value)
+  }
+  const modelIdsInList = async () => (await call('/models')).data.map((m) => m.id)
+
+  const oldId = await createModel('TEST_STATUS_OLD')
+  const newId = await createModel('TEST_STATUS_NEW')
+
+  await t.test('deux modèles ouverts: le plus ancien reste le modèle de référence (comportement inchangé)', async () => {
+    assert.match(await auditReportModelLine(), /TEST_STATUS_OLD/)
+    const ids = await modelIdsInList()
+    assert.ok(ids.includes(oldId) && ids.includes(newId))
+  })
+
+  await t.test('après clôture de l’ancien: audit, GET /models et /chains ne le prennent plus', async () => {
+    const close = await call(`/models/${oldId}/close`, { method: 'POST', token: patronToken })
+    assert.equal(close.status, 200)
+
+    // Lifecycle unchanged: closed but still active = 1 (kept, readable).
+    const row = await get('SELECT active, status FROM models WHERE id = $1', [oldId])
+    assert.equal(row.active, 1)
+    assert.equal(row.status, 'closed')
+    assert.equal((await call(`/models/${oldId}/dashboard`)).status, 200)
+
+    assert.match(await auditReportModelLine(), /TEST_STATUS_NEW/)
+    const ids = await modelIdsInList()
+    assert.ok(!ids.includes(oldId))
+    assert.ok(ids.includes(newId))
+
+    const chain = (await call('/chains')).data.find((c) => c.chainNumber === TEST_CHAIN)
+    assert.deepEqual(chain.models.map((m) => m.id), [newId])
+    assert.ok(chain.lastActivityToday) // the open model's own activity today
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.id, newId)
+  })
+
+  await t.test('les deux clôturés: plus aucun modèle courant, et leur activité ne marque plus la chaîne comme active', async () => {
+    assert.equal((await call(`/models/${newId}/close`, { method: 'POST', token: methodeToken })).status, 200)
+    assert.match(await auditReportModelLine(), /^Chaîne 8$/)
+    const ids = await modelIdsInList()
+    assert.ok(!ids.includes(oldId) && !ids.includes(newId))
+    const chain = (await call('/chains')).data.find((c) => c.chainNumber === TEST_CHAIN)
+    assert.equal(chain.model, null)
+    assert.equal(chain.lastActivityToday, null)
+  })
+})
+
+test('Verrouillage PIN par département + IP', async (t) => {
+  const deptKey = 'test_lock_ip_dept'
+  await run(
+    `INSERT INTO departments (key, label, icon, pin_hash) VALUES ($1, 'Test', '🧪', $2)
+     ON CONFLICT (key) DO UPDATE SET pin_hash = excluded.pin_hash`,
+    [deptKey, bcrypt.hashSync('0000', 10)]
+  )
+  const previousVercel = process.env.VERCEL
+  t.after(async () => {
+    if (previousVercel === undefined) delete process.env.VERCEL
+    else process.env.VERCEL = previousVercel
+    await run('DELETE FROM login_attempts WHERE dept_key = $1', [deptKey])
+    await run('DELETE FROM departments WHERE key = $1', [deptKey])
+  })
+  const tryPin = (pin, ip) =>
+    call(`/auth/${deptKey}/login`, { method: 'POST', body: { pin }, headers: ip ? { 'x-vercel-forwarded-for': ip } : {} })
+
+  await t.test('sur Vercel: même département + même IP → verrouillé après 5 échecs', async () => {
+    process.env.VERCEL = '1'
+    let last
+    for (let i = 0; i < 5; i++) last = await tryPin('9999', '203.0.113.10')
+    assert.equal(last.status, 423)
+    assert.equal(last.data.error, 'locked')
+    assert.equal((await tryPin('0000', '203.0.113.10')).status, 423) // even the right PIN
+  })
+
+  await t.test('même département + autre IP → pas bloqué', async () => {
+    process.env.VERCEL = '1'
+    const wrong = await tryPin('9999', '198.51.100.20')
+    assert.equal(wrong.status, 401)
+    assert.equal(wrong.data.attemptsRemaining, 4) // its own, fresh counter
+    const ok = await tryPin('0000', '198.51.100.21')
+    assert.equal(ok.status, 200)
+    assert.ok(ok.data.token)
+  })
+
+  await t.test('le verrouillage expire: après 10 min, le bon code repasse et le compteur repart à zéro', async () => {
+    process.env.VERCEL = '1'
+    await run(`UPDATE login_attempts SET locked_until = $1 WHERE dept_key = $2 AND ip = $3`, [
+      new Date(Date.now() - 1000).toISOString(),
+      deptKey,
+      '203.0.113.10',
+    ])
+    const ok = await tryPin('0000', '203.0.113.10')
+    assert.equal(ok.status, 200)
+    assert.equal(await get('SELECT 1 FROM login_attempts WHERE dept_key = $1 AND ip = $2', [deptKey, '203.0.113.10']), undefined)
+  })
+
+  await t.test('un succès remet le compteur à zéro pour cette IP', async () => {
+    process.env.VERCEL = '1'
+    await tryPin('9999', '192.0.2.30')
+    await tryPin('9999', '192.0.2.30')
+    assert.equal((await tryPin('0000', '192.0.2.30')).status, 200)
+    const again = await tryPin('9999', '192.0.2.30')
+    assert.equal(again.data.attemptsRemaining, 4)
+  })
+
+  await t.test('hors Vercel, un en-tête X-Forwarded-For/X-Vercel-* forgé est ignoré (pas de contournement)', async () => {
+    delete process.env.VERCEL
+    await run('DELETE FROM login_attempts WHERE dept_key = $1', [deptKey])
+    let last
+    for (let i = 0; i < 5; i++) {
+      last = await call(`/auth/${deptKey}/login`, {
+        method: 'POST',
+        body: { pin: '9999' },
+        headers: { 'x-vercel-forwarded-for': `10.0.0.${i}`, 'x-forwarded-for': `10.1.0.${i}`, 'x-real-ip': `10.2.0.${i}` },
+      })
+    }
+    assert.equal(last.status, 423)
+  })
+})
+
+test('CORS: origine Atlas de production + previews Atlas autorisées, le reste refusé', async (t) => {
+  const saved = {
+    VERCEL: process.env.VERCEL,
+    CORS_ALLOWED_ORIGINS: process.env.CORS_ALLOWED_ORIGINS,
+    CORS_PREVIEW_ORIGIN_PATTERN: process.env.CORS_PREVIEW_ORIGIN_PATTERN,
+  }
+  t.after(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+  const withOrigin = (origin, method = 'GET') =>
+    fetch(`${base}/config`, { method, headers: { Origin: origin, ...(method === 'OPTIONS' ? { 'Access-Control-Request-Method': 'POST' } : {}) } })
+
+  await t.test('production https://atlas-app-smoky.vercel.app → autorisée', async () => {
+    process.env.VERCEL = '1'
+    const res = await withOrigin('https://atlas-app-smoky.vercel.app')
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('access-control-allow-origin'), 'https://atlas-app-smoky.vercel.app')
+    const preflight = await withOrigin('https://atlas-app-smoky.vercel.app', 'OPTIONS')
+    assert.equal(preflight.status, 204)
+  })
+
+  await t.test('previews Vercel réelles des deux projets Atlas → autorisées', async () => {
+    process.env.VERCEL = '1'
+    for (const origin of [
+      'https://atlas-app-git-claude-atlas-producti-aa17b3-atlasaayads-projects.vercel.app',
+      'https://atlas-app-kfr5-git-claude-atlas-pro-6bdc8f-atlasaayads-projects.vercel.app',
+      'https://atlas-app-abc123xyz-atlasaayads-projects.vercel.app',
+    ]) {
+      const res = await withOrigin(origin)
+      assert.equal(res.status, 200, origin)
+      assert.equal(res.headers.get('access-control-allow-origin'), origin)
+    }
+  })
+
+  await t.test('origines sans rapport → refusées (403), y compris d’autres *.vercel.app', async () => {
+    process.env.VERCEL = '1'
+    for (const origin of [
+      'https://evil.example.com',
+      'https://atlas-app-evil.vercel.app',
+      'https://some-other-project.vercel.app',
+      'https://atlas-app-git-x-otherteam-projects.vercel.app',
+      'http://atlas-app-smoky.vercel.app', // http, not https
+      'http://localhost:5173', // localhost only outside Vercel
+    ]) {
+      const res = await withOrigin(origin)
+      assert.equal(res.status, 403, origin)
+      assert.equal(res.headers.get('access-control-allow-origin'), null)
+    }
+    const preflight = await withOrigin('https://evil.example.com', 'OPTIONS')
+    assert.equal(preflight.status, 403)
+  })
+
+  await t.test('même domaine (Origin = Host) et requêtes sans Origin → toujours autorisées', () => {
+    process.env.VERCEL = '1'
+    assert.equal(isOriginAllowed('https://atlas-custom.example.com', 'atlas-custom.example.com'), true)
+    assert.equal(isOriginAllowed(undefined, 'anything'), true)
+  })
+
+  await t.test('configurable par variables d’environnement', () => {
+    process.env.VERCEL = '1'
+    process.env.CORS_ALLOWED_ORIGINS = 'https://atlas.example.com, https://tv.example.com/'
+    process.env.CORS_PREVIEW_ORIGIN_PATTERN = '^https://preview-[a-z0-9]+\\.example\\.com$'
+    assert.equal(isOriginAllowed('https://tv.example.com'), true)
+    assert.equal(isOriginAllowed('https://preview-42.example.com'), true)
+    assert.equal(isOriginAllowed('https://atlas-app-smoky.vercel.app'), false) // replaced, not merged
+    delete process.env.CORS_ALLOWED_ORIGINS
+    delete process.env.CORS_PREVIEW_ORIGIN_PATTERN
+  })
+
+  await t.test('développement local (hors Vercel): localhost autorisé', () => {
+    delete process.env.VERCEL
+    assert.equal(isOriginAllowed('http://localhost:5173', 'localhost:4000'), true)
+  })
+})
+
+test('/api/personnel-admin réservé à RH et Patron', async (t) => {
+  const date = todayInFactoryTZ()
+  await t.test('sans token → 401', async () => {
+    assert.equal((await call(`/personnel-admin?date=${date}`)).status, 401)
+  })
+  await t.test('RH → 200', async () => {
+    const res = await call(`/personnel-admin?date=${date}`, { token: await login('rh', '8888') })
+    assert.equal(res.status, 200)
+    assert.equal(res.data.date, date)
+  })
+  await t.test('Patron → 200', async () => {
+    assert.equal((await call(`/personnel-admin?date=${date}`, { token: await login('patron', '3333') })).status, 200)
+  })
+  await t.test('autre département (Production, Méthode) → 403', async () => {
+    assert.equal((await call(`/personnel-admin?date=${date}`, { token: await login('production', '2222') })).status, 403)
+    assert.equal((await call(`/personnel-admin?date=${date}`, { token: await login('methode', '1111') })).status, 403)
+  })
+})
+
+test('Écrans publics (TV usine) toujours accessibles sans connexion', async () => {
+  for (const p of ['/config', '/departments', '/chains', '/chains/1/dashboard', '/chains/1/open-models', '/chains/ranking', '/early-warnings', '/effectifs/overview', '/chains/1/history/day?date=' + todayInFactoryTZ()]) {
+    const res = await call(p)
+    assert.equal(res.status, 200, p)
+  }
+})
+
+test('Avertissement PIN_* manquants en production', async (t) => {
+  const ALL_PINS = Object.fromEntries(
+    ['methode', 'production', 'patron', 'mecanicien', 'magasin', 'logistics', 'quality', 'rh', 'coupe', 'depot', 'finale', 'echantillon'].map((k) => [`PIN_${k.toUpperCase()}`, 'x'])
+  )
+  await t.test('production + PIN_* manquants → avertissement listant les variables', () => {
+    const warning = productionPinWarning({ VERCEL_ENV: 'production', PIN_RH: '1' })
+    assert.ok(warning)
+    assert.match(warning, /PIN_METHODE/)
+    assert.match(warning, /PIN_PATRON/)
+    assert.doesNotMatch(warning, /PIN_RH\b/)
+    assert.match(warning, /default\/fallback PINs/)
+  })
+  await t.test('NODE_ENV=production seul suffit aussi', () => {
+    assert.ok(productionPinWarning({ NODE_ENV: 'production' }))
+  })
+  await t.test('production + tous les PIN_* définis → aucun avertissement', () => {
+    assert.equal(productionPinWarning({ VERCEL_ENV: 'production', ...ALL_PINS }), null)
+  })
+  await t.test('développement local → aucun avertissement (comportement inchangé)', () => {
+    assert.equal(productionPinWarning({}), null)
+    assert.equal(productionPinWarning({ VERCEL_ENV: 'preview', NODE_ENV: 'development' }), null)
+  })
+})
+
+test('ESLint: `npm run lint` passe (0 erreur)', { skip: !existsSync(path.join(REPO_ROOT, 'client/node_modules/eslint')) && 'client deps not installed' }, () => {
+  // Throws (non-zero exit) on any lint error; warnings are allowed.
+  execFileSync('npm', ['run', 'lint'], { cwd: REPO_ROOT, stdio: 'pipe' })
 })

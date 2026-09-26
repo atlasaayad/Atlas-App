@@ -7,7 +7,6 @@ import DeptGate from './pages/DeptGate'
 import EffectifsOverview from './pages/EffectifsOverview'
 import Ask from './pages/Ask'
 import SettingsGate from './pages/SettingsGate'
-import PredictApp from './predict/PredictApp'
 
 function Header() {
   const { companyName } = useCompany()
@@ -47,7 +46,6 @@ function FactoryApp() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/predict/*" element={<PredictApp />} />
       <Route path="/*" element={<FactoryApp />} />
     </Routes>
   )

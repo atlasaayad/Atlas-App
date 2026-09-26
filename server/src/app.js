@@ -1,9 +1,8 @@
 import express from 'express'
-import cors from 'cors'
 import { ensureSchema } from './db/index.js'
+import { corsMiddleware } from './cors.js'
 import { publicRouter } from './routes/public.js'
 import { askRouter } from './routes/ask.js'
-import { predictRouter } from './routes/predict.js'
 import { auditRouter } from './routes/audit.js'
 import { devisRouter } from './routes/devis.js'
 import { earlyWarningRouter } from './routes/earlyWarning.js'
@@ -20,7 +19,7 @@ import { settingsRouter } from './routes/settings.js'
 import { lifecycleRouter } from './routes/lifecycle.js'
 
 export const app = express()
-app.use(cors())
+app.use(corsMiddleware())
 // 8mb, not the default 100kb — the model-image upload (PUT
 // /methode/models/:id/image) sends the photo as a base64 data URI in the
 // JSON body (~33% larger than the raw file; see imageUpload.js's own
@@ -50,7 +49,6 @@ app.use(async (req, res, next) => {
 
 app.use('/api', publicRouter)
 app.use('/api', askRouter)
-app.use('/api', predictRouter)
 app.use('/api', auditRouter)
 app.use('/api', devisRouter)
 app.use('/api', earlyWarningRouter)
