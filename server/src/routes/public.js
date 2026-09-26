@@ -139,17 +139,25 @@ function formatLaunchTimer(row) {
 }
 
 // One color's own numbers — its own hourly (today), its own whole-life
-// totalSortie (from `debut` through today), its own totalEntree, and its
-// own remaining-vs-target. Used for every entry in fullDashboard()'s
-// `colors` array (the root itself included) — never combined with any
-// other color, unlike every other figure in fullDashboard(), which is the
-// chain-wide combined total across all colors.
-async function computeColorBreakdown(colorModel, debut, today, dt, workHours) {
+// totalSortie, its own totalEntree, and its own remaining-vs-target. Used
+// for every entry in fullDashboard()'s `colors` array (the root itself
+// included) — never combined with any other color, unlike every other
+// figure in fullDashboard(), which is the chain-wide combined total across
+// all colors.
+//
+// totalSortie sums EVERY recorded row for this exact model_id, capped at
+// `date <= today` (excludes a future/mistaken entry) — deliberately NOT
+// bounded below by Début: Début is an optional field on the model (it can
+// be left blank), and bounding by `debut || today` used to silently
+// collapse this "whole-life" sum down to "today only" whenever it was
+// blank, hiding any real production already recorded — model_id already
+// does the actual isolation (see the "models" table comment), so a lower
+// date bound was never required for correctness, only redundant.
+async function computeColorBreakdown(colorModel, today, dt, workHours) {
   const [hourlyRows, cumulativeRow, totalsRow] = await Promise.all([
     all('SELECT slot_index, qty FROM production_history WHERE model_id = $1 AND date = $2', [colorModel.id, today]),
-    get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE model_id = $1 AND date >= $2 AND date <= $3', [
+    get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE model_id = $1 AND date <= $2', [
       colorModel.id,
-      debut || today,
       today,
     ]),
     get('SELECT total_entree FROM production_totals WHERE model_id = $1', [colorModel.id]),
@@ -215,6 +223,7 @@ export async function fullDashboard(model) {
     planning,
     chainSpecialties,
     finaleSpecialtiesList,
+    earliestActivityRow,
   ] = await Promise.all([
       all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
       // Today's hourly data comes from production_history — the single
@@ -245,15 +254,20 @@ export async function fullDashboard(model) {
       all('SELECT * FROM logistics_exports WHERE model_id = $1 ORDER BY date', [model.id]),
       all('SELECT * FROM poste_status WHERE model_id = $1', [model.id]),
       // "Total sortie" (below) is the chain's whole-life output — combined
-      // across every color — so it sums production_history across every day
-      // from Début through today, not just today. Bounding by Début alone
-      // is NOT enough to keep a previous, unrelated model that used to run
-      // on this same chain_number out of the current model's total (its
-      // rows can easily fall inside that same date range too) — model_id =
-      // ANY(colorModelIds) is what actually excludes it.
-      get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date >= $2 AND date <= $3 AND model_id = ANY($4)', [
+      // across every color — so it sums EVERY production_history row ever
+      // recorded for this model family, capped at `date <= today` (excludes
+      // a future/mistaken entry). Deliberately NOT bounded below by Début:
+      // Début is optional on the model (can be left blank), and a
+      // `date >= model.debut || today` lower bound used to silently
+      // collapse this whole-life sum down to "today only" whenever it was
+      // blank — showing "Total sortie = 0" even with real production
+      // already recorded. model_id = ANY(colorModelIds) already does the
+      // actual isolation from a previous, unrelated model on the same
+      // chain_number (see the "models" table comment in db/index.js) — a
+      // lower date bound was never required for correctness, only
+      // redundant and, when Début was blank, actively harmful.
+      get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE chain_number = $1 AND date <= $2 AND model_id = ANY($3)', [
         model.chain_number,
-        model.debut || today,
         today,
         colorModelIds,
       ]),
@@ -269,9 +283,13 @@ export async function fullDashboard(model) {
         today,
         colorModelIds,
       ]),
-      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date >= $2 AND date <= $3 AND model_id = ANY($4)', [
+      // Same "sum everything, no Début lower bound" fix as Total sortie
+      // above — this pairs with totalSortie in computeQualityPct(), so it
+      // must cover the exact same whole-life window or the cumulative
+      // Qualité% would be computed against mismatched numerators/
+      // denominators.
+      get('SELECT COALESCE(SUM(piece_retouche), 0) AS total FROM quality_history WHERE chain_number = $1 AND date <= $2 AND model_id = ANY($3)', [
         model.chain_number,
-        model.debut || today,
         today,
         colorModelIds,
       ]),
@@ -289,7 +307,7 @@ export async function fullDashboard(model) {
       // other color) — root is always colorData[0], so "no variants" means
       // this is a single-element array and the client can treat it as
       // optional. See computeColorBreakdown() below.
-      Promise.all(colorModels.map((m) => computeColorBreakdown(m, model.debut, today, model.dt, workHours))),
+      Promise.all(colorModels.map((m) => computeColorBreakdown(m, today, model.dt, workHours))),
       // Planning — Plan vs Réel, always scoped to the ROOT model alone
       // (never per-color): a plan is entered once for the whole launch,
       // same ownership as VT/DT/gamme, not a per-variant thing. Returns
@@ -298,6 +316,11 @@ export async function fullDashboard(model) {
       getPlanVsReel(model),
       getSpecialties('chain'),
       getSpecialties('finale'),
+      // Fallback for cumulativeDays below when Début is blank — the
+      // earliest date this model family has ANY real recorded activity,
+      // so the Rendement cumulative% denominator still reflects reality
+      // instead of collapsing to "1 day" (today only).
+      get('SELECT MIN(date) AS min_date FROM production_history WHERE model_id = ANY($1)', [colorModelIds]),
     ])
 
   const effectifRequis = Object.fromEntries(chainSpecialties.map((s) => [s, 0]))
@@ -379,7 +402,7 @@ export async function fullDashboard(model) {
   const dailyRendementProdPct = computeRendementProduction(produit, samMinutes, ouvriersPresents, workHours.length * 60)
   const dailyScoreRendement = computeScoreRendement(dailyRendementProdPct, qualityDailyPct)
 
-  const cumulativeDays = daysBetweenInclusive(model.debut || today, today)
+  const cumulativeDays = daysBetweenInclusive(model.debut || earliestActivityRow?.min_date || today, today)
   const cumulativeRendementProdPct = computeRendementProduction(
     totalSortie,
     samMinutes,

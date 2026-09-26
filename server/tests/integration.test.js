@@ -364,6 +364,81 @@ test('منتقي التاريخ لـAgent Production: تعديل يوم سابق
   })
 })
 
+// Régression: "Total sortie = 0" malgré une vraie production déjà
+// enregistrée. Cause exacte: Début est un champ OPTIONNEL sur le modèle
+// (le formulaire de création ne l'exige pas) — l'ancien code bornait la
+// somme "toute la vie" de Total sortie par `date >= model.debut || today`,
+// ce qui, quand Début était vide, réduisait silencieusement cette fenêtre
+// à "aujourd'hui seulement", cachant toute production déjà enregistrée un
+// jour précédent. Le fix (routes/public.js's fullDashboard() et
+// computeColorBreakdown()) retire cette borne inférieure par Début — seul
+// `model_id = ANY(colorModelIds)` fait réellement l'isolation, une borne
+// de date inférieure n'a jamais été nécessaire pour l'exactitude.
+test('Régression "Total sortie = 0": Début vide ne doit jamais cacher une production déjà enregistrée', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+
+  function daysAgo(n) {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - n)
+    return d.toISOString().slice(0, 10)
+  }
+  const yesterday = daysAgo(1)
+
+  const previouslyActive = await get('SELECT id FROM models WHERE chain_number = $1 AND active = 1', [TEST_CHAIN])
+  // Délibérément SANS `debut` — reproduit exactement le cas réel signalé.
+  const created = await call('/methode/models', {
+    method: 'POST',
+    token: methodeToken,
+    body: { client: 'TEST_NO_DEBUT', qteTotale: 500, dessin: 'TEST-ND', chainNumber: TEST_CHAIN },
+  })
+  assert.equal(created.status, 201)
+  const modelId = created.data.id
+  const model = await get('SELECT debut FROM models WHERE id = $1', [modelId])
+  assert.equal(model.debut, null) // confirme le scénario exact du bug
+
+  t.after(async () => {
+    await run('DELETE FROM models WHERE id = $1', [modelId])
+    await run('DELETE FROM audit_log WHERE model_id = $1', [modelId])
+    if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
+  })
+
+  await t.test('production enregistrée hier (Début toujours vide) → Total sortie la compte, jamais 0', async () => {
+    const put = await call(`/production/models/${modelId}/hourly/0`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 100, date: yesterday },
+    })
+    assert.equal(put.status, 200) // aucune borne Début à violer quand il est vide
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dashboard.status, 200)
+    assert.equal(dashboard.data.bilan.totalSortie, 100) // et surtout pas 0
+  })
+
+  await t.test('Couleur/Variante: la répartition par couleur reste correcte sans Début', async () => {
+    const variant = await call(`/methode/models/${modelId}/variants`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { label: 'V1', qteTotale: 100 },
+    })
+    assert.equal(variant.status, 201)
+    const variantId = variant.data.id
+
+    await call(`/production/models/${modelId}/hourly/1`, {
+      method: 'PUT',
+      token: productionToken,
+      body: { qty: 30, date: yesterday, targetModelId: variantId },
+    })
+
+    const dashboard = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    const colors = dashboard.data.colors
+    assert.equal(colors.find((c) => c.id === modelId).totalSortie, 100)
+    assert.equal(colors.find((c) => c.id === variantId).totalSortie, 30)
+  })
+})
+
 test('Quality: جدول Pièces retouche بالساعة، Qualité% محسوب تلقائياً من إنتاج Agent Production الحقيقي', async (t) => {
   const TEST_CHAIN = 8
   const methodeToken = await login('methode', '1111')
