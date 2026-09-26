@@ -4,6 +4,7 @@ import NoModel from '../../components/NoModel'
 import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
@@ -37,7 +38,7 @@ const GROUPS = [
 const DETAIL_KEYS = GROUPS.flatMap((g) => g.fields.map(([key]) => key))
 
 export default function FinaleForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [enCours, setEnCours] = useState(0)
   const [details, setDetails] = useState(Object.fromEntries(DETAIL_KEYS.map((k) => [k, 0])))
   const [saving, setSaving] = useState(false)
@@ -87,6 +88,7 @@ export default function FinaleForm({ token, chainNumber }) {
 
   return (
     <form onSubmit={submit} className="space-y-4">
+      <ModelSwitcher openModels={openModels} selectedId={modelId} onSelect={selectModel} />
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
 
       <GlowCard title="Finale">

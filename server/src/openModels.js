@@ -1,93 +1,80 @@
-import { all, get } from './db/index.js'
+import { all, get, run } from './db/index.js'
 import { todayInFactoryTZ } from './calc.js'
 
-// A chain overlap: the real, ordinary factory scenario where a model's
-// "Entré" (pieces fed into the chain) reaches its target quantity and a new
-// model starts being fed into the SAME chain, while the old model's pieces
-// are still mid-process or exiting — two independent root models (own
-// gamme, own VT/DT/ND, no shared identity at all, unlike Couleur/Variante
-// colors which share the root's gamme) both genuinely "running" on one
-// chain_number at the same time. `active` on a root model is no longer
-// exclusive per chain (see POST /methode/models) — a root stays `active=1`
-// forever once created; whether it's still "open" (still relevant to pick
-// for new hourly entries, still shown on Home) is a computed property, not
-// a stored flag, matching this app's standing rule to never store what can
-// be derived live.
+// Fin de série / Démarrage: a chain can run up to MAX_OPEN_PER_CHAIN root
+// models at once — the old one finishing (fin de série) and the new one
+// starting (démarrage). Two independent roots (own gamme, own VT/DT/ND,
+// own production rows keyed by model_id) — unrelated to Couleur/Variante,
+// where variants are colors of ONE root (parent_model_id). A root is open
+// while models.status = 'active'; it only ever closes through an explicit,
+// confirmed action by Agent Méthode or the Patron (closeModel() below) —
+// never automatically.
+export const MAX_OPEN_PER_CHAIN = 2
 
-// A root model is finished — no longer "open" — once its own Entré has
-// reached its own Qté totale AND everything that entered has now exited
-// (En cours = 0). Both conditions matter: requiring `totalEntree > 0` and
-// `>= qteTotale` keeps a brand-new model (0 entré, 0 sortie, so En cours is
-// also 0) from looking "finished" before it has even started; requiring En
-// cours = 0 on top keeps a model that's merely between deliveries (WIP
-// temporarily empty, but nowhere near its target yet) from closing early.
-export async function isModelFinished(model) {
-  const today = todayInFactoryTZ()
-  const [totalsRow, cumulativeRow] = await Promise.all([
-    get('SELECT total_entree FROM production_totals WHERE model_id = $1', [model.id]),
-    get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE model_id = $1 AND date >= $2 AND date <= $3', [
-      model.id,
-      model.debut || today,
-      today,
-    ]),
-  ])
-  const totalEntree = totalsRow?.total_entree || 0
-  const totalSortie = Number(cumulativeRow.total)
-  return totalEntree > 0 && totalEntree >= (model.qte_totale || 0) && totalEntree - totalSortie <= 0
-}
+const OPEN_ROOTS_WHERE = "active = 1 AND parent_model_id IS NULL AND status = 'active'"
 
-// Every root model still open on a chain — active and not yet finished —
-// oldest first, so index 0 is consistently "the original/older one" when
-// two overlap. A chain with nothing running (or everything on it finished)
-// returns []. This is the single source of truth for "what's this chain
-// currently working on" — Home, the hourly-entry screens, and the
-// early-warning banner all resolve through it instead of assuming exactly
-// one active root per chain.
+// Every open root on a chain, oldest first — index 0 is the fin de série
+// when two overlap, the last one the démarrage. [] when nothing is open.
+// The single source of truth for "what is this chain working on right now":
+// Home, the hourly-entry screens, Classement and the early-warning banner
+// all resolve through it.
 export async function getOpenModelsForChain(chainNumber) {
-  const roots = await all(
-    'SELECT * FROM models WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL ORDER BY created_at ASC',
-    [chainNumber]
-  )
-  if (roots.length === 0) return []
-  const finishedFlags = await Promise.all(roots.map(isModelFinished))
-  return roots.filter((_, i) => !finishedFlags[i])
+  return all(`SELECT * FROM models WHERE chain_number = $1 AND ${OPEN_ROOTS_WHERE} ORDER BY created_at ASC`, [chainNumber])
 }
 
-// Same, across every chain at once (one bulk query instead of CHAIN_NUMBERS
-// separate round trips) — for callers that need every open model
-// system-wide, like the early-warning banner.
+// Same, across every chain at once (one query instead of one per chain).
 export async function getAllOpenModels() {
-  const roots = await all('SELECT * FROM models WHERE active = 1 AND parent_model_id IS NULL ORDER BY chain_number, created_at ASC')
-  if (roots.length === 0) return []
-  const finishedFlags = await Promise.all(roots.map(isModelFinished))
-  return roots.filter((_, i) => !finishedFlags[i])
+  return all(`SELECT * FROM models WHERE ${OPEN_ROOTS_WHERE} ORDER BY chain_number, created_at ASC`)
 }
 
-// Every selectable target for a chain's hourly-entry screens (Agent
-// Production's "Production par heure", Quality's "Pièces retouche par
-// heure") — the exact same mechanism Couleur/Variante already uses
-// (`byModel`/`variants` in the response), generalized from "this root's own
-// colors" to "every open root on this chain, plus each root's own active
-// colors". `requestedRoot` (the id the client asked for) is always entry 0
-// — labelled null, rendered as "Défaut" client-side — so a normal,
-// non-overlapping chain's response is byte-identical to before. Any other
-// entry (a sibling root, or a variant of one) gets a real label: a true
-// Couleur/Variante gets its own `variant_label`; a sibling root (a
-// genuinely different order, not a color of the same one) is labelled by
-// its own dessin/client so it reads as "a different model", not a color.
-export async function getHourlyEntryTargets(requestedRoot) {
-  const openRoots = await getOpenModelsForChain(requestedRoot.chain_number)
-  const others = openRoots.filter((m) => m.id !== requestedRoot.id)
-  const allRoots = [requestedRoot, ...others]
+// 'demarrage' for the newest open root, 'fin_de_serie' for the older one,
+// null when the chain runs a single model (no label shown at all then).
+export function roleInChain(openModels, modelId) {
+  if (openModels.length < 2) return null
+  return openModels[openModels.length - 1].id === modelId ? 'demarrage' : 'fin_de_serie'
+}
 
-  const variantRowsByRoot = await Promise.all(
-    allRoots.map((r) => all('SELECT id, variant_label FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [r.id]))
+// The root itself plus its active Couleur/Variante colors — every model_id
+// whose production counts toward this root's own totals.
+export async function getFamilyIds(root) {
+  const variants = await all('SELECT id FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [root.id])
+  return [root.id, ...variants.map((v) => v.id)]
+}
+
+// Selectable targets for a root's hourly-entry screens (Agent Production's
+// "Production par heure", Quality's "Pièces retouche par heure"): the root
+// itself (label null, rendered "Défaut") plus its own Couleur/Variante
+// colors. Deliberately NOT the other open root on the same chain — during a
+// fin de série / démarrage overlap the client picks which model it is
+// entering for (see GET /chains/:n/open-models), then enters that model's
+// hours on their own, instead of both models being interleaved per hour.
+export async function getHourlyEntryTargets(root) {
+  const variants = await all('SELECT id, variant_label FROM models WHERE parent_model_id = $1 AND active = 1 ORDER BY created_at', [root.id])
+  return [{ modelId: root.id, label: null }, ...variants.map((v) => ({ modelId: v.id, label: v.variant_label }))]
+}
+
+// Combined whole-life Sortie vs combined Qté totale (root + its colors) —
+// exactly the "Bilan de la chaîne" figures on the model's dashboard. Used to
+// decide when to ask Agent Méthode whether the model can be closed.
+export async function getTargetProgress(root) {
+  const familyIds = await getFamilyIds(root)
+  const today = todayInFactoryTZ()
+  const [sortieRow, qteRow] = await Promise.all([
+    get('SELECT COALESCE(SUM(qty), 0) AS total FROM production_history WHERE model_id = ANY($1) AND date <= $2', [familyIds, today]),
+    get('SELECT COALESCE(SUM(qte_totale), 0) AS total FROM models WHERE id = ANY($1)', [familyIds]),
+  ])
+  const totalSortie = Number(sortieRow.total)
+  const qteTotale = Number(qteRow.total)
+  return { totalSortie, qteTotale, reached: qteTotale > 0 && totalSortie >= qteTotale }
+}
+
+// Closes a root (and its colors). Nothing is deleted — every row keyed by
+// these model ids stays exactly where it is for history, exports and audit.
+export async function closeModel(root) {
+  const now = new Date().toISOString()
+  await run(
+    `UPDATE models SET status = 'closed', closed_at = $1, updated_at = $1
+     WHERE (id = $2 OR parent_model_id = $2) AND status = 'active'`,
+    [now, root.id]
   )
-
-  const entries = []
-  allRoots.forEach((r, i) => {
-    entries.push({ modelId: r.id, label: i === 0 ? null : r.dessin || r.client })
-    for (const v of variantRowsByRoot[i]) entries.push({ modelId: v.id, label: v.variant_label })
-  })
-  return entries
 }

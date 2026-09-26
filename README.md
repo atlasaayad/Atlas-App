@@ -308,71 +308,50 @@ hour on the same chain.
   single-element one when there's nothing else, so the client only shows
   anything extra when `colors.length > 1`.
 
-### Chain overlap — a new model without closing the old one (Agent Méthode + Agent Production + Home)
+### Fin de série / Démarrage — two models on one chain during a changeover (Agent Méthode + entry screens + Home)
 
-A regular, expected scenario, not an edge case: a model's "Entré chaîne"
-reaches its target quantity, so Agent Méthode starts feeding a brand-new
-model into the same chain right away — while the old model's pieces are
-still mid-process or exiting. For a while, the chain genuinely has **two
-independent models open at once**, each with its own gamme/VT/DT/effectif
-(unlike Couleur/Variante above, where every color shares one gamme) — until
-the old model's last piece exits and it closes itself, automatically.
+While a chain switches models, it really runs two at once: the old one
+finishing (**fin de série**) and the new one starting (**démarrage**). Each
+is a fully independent root model — its own `model_id`, gamme, VT/DT,
+production, Planning, photo — unrelated to Couleur/Variante (colors of ONE
+model via `parent_model_id`).
 
-- **"Open" is computed, never stored** (`server/src/openModels.js`) — same
-  philosophy as VT/DT/Rendement/Qualité%, which are always computed live.
-  `isModelFinished(model)` is true once `totalEntree > 0 && totalEntree >=
-  qteTotale && totalEntree - totalSortie <= 0` (everything that entered has
-  now exited); `getOpenModelsForChain()`/`getAllOpenModels()` filter every
-  root model down to the ones that aren't. **There is no "close/end model"
-  button anywhere in the app** — a model simply stops being open once its own
-  numbers say it's done, and nothing needs to happen for that to take effect
-  beyond Agent Production logging its last real exit.
-- **Starting a new model without closing the old one** — Agent Méthode's
-  create-model flow no longer deactivates whatever was already on the chain
-  (it used to, before this feature): a "➕ nouveau modèle en parallèle" action
-  is always available, even with only one model open, since that's exactly
-  how a second one gets started. When more than one model is open, a pill
-  bar lets Agent Méthode switch between them, each with its fully
-  independent Identité/Gamme/Effectif/Présence/Temps de lancement/
-  Couleurs-Variantes tabs (a variant itself still belongs to exactly one of
-  these roots, same as before).
-- **Hourly entry (Agent Production + Quality)** — generalizes the exact same
-  mechanism Couleur/Variante introduced: `getHourlyEntryTargets()` now
-  returns, for a given root, its own variants **plus every other root still
-  open on the same chain (and that root's own variants too)**. A chain with
-  an overlap shows one input per open model for every hour, letting the old
-  and new model both log a real, separate qty for the very same hour — or
-  just one of them, when there's a gap — exactly like colors, through the
-  same `byModel`/`targetModelId` plumbing (no client-side changes needed in
-  `ProductionForm.jsx`/`QualityForm.jsx`).
-- **Auto-disappearance** — once an old model's own numbers show it's
-  finished, it silently drops out of `getOpenModelsForChain()`: Agent
-  Production's/Quality's hourly screen no longer offers an input for it (the
-  chain's other department screens, which resolve through
-  `useChainModel.js`, transparently move on to the next open model), and
-  Agent Méthode's pill bar shrinks back down — all without any manual step.
-  It's still fully visible in Historique and the audit trail; only the
-  active-entry selection changes.
-- **Home dashboard** — `GET /chains/:n/dashboard` returns its normal single
-  shape when exactly one model is open, and a `{multi: true, dashboards:
-  [...]}` shape (each a full, independent `fullDashboard()`) only while 2+
-  are open. Home shows both **clearly separate** — an always-visible summary
-  card per model (own client/dessin, own Entré/Sortie/En cours) plus a
-  picker for which one's full dashboard (Rendement, Qualité%, hourly chart,
-  Bilan) to show below — never a single combined number, since two
-  overlapping models don't share a gamme and summing their Rendement/DT
-  would be meaningless. Once the old model finishes, Home reverts to the
-  plain single-dashboard view automatically.
-- **Headcount is the one figure that genuinely sums across an overlap** —
-  `GET /effectifs/overview`'s per-chain present count adds up every open
-  model's own `rh_attendance`, since headcount on the chain floor is
-  real/physical and doesn't care which model's gamme a worker happens to be
-  on right now; this is different from Rendement/Qualité%/DT, which never
-  combine across different-gamme models.
-- **A normal, single-model chain is completely unaffected** — every
-  endpoint above only takes its "multiple models" branch when
-  `getOpenModelsForChain()` actually returns more than one row; the common
-  case stays byte-identical to before this feature.
+- **Explicit status** — `models.status` (`active` / `closed`) + `closed_at`.
+  A chain holds at most **2** open models (`MAX_OPEN_PER_CHAIN`,
+  `server/src/openModels.js`); creating a third returns `409 chain_full` and
+  Agent Méthode sees "خاصك تسد واحد من الموديلات قبل". The newest open model
+  is the démarrage. One-time migration (`migrateModelStatus()`,
+  `db/index.js`): models the old computed rule already treated as finished
+  (Entré ≥ Qté totale and En cours = 0) or deactivated are marked `closed`,
+  everything else stays `active` — so exactly the same models are open right
+  after deploy as before.
+- **Closing is never automatic.** When a model's combined Sortie reaches its
+  combined Qté totale, Agent Méthode gets "الموديل X وصل للكمية المطلوبة —
+  واش نسدوه؟" (`GET /chains/:n/close-prompts`): **تأكيد** closes it, **ماشي
+  دابا** hides the prompt until tomorrow (`close_prompt_dismissed_on`). A
+  manual **"Clôturer le modèle"** button is always there (target reached or
+  not). Close/dismiss are Agent Méthode / Patron only
+  (`server/src/routes/lifecycle.js`). A closed model disappears from every
+  entry screen and from Home, but nothing is deleted — its production,
+  Planning, quality and photo stay in history, exports and reports.
+- **Entry screens** — with two open models, Production and Quality (and
+  Finale, Dépôt, Logistics, the poste screens) show a model switcher at the
+  top (`ModelSwitcher.jsx`, `useChainModel({ selectable })`), defaulting to
+  the démarrage; Production/Quality buttons show today's filled hours
+  (`3/9h`, `GET /chains/:n/open-models?kind=`). Each model's hours are
+  entered on their own — never interleaved. With one model the screens look
+  exactly as before. RH stays chain-level (one workforce).
+- **Home** — two stacked cards, 🟢 DÉMARRAGE on top and 🟠 FIN DE SÉRIE
+  below, each with its own Sortie/dates/photo; tapping one opens its full
+  dashboard (Plan vs Réel etc.). Once the old model closes, only the new one
+  remains, without a badge.
+- **Chain Rendement** — both models share one effectif, so Rendement can't
+  be computed per model on the same workers. During a changeover it's
+  computed for the chain (`computeChainRendement()`, `routes/public.js`):
+  `Σ(qty_model × VT_model) / (effectif × minutes) × 100`, hourly and daily,
+  combined with the chain's Qualité% into the usual score — shown on Home
+  and used by Classement des chaînes. With one model this is the same
+  number as before.
 
 ### Planning — Plan vs Réel (Agent Méthode + Home)
 

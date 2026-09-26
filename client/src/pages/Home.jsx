@@ -117,21 +117,40 @@ export default function Home() {
         </GlowCard>
       )}
 
-      {chainNumber && data && (data.multi ? <MultiModelDashboard dashboards={data.dashboards} /> : <DashboardBody data={data} />)}
+      {chainNumber && data &&
+        (data.multi ? (
+          <MultiModelDashboard dashboards={data.dashboards} chainRendement={data.chainRendement} />
+        ) : (
+          <DashboardBody data={data} />
+        ))}
     </div>
   )
 }
 
-// Chain overlap: an old model still exiting while a new one is already
-// entering on the same chain — GET /chains/:n/dashboard returns
-// `{multi:true, dashboards:[...]}` (each a full, independent dashboard —
-// see fullDashboard(), routes/public.js) only while 2+ models are open;
-// a normal single-model chain never hits this component at all. Both
-// models' own Entré/Sortie/En cours stay visibly SEPARATE here — never
-// summed into one misleading combined figure, since they're different
-// gammes (unlike Couleur/Variante, which DOES combine — see ColorPill
-// above — because colors share one gamme).
-function MultiModelDashboard({ dashboards }) {
+// Fin de série / Démarrage: GET /chains/:n/dashboard returns `{multi:true,
+// dashboards:[...], chainRendement}` while two models run on the chain —
+// newest (démarrage) first, each a complete, independent dashboard with its
+// own role. One card per model, stacked, each with its own figures (never
+// summed — different gammes); tapping a card opens that model's full
+// details below (defaults to the démarrage). Rendement is the one number
+// shown for the chain as a whole, since both models share one workforce.
+// A single-model chain never reaches this component.
+const ROLE_BADGE = {
+  demarrage: { label: 'DÉMARRAGE', dot: '🟢', className: 'border-status-good/50 bg-status-good/10 text-status-good' },
+  fin_de_serie: { label: 'FIN DE SÉRIE', dot: '🟠', className: 'border-amber bg-amber-soft text-amber' },
+}
+
+function RoleBadge({ role }) {
+  const b = ROLE_BADGE[role]
+  if (!b) return null
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${b.className}`}>
+      {b.dot} {b.label}
+    </span>
+  )
+}
+
+function MultiModelDashboard({ dashboards, chainRendement }) {
   const [selectedId, setSelectedId] = useState(dashboards[0]?.id || null)
   useEffect(() => {
     if (!dashboards.some((d) => d.id === selectedId)) setSelectedId(dashboards[0]?.id || null)
@@ -143,40 +162,53 @@ function MultiModelDashboard({ dashboards }) {
   return (
     <div className="space-y-4">
       <GlowCard>
-        <div className="mb-3 flex items-center gap-2 text-xs font-medium text-amber">
-          ⚠️ {dashboards.length} موديلات نشطة بهذه السلسلة الآن (تداخل — موديل قديم لسه يخرج وموديل جديد بدأ يدخل)
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-2.5">
           {dashboards.map((d) => (
             <button
               key={d.id}
               onClick={() => setSelectedId(d.id)}
-              className={`rounded-md border p-3 text-right ${
+              className={`flex w-full items-center gap-3 rounded-md border p-3 text-right ${
                 selectedId === d.id ? 'border-turquoise bg-turquoise/10' : 'border-slate-800 bg-navy-900/40'
               }`}
             >
-              <div className="font-display text-sm font-semibold text-slate-100">
-                {d.identity.client} <span className="text-slate-500">· {d.identity.dessin}</span>
-              </div>
-              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                <MiniStat label="Entré" value={d.bilan.totalEntree} />
-                <MiniStat label="Sortie" value={d.bilan.totalSortie} />
-                <MiniStat label="En cours" value={d.bilan.enCours} />
+              {d.identity.imageUrl && (
+                <img src={d.identity.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-md border border-slate-700 object-cover" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <RoleBadge role={d.role} />
+                  <span className="font-display text-sm font-semibold text-slate-100">
+                    {d.identity.client} <span className="text-slate-500">· {d.identity.dessin}</span>
+                  </span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                  <span>
+                    Sortie: <span className="font-mono text-turquoise">{d.bilan.totalSortie.toLocaleString('fr-FR')}</span> /{' '}
+                    <span className="font-mono">{(d.qteTotaleCombined ?? d.identity.qteTotale ?? 0).toLocaleString('fr-FR')}</span>
+                  </span>
+                  {d.identity.debut && <span>Début: {d.identity.debut}</span>}
+                  {d.identity.finPrevue && <span>Fin prévue: {d.identity.finPrevue}</span>}
+                </div>
               </div>
             </button>
           ))}
         </div>
       </GlowCard>
-      {selected && <DashboardBody data={selected} />}
-    </div>
-  )
-}
 
-function MiniStat({ label, value }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="font-mono text-sm font-medium text-turquoise">{value.toLocaleString('fr-FR')}</div>
+      {chainRendement && (
+        <GlowCard title={`Rendement chaîne (${chainRendement.modelsCount} modèles)`}>
+          <p className="mb-3 text-xs text-slate-500">
+            محسوب على السلسلة كاملة: مجموع (كمية كل موديل × temps unitaire ديالو) ÷ (effectif × الدقائق) — حيت الجوج
+            موديلات كيخدمو بنفس العمال.
+          </p>
+          <div className="grid grid-cols-2 gap-3 text-center">
+            <RendementLevel label="بالساعة" data={chainRendement.hourly} />
+            <RendementLevel label="اليوم" data={chainRendement.daily} />
+          </div>
+        </GlowCard>
+      )}
+
+      {selected && <DashboardBody data={selected} role={selected.role} hideRendement />}
     </div>
   )
 }
@@ -190,7 +222,11 @@ function LoadingSpinner() {
   )
 }
 
-function DashboardBody({ data }) {
+// `role`/`hideRendement` are only passed during a fin de série / démarrage
+// overlap: the model's role badge on its identity card, and its own
+// per-model Rendement card hidden — the chain Rendement shown above it is
+// the meaningful one then (see MultiModelDashboard).
+function DashboardBody({ data, role = null, hideRendement = false }) {
   const [showHistorique, setShowHistorique] = useState(false)
   const [showDetailsFinale, setShowDetailsFinale] = useState(false)
   // Couleur/Variante — null means "combined" (every color summed, the
@@ -237,6 +273,11 @@ function DashboardBody({ data }) {
               />
             )}
             <div>
+              {role && (
+                <div className="mb-1">
+                  <RoleBadge role={role} />
+                </div>
+              )}
               <div className="font-display text-lg font-semibold text-slate-100">
                 {data.identity.client} <span className="text-slate-500">· {data.identity.dessin}</span>
               </div>
@@ -339,6 +380,7 @@ function DashboardBody({ data }) {
       <PlanReelCard planning={data.planning} />
 
       {/* Rendement — composite efficiency+quality score, distinct from Objectif atteint% */}
+      {!hideRendement && (
       <GlowCard title="Rendement">
         <p className="mb-3 text-xs text-slate-500">
           Rendement = كفاءة استخدام وقت العمل (SAM-based) + الجودة معاً — مختلف عن "Objectif atteint %" اللي يقارن
@@ -350,6 +392,7 @@ function DashboardBody({ data }) {
           <RendementLevel label="تراكمي" data={data.rendement.cumulative} />
         </div>
       </GlowCard>
+      )}
 
       {/* Quality indicators */}
       <div className="grid grid-cols-2 gap-4">

@@ -3,12 +3,16 @@ import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 import { todayInFactoryTZ } from '../../lib/date'
 
 export default function ProductionForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, refresh, openModels, totalSlots, selectModel } = useChainModel(chainNumber, {
+    selectable: true,
+    badgeKind: 'production',
+  })
   const TODAY = todayInFactoryTZ()
   const [selectedDate, setSelectedDate] = useState(TODAY)
   const [dateError, setDateError] = useState('')
@@ -37,6 +41,14 @@ export default function ProductionForm({ token, chainNumber }) {
       initializedForRef.current = modelId
     }
   }, [dashboard, modelId])
+
+  // Switching to the other model (fin de série ↔ démarrage) can land on a
+  // model that started after the date currently picked — fall back to today
+  // rather than showing a date that model can't accept.
+  const selectedDebut = dashboard?.identity.debut
+  useEffect(() => {
+    if (selectedDebut && selectedDate < selectedDebut) setSelectedDate(TODAY)
+  }, [selectedDebut, selectedDate, TODAY])
 
   // Load the selected day's hourly slots — today's or any previous day's —
   // straight from production_history via the dedicated endpoint, so this
@@ -168,6 +180,7 @@ export default function ProductionForm({ token, chainNumber }) {
 
   return (
     <div className="space-y-4">
+      <ModelSwitcher openModels={openModels} selectedId={modelId} onSelect={selectModel} totalSlots={totalSlots} />
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
 
       <GlowCard title="Production par heure">
@@ -261,6 +274,16 @@ export default function ProductionForm({ token, chainNumber }) {
                 </div>
               )
             )}
+            <div className="flex items-center justify-between border-t border-slate-800 pt-2.5 text-sm">
+              <span className="text-slate-500">Total</span>
+              <span className="font-mono font-semibold text-turquoise">
+                {hourlySlots.reduce(
+                  (sum, s) =>
+                    sum + (s.byModel ? s.byModel.reduce((a, c) => a + (Number(c.qty) || 0), 0) : Number(s.qty) || 0),
+                  0
+                )}
+              </span>
+            </div>
           </div>
         )}
       </GlowCard>

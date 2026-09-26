@@ -3,7 +3,7 @@ import { all, get } from '../db/index.js'
 import { verifyPin, issueToken } from '../auth.js'
 import { DEPARTMENTS, CHAIN_NUMBERS, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
-import { getOpenModelsForChain, getAllOpenModels } from '../openModels.js'
+import { getOpenModelsForChain, getAllOpenModels, getFamilyIds, roleInChain } from '../openModels.js'
 import { getPlanVsReel } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
 import { getWorkHours } from '../workHours.js'
@@ -520,46 +520,167 @@ publicRouter.get('/models/:id/dashboard', async (req, res) => {
   res.json(await fullDashboard(model))
 })
 
-// Chain overlap: when exactly one root model is open on this chain, the
-// response is IDENTICAL to before (a single fullDashboard() object) — every
-// existing caller (Home, Ask Atlas, Classement) keeps working unchanged.
-// Only when two (or more) roots are genuinely open at once — see
-// openModels.js — does the shape change, to `{ multi: true, dashboards:
-// [...] }`, one COMPLETE, independent fullDashboard() per open model, never
-// merged into one misleading combined number (they don't share a gamme, so
-// there's no meaningful "combined VT/DT/Rendement" the way Couleur/Variante
-// colors have). Home.jsx is the one caller that understands `multi`.
+// When exactly one root model is open on this chain, the response is a
+// single fullDashboard() object — unchanged for every existing caller. Only
+// during a fin de série / démarrage overlap (two open roots, see
+// openModels.js) does the shape change, to `{ multi: true, dashboards:
+// [...], chainRendement }`: one complete, independent fullDashboard() per
+// model (its own Sortie, dates, photo, Plan vs Réel — never summed, they
+// don't share a gamme), each tagged with its role, plus the one Rendement
+// that IS meaningful across both — the chain's, over its shared effectif
+// (computeChainRendement()). Home.jsx is the one caller that understands
+// `multi`.
 publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
   const openModels = await getOpenModelsForChain(Number(req.params.chainNumber))
   if (openModels.length === 0) return res.status(404).json({ error: 'no_active_model' })
   if (openModels.length === 1) return res.json(await fullDashboard(openModels[0]))
-  const dashboards = await Promise.all(openModels.map(fullDashboard))
-  res.json({ multi: true, dashboards })
+  // Fin de série / Démarrage: newest (démarrage) first, each with its role.
+  const newestFirst = [...openModels].reverse()
+  const [dashboards, chainRendement] = await Promise.all([
+    Promise.all(newestFirst.map(fullDashboard)),
+    computeChainRendement(openModels),
+  ])
+  res.json({
+    multi: true,
+    dashboards: dashboards.map((d) => ({ ...d, role: roleInChain(openModels, d.id) })),
+    chainRendement,
+  })
 })
+
+// The chain's selectable models for department entry screens — one entry per
+// open root (oldest first, so [fin de série, démarrage] during an overlap),
+// with, when `kind` is given, how many of today's hour slots already have
+// an entry for that model (its Couleur/Variante colors included) — the
+// "3/9h" badge that keeps the other model from being forgotten.
+publicRouter.get('/chains/:chainNumber/open-models', async (req, res) => {
+  const openModels = await getOpenModelsForChain(Number(req.params.chainNumber))
+  const kind = req.query.kind
+  const table = kind === 'production' ? 'production_history' : kind === 'quality' ? 'quality_history' : null
+  const today = todayInFactoryTZ()
+  const workHours = await getWorkHours()
+  const models = await Promise.all(
+    openModels.map(async (m) => {
+      let filledSlots = null
+      if (table) {
+        const familyIds = await getFamilyIds(m)
+        const row = await get(`SELECT COUNT(DISTINCT slot_index) AS n FROM ${table} WHERE model_id = ANY($1) AND date = $2`, [familyIds, today])
+        filledSlots = Number(row.n)
+      }
+      return {
+        id: m.id,
+        client: m.client,
+        dessin: m.dessin,
+        imageUrl: m.image_url || null,
+        role: roleInChain(openModels, m.id),
+        filledSlots,
+      }
+    })
+  )
+  res.json({ models, totalSlots: workHours.length })
+})
+
+// Rendement for a chain running two models at once (fin de série +
+// démarrage). The two share ONE workforce, so each model's Rendement can't
+// be computed on its own against the same effectif — it would count the
+// same workers' minutes twice. Instead, the chain's earned minutes are
+// summed across both models, each at its own VT (temps unitaire from its
+// own gamme), over the chain's single effectif:
+//
+//   Rendement_Production% = Σ(qty_model × VT_model) / (effectif × minutes) × 100
+//
+// With a single model this is exactly computeRendementProduction(qty, VT,
+// effectif, minutes) — the same number fullDashboard() already gives, which
+// is why single-model chains never go through this function at all.
+// Effectif is the headcount entered for the chain's open models (summed, the
+// same convention as "État des effectifs"); Qualité% combines both models'
+// pieces and retouches. Score = the usual 50/50 average. Cumulative isn't
+// computed while two models overlap (their whole-life windows don't align).
+export async function computeChainRendement(openModels) {
+  const today = todayInFactoryTZ()
+  const workHours = await getWorkHours()
+  const families = await Promise.all(openModels.map(getFamilyIds))
+  const allIds = families.flat()
+  const modelOf = {}
+  openModels.forEach((m, i) => families[i].forEach((id) => (modelOf[id] = m)))
+
+  const [prodRows, retoucheRows, presentRow] = await Promise.all([
+    all('SELECT model_id, slot_index, qty FROM production_history WHERE model_id = ANY($1) AND date = $2', [allIds, today]),
+    all('SELECT slot_index, piece_retouche FROM quality_history WHERE model_id = ANY($1) AND date = $2', [allIds, today]),
+    get('SELECT COALESCE(SUM(present), 0) AS total FROM rh_attendance WHERE model_id = ANY($1)', [openModels.map((m) => m.id)]),
+  ])
+  const effectif = Number(presentRow.total)
+
+  // qty per root per slot, colors summed into their root
+  const qtyByRootSlot = new Map(openModels.map((m) => [m.id, {}]))
+  for (const r of prodRows) {
+    const bySlot = qtyByRootSlot.get(modelOf[r.model_id].id)
+    bySlot[r.slot_index] = (bySlot[r.slot_index] || 0) + r.qty
+  }
+  const retoucheBySlot = {}
+  for (const r of retoucheRows) retoucheBySlot[r.slot_index] = (retoucheBySlot[r.slot_index] || 0) + r.piece_retouche
+  const retoucheToday = Object.values(retoucheBySlot).reduce((s, v) => s + v, 0)
+
+  function level(qtyFor, minutes, retouche) {
+    let earnedMinutes = 0
+    let pieces = 0
+    for (const m of openModels) {
+      const q = qtyFor(qtyByRootSlot.get(m.id))
+      earnedMinutes += q * (Number(m.vt) || 0)
+      pieces += q
+    }
+    const productionPct = computeRendementProduction(1, earnedMinutes, effectif, minutes)
+    const qualityPct = computeQualityPct(pieces, retouche)
+    return { score: computeScoreRendement(productionPct, qualityPct), productionPct, qualityPct }
+  }
+
+  const lastSlot = prodRows.reduce((max, r) => (max === null || r.slot_index > max ? r.slot_index : max), null)
+  const hourly =
+    lastSlot === null
+      ? { score: null, productionPct: null, qualityPct: null }
+      : level((bySlot) => bySlot[lastSlot] || 0, 60, retoucheBySlot[lastSlot] || 0)
+  const daily = level((bySlot) => prodAMaintenant(bySlot, workHours), workHours.length * 60, retoucheToday)
+
+  return {
+    modelsCount: openModels.length,
+    effectif,
+    hourly,
+    daily,
+    cumulative: { score: null, productionPct: null, qualityPct: null },
+  }
+}
 
 // 🏆 Classement des chaînes — every chain (1-8), ranked by today's
 // Score_Rendement. Reuses fullDashboard() per chain (run in parallel) so
 // this is always computed live from the same real-time figures shown on
 // each chain's own dashboard — no separate cached leaderboard state.
 publicRouter.get('/chains/ranking', async (req, res) => {
-  // Chain overlap: ranked by the chain's primary (oldest) open model only —
-  // same convention as everywhere else a screen wasn't asked to become
-  // multi-model-aware (see openModels.js) — rather than inventing a
-  // combined score across two models that don't share a gamme. A finished
-  // model (see isModelFinished()) now correctly drops out of the ranking
-  // entirely instead of lingering as "active".
+  // A chain running two models (fin de série + démarrage) is ranked on its
+  // combined chain Rendement (computeChainRendement() — both models' earned
+  // minutes over the one shared effectif), labelled with its démarrage
+  // model. A single-model chain keeps its own dashboard figures, unchanged.
   const openModels = await getAllOpenModels()
   const byChain = {}
   for (const m of openModels) (byChain[m.chain_number] ??= []).push(m)
 
   const entries = await Promise.all(
     CHAIN_NUMBERS.map(async (chainNumber) => {
-      const model = byChain[chainNumber]?.[0]
-      if (!model) return { chainNumber, model: null, rendement: null }
-      const dash = await fullDashboard(model)
+      const models = byChain[chainNumber] || []
+      if (models.length === 0) return { chainNumber, model: null, rendement: null }
+      if (models.length > 1) {
+        const chain = await computeChainRendement(models)
+        const newest = models[models.length - 1]
+        return {
+          chainNumber,
+          model: { client: newest.client, dessin: newest.dessin },
+          modelsCount: models.length,
+          rendement: { daily: chain.daily, cumulative: chain.cumulative },
+        }
+      }
+      const dash = await fullDashboard(models[0])
       return {
         chainNumber,
-        model: { client: model.client, dessin: model.dessin },
+        model: { client: models[0].client, dessin: models[0].dessin },
+        modelsCount: 1,
         rendement: { daily: dash.rendement.daily, cumulative: dash.rendement.cumulative },
       }
     })
@@ -604,12 +725,11 @@ publicRouter.get('/personnel-admin', async (req, res) => {
 // could drift. An empty chain (no active model) still appears, subtotal 0,
 // with no specialty breakdown — never silently dropped.
 publicRouter.get('/effectifs/overview', async (req, res) => {
-  // Chain overlap: unlike Rendement/VT/DT (which never combine across
-  // different-gamme models — see openModels.js), a headcount is a plain
-  // additive count regardless of which model each worker is entered under,
-  // so a chain's specialty totals here are the SUM across every one of its
-  // open models, not just the primary one — the true number of people
-  // actually on that physical chain right now.
+  // Fin de série / démarrage overlap: a headcount is a plain additive count
+  // regardless of which model each worker is entered under, so a chain's
+  // specialty totals here are the SUM across both of its open models — the
+  // true number of people actually on that physical chain right now (the
+  // same effectif computeChainRendement() uses).
   const active = await getAllOpenModels()
   const byChain = {}
   for (const m of active) (byChain[m.chain_number] ??= []).push(m)

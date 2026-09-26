@@ -3,13 +3,14 @@ import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
+import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
 
 const NOTE_PRESETS = ['Panne machine', 'Manque de personnel', 'Manque de matière première', 'Retard livraison', 'Problème qualité']
 
 export default function GenericPosteForm({ token, chainNumber, deptKey }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [percentage, setPercentage] = useState(100)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
@@ -42,6 +43,9 @@ export default function GenericPosteForm({ token, chainNumber, deptKey }) {
 
   return (
     <GlowCard title="État du poste">
+      <div className="mb-3">
+        <ModelSwitcher openModels={openModels} selectedId={modelId} onSelect={selectModel} />
+      </div>
       <VoiceModeToggle voiceMode={voiceMode} setVoiceMode={setVoiceMode} />
       <form onSubmit={submit} className="space-y-6">
         <div>

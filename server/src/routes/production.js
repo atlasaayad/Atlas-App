@@ -13,14 +13,11 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 // A specific day's hourly slots (defaults to today) — lets Agent Production
 // load a previous day's entries for review/correction, not just today's.
-// Selectable entries for this chain: this model's own Couleur/Variante
-// variants PLUS, since a chain overlap is real (see openModels.js), any
-// OTHER root model still open on the same chain (and that root's own
-// variants too) — the exact same `byModel`/one-input-per-entry mechanism
-// generalized from "this model's colors" to "everything this chain is
-// currently working on". Omitted entirely when there's only one entry, so
-// a normal (single-model, no-color) chain's response is completely
-// unchanged.
+// Scoped to exactly this root model and its own Couleur/Variante colors
+// (`byModel`, one input per color, omitted when there are none). During a
+// fin de série / démarrage overlap the client first picks which of the two
+// models it is entering for (GET /chains/:n/open-models) and calls this
+// with that model's id — the other model never appears interleaved here.
 productionRouter.get('/models/:id/hourly', async (req, res) => {
   const model = await get('SELECT id, chain_number FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
