@@ -477,6 +477,38 @@ CREATE TABLE IF NOT EXISTS planning_days (
   created_at TEXT,
   PRIMARY KEY (model_id, date)
 );
+
+-- Fiche Modèle — composition (one row per fiber) and customer technical
+-- documents (metadata only; the files themselves live in the PRIVATE
+-- atlas-documents Blob store, see documentStorage.js). Both hang off the
+-- main model (a Couleur/Variante shares its parent's Fiche — see
+-- routes/fiche.js). "Each part totals exactly 100%" spans several rows, so
+-- it is enforced in routes/fiche.js rather than by a constraint here.
+-- Factory legal information is NOT a table: one JSON value under the
+-- config key 'factory_info'.
+CREATE TABLE IF NOT EXISTS model_composition (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  part TEXT NOT NULL DEFAULT 'Principal',
+  fiber TEXT NOT NULL,
+  percentage NUMERIC(5,2) NOT NULL CHECK (percentage > 0 AND percentage <= 100),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_composition_model ON model_composition (model_id);
+
+CREATE TABLE IF NOT EXISTS model_documents (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  storage_pathname TEXT NOT NULL UNIQUE,
+  mime_type TEXT NOT NULL CHECK (mime_type IN ('application/pdf', 'image/jpeg', 'image/png')),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 10485760),
+  uploaded_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_documents_model ON model_documents (model_id, created_at);
 `
 
 // One-time (per old specialty code), idempotent specialty rename/merge

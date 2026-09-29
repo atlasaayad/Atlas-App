@@ -15,6 +15,7 @@ export default function SettingsScreen({ token, onBack }) {
 
       <SpecialtiesCard token={token} />
       <WorkHoursCard token={token} />
+      <FactoryInfoCard token={token} />
       <FeedbackCard token={token} />
       <LanguageCard />
     </div>
@@ -346,6 +347,79 @@ function WorkHourRow({ workHour, isLast, onUpdate, onDelete }) {
 
 // مراجعة الملاحظات — القراءة فقط، الأحدث أولاً. الكتابة متاحة لأي قسم من
 // شاشته هو (زر 📩 بشريط DeptGate.jsx العلوي)، هنا غير المراجعة.
+// Informations usine — company-level legal information shown on every
+// Fiche Modèle (one JSON value in config 'factory_info', never copied into
+// models). Patron edits; Méthode (the other department that can open
+// Réglages) sees it read-only — the API enforces the same rule.
+const FACTORY_FIELDS = [
+  ['legalName', 'Raison sociale', 'Atlas Manufacturing SARL'],
+  ['ice', 'ICE (15 chiffres)', '000000000000000'],
+  ['address', 'Adresse', ''],
+  ['city', 'Ville', 'Tanger'],
+  ['country', 'Pays', 'Maroc'],
+]
+const FACTORY_ERRORS = { invalid_ice: "L'ICE doit contenir exactement 15 chiffres.", field_too_long: 'Un des champs est trop long.' }
+
+function FactoryInfoCard({ token }) {
+  const [form, setForm] = useState(null)
+  const [canEdit, setCanEdit] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    api.fiche.getFactory(token).then((r) => {
+      setForm({ legalName: '', ice: '', address: '', city: '', country: 'Maroc', ...(r.factory || {}) })
+      setCanEdit(r.canEdit)
+    })
+  }, [token])
+
+  async function save(e) {
+    e.preventDefault()
+    setSaving(true)
+    setMessage('')
+    try {
+      const r = await api.fiche.saveFactory(token, form)
+      setForm(r.factory)
+      setMessage('✓ Enregistré')
+    } catch (err) {
+      setMessage(FACTORY_ERRORS[err?.data?.error] || 'Erreur — réessayez.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <GlowCard title="🏭 Informations usine (Fiche Modèle)">
+      {!form ? (
+        <div className="py-4 text-center text-sm text-slate-500">Chargement…</div>
+      ) : (
+        <form onSubmit={save} className="space-y-3">
+          {!canEdit && <p className="text-xs text-slate-500">Lecture seule — seul le Patron peut modifier ces informations.</p>}
+          {FACTORY_FIELDS.map(([key, label, placeholder]) => (
+            <label key={key} className="block">
+              <span className="mb-1 block text-xs text-slate-400">{label}</span>
+              <input
+                value={form[key] || ''}
+                onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                placeholder={placeholder}
+                disabled={!canEdit}
+                inputMode={key === 'ice' ? 'numeric' : undefined}
+                className="h-11 w-full rounded-md border border-slate-700 bg-navy-900 px-3 text-sm text-slate-200 focus:border-turquoise focus:outline-none disabled:opacity-60"
+              />
+            </label>
+          ))}
+          {message && <p className={`text-sm ${message.startsWith('✓') ? 'text-emerald-300' : 'text-red-300'}`}>{message}</p>}
+          {canEdit && (
+            <button type="submit" disabled={saving} className="h-11 w-full rounded-md bg-turquoise/90 text-sm font-semibold text-navy-950 disabled:opacity-50">
+              {saving ? 'Enregistrement…' : 'Enregistrer'}
+            </button>
+          )}
+        </form>
+      )}
+    </GlowCard>
+  )
+}
+
 function FeedbackCard({ token }) {
   const [reports, setReports] = useState(null)
 
