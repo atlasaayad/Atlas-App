@@ -654,37 +654,82 @@ function IdentiteTab({ token, model, onSaved }) {
 }
 
 // Optional — the identity card on Home stays exactly as before if this is
-// never used (see fullDashboard()'s `identity.imageUrl`). Reads the picked
-// file client-side (FileReader → data URI) rather than a multipart upload —
-// simpler given the app's JSON-only API, and small enough at these size caps
-// (5MB here, 6MB decoded server-side — the base64 envelope adds ~33%).
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+// never used (see fullDashboard()'s `identity.imageUrl`). The photo is sent
+// as a JSON data URI, and Vercel refuses any request body over ~4.5 MB — so
+// a phone photo (often 4–12 MB) is first shrunk HERE, in the browser:
+// longest side ≤ 1600 px, re-encoded as JPEG, lowering quality/size until
+// the data URI is safely under the limit. The server side is unchanged.
+const MAX_SOURCE_BYTES = 30 * 1024 * 1024 // refuse only absurd files before decoding
+const MAX_DIMENSION = 1600
+const MAX_DATA_URI_CHARS = 3 * 1024 * 1024 // ≈2.2 MB image — well under Vercel's body limit
+
+async function decodeImage(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' })
+    } catch {
+      // fall through to <img> decoding (older Safari)
+    }
+  }
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    return img
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+async function compressImage(file) {
+  const source = await decodeImage(file)
+  const width = source.width
+  const height = source.height
+  let scale = Math.min(1, MAX_DIMENSION / Math.max(width, height))
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  for (let attempt = 0; attempt < 8; attempt++) {
+    canvas.width = Math.max(1, Math.round(width * scale))
+    canvas.height = Math.max(1, Math.round(height * scale))
+    ctx.fillStyle = '#ffffff' // JPEG has no transparency (PNG logos)
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height)
+    for (const quality of [0.85, 0.75, 0.65]) {
+      const dataUri = canvas.toDataURL('image/jpeg', quality)
+      if (dataUri.length <= MAX_DATA_URI_CHARS) {
+        source.close?.()
+        return dataUri
+      }
+    }
+    scale *= 0.75
+  }
+  source.close?.()
+  throw new Error('image_too_large')
+}
 
 function ModelImageUploader({ token, model, onSaved }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
-
-  function readFileAsDataUri(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result)
-      reader.onerror = () => reject(reader.error)
-      reader.readAsDataURL(file)
-    })
-  }
 
   async function handleFile(e) {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
     setError(null)
-    if (file.size > MAX_IMAGE_BYTES) {
-      setError('الصورة كبيرة بزاف — الحد الأقصى 5MB.')
+    if (file.size > MAX_SOURCE_BYTES) {
+      setError('الصورة كبيرة بزاف — الحد الأقصى 30MB.')
       return
     }
     setUploading(true)
     try {
-      const dataUri = await readFileAsDataUri(file)
+      let dataUri
+      try {
+        dataUri = await compressImage(file)
+      } catch {
+        setError('ما قدرناش نقراو هاد الصورة — جرّب صورة JPG أو PNG أخرى.')
+        return
+      }
       await api.methode.uploadModelImage(token, model.id, dataUri)
       onSaved()
     } catch (err) {

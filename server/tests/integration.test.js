@@ -18,7 +18,7 @@ import jwt from 'jsonwebtoken'
 import { presignUrl } from '@vercel/blob'
 import { setDocumentStorageForTests, DOCUMENT_MAX_BYTES } from '../src/documentStorage.js'
 import { runSeed, productionPinWarning } from '../src/db/seed.js'
-import { get, run, all, pool, migrateModelStatus } from '../src/db/index.js'
+import { get, run, all, pool, migrateModelStatus, dropRemovedPredictTables } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
 import { todayInFactoryTZ, prodAMaintenant, computeQualityPct, computeRendementProduction, computeScoreRendement } from '../src/calc.js'
 import { SPECIALTIES, HOURLY_SLOTS } from '../src/constants.js'
@@ -2273,7 +2273,13 @@ test('Predict (football) supprimé: aucun fichier, route, import ni config resta
       path.join(REPO_ROOT, 'package.json'),
       path.join(REPO_ROOT, 'client/package.json'),
     ]
-    const offenders = files.filter((f) => /predict|football|FOOTBALL_DATA_KEY/i.test(readFileSync(f, 'utf8')))
+    // The one allowed mention: db/index.js's clean-up that drops Predict's
+    // two old tables (dropRemovedPredictTables) — nothing else may remain.
+    const withoutCleanup = (f) =>
+      readFileSync(f, 'utf8')
+        .replace(/\/\/ The football "Predict" app was removed[\s\S]*?\n}\n/, '')
+        .replace('.then(dropRemovedPredictTables)', '')
+    const offenders = files.filter((f) => /predict|football|FOOTBALL_DATA_KEY/i.test(withoutCleanup(f)))
     assert.deepEqual(offenders.map((f) => path.relative(REPO_ROOT, f)), [])
   })
 
@@ -3137,4 +3143,22 @@ test('Ask Atlas: bouton « Connexion » vers /departements quand la connexion es
   const src = readFileSync(path.join(REPO_ROOT, 'client/src/pages/Ask.jsx'), 'utf8')
   assert.match(src, /to="\/departements"/)
   assert.match(src, />\s*Connexion\s*</)
+})
+
+test('Tables Predict supprimées, sans toucher aux tables Atlas', async () => {
+  const atlasTablesBefore = (await all("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT LIKE 'predict%' ORDER BY tablename")).map((r) => r.tablename)
+  // Simulate a database that still has them (as production did).
+  await run('CREATE TABLE IF NOT EXISTS predict_analysis_usage (date TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)')
+  await run('CREATE TABLE IF NOT EXISTS predict_football_cache (cache_key TEXT PRIMARY KEY, data JSONB NOT NULL, fetched_at TIMESTAMPTZ NOT NULL)')
+  const modelsBefore = await get('SELECT COUNT(*) AS n FROM models')
+
+  await dropRemovedPredictTables()
+  await dropRemovedPredictTables() // idempotent
+
+  const left = await get("SELECT to_regclass('predict_analysis_usage') AS a, to_regclass('predict_football_cache') AS b")
+  assert.equal(left.a, null)
+  assert.equal(left.b, null)
+  const atlasTablesAfter = (await all("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")).map((r) => r.tablename)
+  assert.deepEqual(atlasTablesAfter, atlasTablesBefore)
+  assert.equal((await get('SELECT COUNT(*) AS n FROM models')).n, modelsBefore.n)
 })
