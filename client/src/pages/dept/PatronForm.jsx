@@ -30,8 +30,9 @@ export default function PatronForm({ token }) {
   }, [])
 
   return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
+    <div className="min-w-0 space-y-4">
+      {/* Scrolls sideways on its own on a phone — the page itself never gets wider than the screen. */}
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         {[
           ['finances', 'Finances'],
           ['personnel', 'Personnel administratif'],
@@ -40,7 +41,7 @@ export default function PatronForm({ token }) {
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`whitespace-nowrap rounded-md border px-3 py-1.5 text-sm ${
+            className={`shrink-0 whitespace-nowrap rounded-md border px-3 py-1.5 text-sm ${
               tab === key ? 'border-turquoise bg-turquoise/10 text-turquoise' : 'border-slate-700 text-slate-400'
             }`}
           >

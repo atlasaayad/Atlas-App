@@ -31,8 +31,9 @@ export default function LogisticsForm({ token, chainNumber }) {
     }
   }
 
-  async function remove(exportId) {
-    const { ok } = await removal.run(() => api.logistics.deleteExport(token, exportId))
+  async function remove(exp) {
+    if (!confirm(`حذف الإرسالية "${exp.description}" (${exp.quantite} قطعة، ${exp.date})؟`)) return
+    const { ok } = await removal.run(() => api.logistics.deleteExport(token, exp.id))
     if (ok) refresh()
   }
 
@@ -93,7 +94,7 @@ export default function LogisticsForm({ token, chainNumber }) {
                   {e.description} · {e.quantite.toLocaleString('fr-FR')} · {e.date}
                 </span>
                 <button
-                  onClick={() => remove(e.id)}
+                  onClick={() => remove(e)}
                   className="h-10 shrink-0 rounded border border-status-bad/40 px-4 text-sm text-status-bad active:bg-status-bad/10"
                 >
                   Supprimer

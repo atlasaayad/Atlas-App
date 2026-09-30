@@ -1,5 +1,5 @@
-// Large tap targets (44px+), no on-screen keyboard needed — for short
-// counts (headcount, attendance) where +/- is faster than typing on mobile.
+// Large tap targets (44px+) for small +/- corrections on counts (headcount,
+// attendance); the number itself can be typed for anything bigger.
 export default function Stepper({ value, onChange, min = 0, max = 99, label }) {
   const num = Number(value) || 0
 
@@ -20,9 +20,21 @@ export default function Stepper({ value, onChange, min = 0, max = 99, label }) {
         >
           −
         </button>
-        <div className="flex h-11 w-12 shrink-0 items-center justify-center rounded-md border border-turquoise/40 bg-navy-900 font-display text-lg font-semibold text-turquoise">
-          {num}
-        </div>
+        {/* The number can also be typed directly (numeric keypad on phones) —
+            − / + stay for small corrections. */}
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={String(num)}
+          onFocus={(e) => e.target.select()}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/\D/g, '')
+            set(digits === '' ? min : Number(digits))
+          }}
+          aria-label={label ? `${label} — nombre` : 'Nombre'}
+          className="h-11 w-14 shrink-0 rounded-md border border-turquoise/40 bg-navy-900 text-center font-display text-lg font-semibold text-turquoise focus:border-turquoise focus:outline-none"
+        />
         <button
           type="button"
           onClick={() => set(num + 1)}
