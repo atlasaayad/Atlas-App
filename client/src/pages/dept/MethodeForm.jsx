@@ -9,6 +9,7 @@ import { api } from '../../lib/api'
 import { errorMessage } from '../../lib/errors'
 import { useSaveStatus } from '../../hooks/useSaveStatus'
 import ErrorNote from '../../components/ErrorNote'
+import { WARNING_LIMITS, confirmIfLarge } from '../../lib/warnings'
 import { MACHINES, DELAY_REASONS } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration, hoursToHHMM, hhmmToHours } from '../../lib/calc'
 import { todayInFactoryTZ } from '../../lib/date'
@@ -352,6 +353,8 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
 
   async function submit(e) {
     e.preventDefault()
+    if (!confirmIfLarge('Qté totale', form.qteTotale, WARNING_LIMITS.qteTotale)) return
+    if (!confirmIfLarge('Commande', form.commande, WARNING_LIMITS.qteTotale)) return
     setSaving(true)
     setError(null)
     try {
@@ -660,6 +663,8 @@ function IdentiteTab({ token, model, onSaved }) {
 
   async function submit(e) {
     e.preventDefault()
+    if (!confirmIfLarge('Qté totale', form.qteTotale, WARNING_LIMITS.qteTotale)) return
+    if (!confirmIfLarge('Commande', form.commande, WARNING_LIMITS.qteTotale)) return
     const { ok } = await save.run(() => api.methode.updateModel(token, model.id, form))
     if (ok) {
       onSaved()
@@ -868,6 +873,7 @@ function VariantesTab({ token, model, dashboard, onSaved }) {
   async function submitNew(e) {
     e.preventDefault()
     if (!label) return
+    if (!confirmIfLarge('Qté totale', qteTotale, WARNING_LIMITS.qteTotale)) return
     const { ok } = await save.run(() => api.methode.addVariant(token, model.id, label, Number(qteTotale) || 0))
     if (ok) {
       setLabel('')
@@ -918,6 +924,7 @@ function VariantRow({ token, modelId, variant, onSaved }) {
   const saveStatus = useSaveStatus()
 
   async function save() {
+    if (!confirmIfLarge('Qté totale', qteTotale, WARNING_LIMITS.qteTotale)) return
     const { ok } = await saveStatus.run(() => api.methode.updateVariant(token, modelId, variant.id, label, Number(qteTotale) || 0))
     if (ok) {
       setEditing(false)
@@ -980,7 +987,12 @@ function GammeTab({ token, model, onSaved }) {
   }
 
   async function submit() {
-    const { ok } = await save.run(() => api.methode.updateGamme(token, model.id, lines))
+    // A row left completely empty (no name, no time) is simply not sent; a
+    // named row with no time is refused by the server with its row number.
+    const toSave = lines.filter((l) => String(l.operation || '').trim() || Number(l.tps) > 0)
+    const longest = Math.max(0, ...toSave.map((l) => Number(l.tps) || 0))
+    if (!confirmIfLarge('TPS (s)', longest, WARNING_LIMITS.operationSeconds)) return
+    const { ok } = await save.run(() => api.methode.updateGamme(token, model.id, toSave))
     if (ok) {
       onSaved()
     }

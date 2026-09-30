@@ -7,6 +7,7 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { WARNING_LIMITS, confirmIfLarge } from '../../lib/warnings'
 import { useSaveStatus } from '../../hooks/useSaveStatus'
 import ErrorNote from '../../components/ErrorNote'
 
@@ -63,6 +64,8 @@ export default function FinaleForm({ token, chainNumber }) {
     e.preventDefault()
     const payload = { enCours: Number(enCours) || 0 }
     for (const key of DETAIL_KEYS) payload[key] = Number(details[key]) || 0
+    const largest = Math.max(...Object.values(payload))
+    if (!confirmIfLarge('Finale', largest, WARNING_LIMITS.finaleValue)) return
     const { ok } = await save.run(() => api.finale.update(token, modelId, payload))
     if (ok) refresh()
   }

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import ExcelJS from 'exceljs'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative } from '../validation.js'
 import { savePersonnelAdmin } from '../attendanceShared.js'
 
 export const patronRouter = Router()
@@ -13,6 +14,7 @@ patronRouter.use(requireDept('patron'))
 patronRouter.put('/personnel-admin', async (req, res) => {
   const { date, total } = req.body || {}
   if (!date) return res.status(400).json({ error: 'date_required' })
+  if (rejectNegative(res, [['Total', total]])) return
   await savePersonnelAdmin({ deptKey: 'patron', date, total })
   res.json({ ok: true })
 })

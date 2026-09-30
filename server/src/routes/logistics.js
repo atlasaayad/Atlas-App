@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative, reject } from '../validation.js'
 
 export const logisticsRouter = Router()
 logisticsRouter.use(requireDept('logistics'))
@@ -9,7 +10,8 @@ logisticsRouter.use(requireDept('logistics'))
 logisticsRouter.post('/models/:id/exports', async (req, res) => {
   const { id } = req.params
   const { description, quantite, date } = req.body || {}
-  if (!date) return res.status(400).json({ error: 'date_required' })
+  if (rejectNegative(res, [['Quantité', quantite]])) return
+  if (!date) return reject(res, 'date_required', 'اختر التاريخ', 'Choisissez la date')
   const now = new Date().toISOString()
   const exportId = `exp_${nanoid(10)}`
   await run(

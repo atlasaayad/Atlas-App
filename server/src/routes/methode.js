@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { all, get, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative, rejectNegativeMap, rejectFinBeforeDebut, reject } from '../validation.js'
 import { DELAY_REASONS } from '../constants.js'
 import { computeVTMinutes, computeDT, computeLaunchTimerState, todayInFactoryTZ } from '../calc.js'
 import { saveAttendance, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
@@ -59,6 +60,8 @@ async function recompute(modelId) {
 methodeRouter.post('/models', async (req, res) => {
   const { client, qteTotale, debut, finPrevue, dessin, commande, chainNumber } = req.body || {}
   if (!client || !chainNumber) return res.status(400).json({ error: 'client_and_chain_required' })
+  if (rejectNegative(res, [['Qté totale', qteTotale], ['Commande', commande]])) return
+  if (rejectFinBeforeDebut(res, debut, finPrevue)) return
 
   const openOnChain = await getOpenModelsForChain(Number(chainNumber))
   if (openOnChain.length >= MAX_OPEN_PER_CHAIN) return res.status(409).json({ error: 'chain_full' })
@@ -104,6 +107,7 @@ methodeRouter.post('/models/:id/variants', async (req, res) => {
   if (parent.parent_model_id) return res.status(400).json({ error: 'cannot_nest_variants' })
 
   const { label, qteTotale } = req.body || {}
+  if (rejectNegative(res, [['Qté totale', qteTotale]])) return
   if (!label) return res.status(400).json({ error: 'label_required' })
 
   const now = new Date().toISOString()
@@ -125,6 +129,7 @@ methodeRouter.put('/models/:id/variants/:variantId', async (req, res) => {
   const variant = await get('SELECT id FROM models WHERE id = $1 AND parent_model_id = $2', [req.params.variantId, req.params.id])
   if (!variant) return res.status(404).json({ error: 'not_found' })
   const { label, qteTotale } = req.body || {}
+  if (rejectNegative(res, [['Qté totale', qteTotale]])) return
   if (!label) return res.status(400).json({ error: 'label_required' })
   await run('UPDATE models SET variant_label = $1, qte_totale = $2, updated_at = $3 WHERE id = $4', [
     label,
@@ -140,6 +145,9 @@ methodeRouter.put('/models/:id', async (req, res) => {
   const { client, qteTotale, debut, finPrevue, dessin, commande } = req.body || {}
   const model = await get('SELECT id FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+  if (!String(client || '').trim()) return reject(res, 'client_required', 'دخّل اسم الـClient', 'Indiquez le client')
+  if (rejectNegative(res, [['Qté totale', qteTotale], ['Commande', commande]])) return
+  if (rejectFinBeforeDebut(res, debut, finPrevue)) return
   await run(
     `UPDATE models SET client = $1, qte_totale = $2, debut = $3, fin_prevue = $4, dessin = $5, commande = $6, updated_at = $7 WHERE id = $8`,
     [client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, new Date().toISOString(), req.params.id]
@@ -196,6 +204,16 @@ methodeRouter.put('/models/:id/gamme', async (req, res) => {
   const model = await get('SELECT id FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
   const lines = Array.isArray(req.body?.lines) ? req.body.lines : []
+  const badLine = lines.findIndex((l) => !(Number(l?.tps) > 0))
+  if (badLine >= 0) {
+    return reject(
+      res,
+      'invalid_operation_time',
+      `العملية رقم ${badLine + 1}: الوقت (TPS) خاص يكون أكبر من 0`,
+      `Opération n° ${badLine + 1} : le temps (TPS) doit être supérieur à 0`,
+      { line: badLine + 1 }
+    )
+  }
 
   await run('DELETE FROM gamme_lines WHERE model_id = $1', [req.params.id])
   if (lines.length > 0) {
@@ -214,6 +232,7 @@ methodeRouter.put('/models/:id/effectif', async (req, res) => {
   const model = await get('SELECT id FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
   const effectif = req.body?.effectif || {}
+  if (rejectNegativeMap(res, effectif)) return
 
   const specialties = await getSpecialties('chain')
   const rows = specialties.map((spec) => [req.params.id, spec, Number(effectif[spec]) || 0])
@@ -239,6 +258,7 @@ methodeRouter.put('/models/:id/effectif', async (req, res) => {
 // see saveAttendance() in attendanceShared.js for exactly what a backdated
 // save does and doesn't touch.
 methodeRouter.put('/models/:id/attendance', async (req, res) => {
+  if (rejectNegativeMap(res, req.body?.attendance)) return
   const result = await saveAttendance({
     deptKey: 'methode',
     id: req.params.id,
@@ -364,6 +384,7 @@ methodeRouter.put('/models/:id/planning/:date', async (req, res) => {
 
   const workHours = await getWorkHours()
   const hourly = Array.isArray(req.body?.hourly) ? req.body.hourly : []
+  if (rejectNegative(res, hourly.map((h) => ['Planning', h?.qty]))) return
   const now = new Date().toISOString()
   await Promise.all([
     // Defensive — the client only ever saves a cell for a date already

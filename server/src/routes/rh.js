@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { get } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative, rejectNegativeMap } from '../validation.js'
 import { todayInFactoryTZ } from '../calc.js'
 import { saveAttendance, savePersonnelAdmin, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
 
@@ -14,6 +15,7 @@ rhRouter.use(requireDept('rh'))
 // why the responsibility moved. A specific date can be targeted (same
 // backdating pattern as Agent Production's/Quality's hourly entry).
 rhRouter.put('/models/:id/attendance', async (req, res) => {
+  if (rejectNegativeMap(res, req.body?.attendance)) return
   const result = await saveAttendance({
     deptKey: 'rh',
     id: req.params.id,
@@ -40,6 +42,7 @@ rhRouter.get('/models/:id/attendance', async (req, res) => {
 rhRouter.put('/personnel-admin', async (req, res) => {
   const { date, total } = req.body || {}
   if (!date) return res.status(400).json({ error: 'date_required' })
+  if (rejectNegative(res, [['Total', total]])) return
   await savePersonnelAdmin({ deptKey: 'rh', date, total })
   res.json({ ok: true })
 })
