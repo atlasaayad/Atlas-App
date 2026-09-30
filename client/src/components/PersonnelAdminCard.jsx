@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import GlowCard from './GlowCard'
 import { api } from '../lib/api'
+import { useSaveStatus } from '../hooks/useSaveStatus'
+import ErrorNote from './ErrorNote'
+import { errorMessage } from '../lib/errors'
 import { todayInFactoryTZ } from '../lib/date'
 
 // Personnel administratif / Encadrement — a single company-wide headcount,
@@ -17,22 +20,31 @@ export default function PersonnelAdminCard({ token, updateFn }) {
   const [total, setTotal] = useState(0)
   const [cumulativeTotal, setCumulativeTotal] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [loadError, setLoadError] = useState(null)
+  const [retryTick, setRetryTick] = useState(0)
+  const save = useSaveStatus()
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api.getPersonnelAdmin(token, selectedDate).then((r) => {
-      if (cancelled) return
-      setTotal(r.total)
-      setCumulativeTotal(r.cumulativeTotal)
-      setLoading(false)
-    })
+    setLoadError(null)
+    api
+      .getPersonnelAdmin(token, selectedDate)
+      .then((r) => {
+        if (cancelled) return
+        setTotal(r.total)
+        setCumulativeTotal(r.cumulativeTotal)
+        setLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setLoadError(err)
+        setLoading(false)
+      })
     return () => {
       cancelled = true
     }
-  }, [token, selectedDate])
+  }, [token, selectedDate, retryTick])
 
   function handleDateChange(value) {
     if (value > TODAY) {
@@ -45,15 +57,14 @@ export default function PersonnelAdminCard({ token, updateFn }) {
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await updateFn(token, selectedDate, Number(total) || 0)
-      setSaved(true)
-      const r = await api.getPersonnelAdmin(token, selectedDate)
-      setCumulativeTotal(r.cumulativeTotal)
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
+    const { ok } = await save.run(() => updateFn(token, selectedDate, Number(total) || 0))
+    if (ok) {
+      // Only the cumulative figure is refreshed; a failure here is not a
+      // failed save, so it doesn't turn the confirmation into an error.
+      api
+        .getPersonnelAdmin(token, selectedDate)
+        .then((r) => setCumulativeTotal(r.cumulativeTotal))
+        .catch(() => {})
     }
   }
 
@@ -82,6 +93,17 @@ export default function PersonnelAdminCard({ token, updateFn }) {
       )}
       {loading ? (
         <div className="py-4 text-center text-sm text-slate-500">Chargement…</div>
+      ) : loadError ? (
+        <div className="flex flex-col items-center gap-2 py-4 text-center">
+          <ErrorNote message={errorMessage(loadError, { load: true })} />
+          <button
+            type="button"
+            onClick={() => setRetryTick((t) => t + 1)}
+            className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
       ) : (
         <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
           <label className="block">
@@ -97,11 +119,12 @@ export default function PersonnelAdminCard({ token, updateFn }) {
           </label>
           <button
             type="submit"
-            disabled={saving}
+            disabled={save.saving}
             className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-turquoise bg-turquoise/10 px-6 text-sm font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
-            {saving ? '...' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+            {save.saving ? '...' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
           </button>
+          <ErrorNote message={save.error} className="basis-full" />
           <div className="ml-auto text-right">
             <div className="text-[10px] uppercase tracking-wide text-slate-500">تراكمي (كل الأيام المسجَّلة)</div>
             <div className="font-display text-lg font-semibold text-slate-300">{cumulativeTotal}</div>

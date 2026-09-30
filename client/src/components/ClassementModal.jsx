@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from './ErrorNote'
 
 export default function ClassementModal({ onClose }) {
   const [ranking, setRanking] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
-    api.getRanking().then(setRanking)
+    api.getRanking().then(setRanking).catch(setLoadError)
   }, [])
 
   return (
@@ -24,7 +27,8 @@ export default function ClassementModal({ onClose }) {
           مرتبة حسب Score اليومي (كفاءة الإنتاج + الجودة) — من الأفضل للأدنى. السلاسل بدون موديل نشط أو بدون بيانات
           كافية اليوم تظهر بآخر الترتيب بوضوح، مو مستبعدة بصمت.
         </p>
-        {!ranking && <div className="py-10 text-center text-sm text-slate-500">Chargement…</div>}
+        {!ranking && loadError && <ErrorNote message={errorMessage(loadError, { load: true })} className="py-10 text-center" />}
+        {!ranking && !loadError && <div className="py-10 text-center text-sm text-slate-500">Chargement…</div>}
         {ranking && (
           <div className="space-y-2.5">
             {ranking.map((entry) => (

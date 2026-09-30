@@ -8,10 +8,13 @@ import AuditReportCard from '../../components/AuditReportCard'
 import PersonnelAdminCard from '../../components/PersonnelAdminCard'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
+import { errorMessage } from '../../lib/errors'
 import { todayInFactoryTZ } from '../../lib/date'
 
 export default function RHForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh } = useChainModel(chainNumber)
+  const { modelId, dashboard, loading, loadError, refresh } = useChainModel(chainNumber)
   const TODAY = todayInFactoryTZ()
   const [selectedDate, setSelectedDate] = useState(TODAY)
   const [dateError, setDateError] = useState('')
@@ -19,8 +22,7 @@ export default function RHForm({ token, chainNumber }) {
   const [attendanceLoading, setAttendanceLoading] = useState(false)
   const [attendanceError, setAttendanceError] = useState(false)
   const [retryTick, setRetryTick] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   const minDate = dashboard?.identity.debut || null
@@ -41,9 +43,9 @@ export default function RHForm({ token, chainNumber }) {
         setAttendance(r.attendance)
         setAttendanceLoading(false)
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return
-        setAttendanceError(true)
+        setAttendanceError(err)
         setAttendanceLoading(false)
       })
     return () => {
@@ -66,15 +68,8 @@ export default function RHForm({ token, chainNumber }) {
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await api.rh.updateAttendance(token, modelId, attendance, selectedDate)
-      setSaved(true)
-      refresh()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
-    }
+    const { ok } = await save.run(() => api.rh.updateAttendance(token, modelId, attendance, selectedDate))
+    if (ok) refresh()
   }
 
   const isBackdated = selectedDate !== TODAY
@@ -87,7 +82,7 @@ export default function RHForm({ token, chainNumber }) {
     return (
       <div className="space-y-4">
         <PersonnelAdminCard token={token} updateFn={api.rh.updatePersonnelAdmin} />
-        <NoModel chainNumber={chainNumber} />
+        <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={refresh} />
       </div>
     )
   }
@@ -131,7 +126,7 @@ export default function RHForm({ token, chainNumber }) {
             </div>
           ) : attendanceError ? (
             <div className="flex flex-col items-center gap-2 py-6 text-center">
-              <span className="text-sm text-status-bad">فشل تحميل بيانات الحضور — تحقق من الاتصال.</span>
+              <span className="whitespace-pre-line text-sm text-status-bad">{errorMessage(attendanceError, { load: true })}</span>
               <button
                 type="button"
                 onClick={() => setRetryTick((t) => t + 1)}
@@ -161,11 +156,12 @@ export default function RHForm({ token, chainNumber }) {
           )}
           <button
             type="submit"
-            disabled={saving || attendanceLoading || !!attendanceError}
+            disabled={save.saving || attendanceLoading || !!attendanceError}
             className="mt-5 w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-6"
           >
-            {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+            {save.saving ? 'Enregistrement…' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
           </button>
+          <ErrorNote message={save.error} className="mt-2" />
         </form>
       </GlowCard>
 

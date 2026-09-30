@@ -6,15 +6,16 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
 
 const NOTE_PRESETS = ['Panne machine', 'Manque de personnel', 'Manque de matière première', 'Retard livraison', 'Problème qualité']
 
 export default function GenericPosteForm({ token, chainNumber, deptKey }) {
-  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
+  const { modelId, dashboard, loading, loadError, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [percentage, setPercentage] = useState(100)
   const [note, setNote] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
@@ -26,18 +27,13 @@ export default function GenericPosteForm({ token, chainNumber, deptKey }) {
   }, [dashboard, deptKey])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!modelId) return <NoModel chainNumber={chainNumber} />
+  if (!modelId) return <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={refresh} />
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await api.poste.update(token, modelId, Number(percentage), note)
-      setSaved(true)
+    const { ok } = await save.run(() => api.poste.update(token, modelId, Number(percentage), note))
+    if (ok) {
       refresh()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -98,11 +94,12 @@ export default function GenericPosteForm({ token, chainNumber, deptKey }) {
 
         <button
           type="submit"
-          disabled={saving}
+          disabled={save.saving}
           className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
         >
-          {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+          {save.saving ? 'Enregistrement…' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
         </button>
+        <ErrorNote message={save.error} />
       </form>
     </GlowCard>
   )

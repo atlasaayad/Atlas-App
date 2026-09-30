@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from './ErrorNote'
 
 const MONTH_NAMES = [
   'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -44,13 +46,17 @@ function DaySection({ chainNumber }) {
   const [date, setDate] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   async function check() {
     if (!date) return
     setLoading(true)
     setResult(null)
+    setError('')
     try {
       setResult(await api.history.day(chainNumber, date))
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
     } finally {
       setLoading(false)
     }
@@ -74,6 +80,7 @@ function DaySection({ chainNumber }) {
           Voir
         </button>
       </div>
+      <ErrorNote message={error} className="mt-3 text-center" />
       {result && (
         <ResultBlock loading={loading} empty={result.total === null} emptyText="لا توجد بيانات مسجلة لهذا اليوم">
           <div className="font-mono text-2xl font-semibold text-turquoise glow-number">
@@ -93,13 +100,17 @@ function RangeSection({ chainNumber }) {
   const [to, setTo] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   async function check() {
     if (!from || !to) return
     setLoading(true)
     setResult(null)
+    setError('')
     try {
       setResult(await api.history.range(chainNumber, from, to))
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
     } finally {
       setLoading(false)
     }
@@ -135,6 +146,7 @@ function RangeSection({ chainNumber }) {
       >
         Calculer la moyenne
       </button>
+      <ErrorNote message={error} className="mt-3 text-center" />
       {result && (
         <ResultBlock loading={loading} empty={result.average === null} emptyText="لا توجد بيانات مسجلة بهذا المدى">
           <div className="font-mono text-2xl font-semibold text-turquoise glow-number">
@@ -156,13 +168,17 @@ function MonthsSection({ chainNumber }) {
   const [toMonth, setToMonth] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   async function check() {
     if (!fromMonth || !toMonth) return
     setLoading(true)
     setResult(null)
+    setError('')
     try {
       setResult(await api.history.months(chainNumber, fromYear, fromMonth, toYear, toMonth))
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
     } finally {
       setLoading(false)
     }
@@ -188,6 +204,7 @@ function MonthsSection({ chainNumber }) {
       >
         Calculer la moyenne
       </button>
+      <ErrorNote message={error} className="mt-3 text-center" />
       {result && (
         <ResultBlock loading={loading} empty={result.average === null} emptyText="لا توجد بيانات مسجلة بهذا المدى">
           <div className="font-mono text-2xl font-semibold text-turquoise glow-number">

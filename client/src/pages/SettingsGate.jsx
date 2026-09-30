@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import PinPad from '../components/PinPad'
-import { api, getDeptToken, setDeptToken } from '../lib/api'
+import DeptLogin from '../components/DeptLogin'
+import { getDeptToken, onSessionExpired } from '../lib/api'
+import { MESSAGES } from '../lib/errors'
 import SettingsScreen from './SettingsScreen'
 
 // ⚙️ Réglages — Agent Méthode/Patron only, using whichever of those two
@@ -21,28 +22,30 @@ export default function SettingsGate() {
   const navigate = useNavigate()
   const [activeDept, setActiveDept] = useState(() => ALLOWED.find((d) => getDeptToken(d.key))?.key || null)
   const [chosenDept, setChosenDept] = useState(null)
-  const [pinError, setPinError] = useState(false)
-  const [pinLoading, setPinLoading] = useState(false)
-  const [attemptsRemaining, setAttemptsRemaining] = useState(null)
+  // Same "session expired" overlay as DeptGate: PIN pad on top, the
+  // settings screen (and anything typed in it) stays mounted underneath.
+  const [expired, setExpired] = useState(false)
 
-  async function handlePin(pin) {
-    setPinLoading(true)
-    setPinError(false)
-    try {
-      const res = await api.login(chosenDept, pin)
-      setDeptToken(chosenDept, res.token)
-      setActiveDept(chosenDept)
-    } catch (err) {
-      setPinError(true)
-      setAttemptsRemaining(typeof err.data?.attemptsRemaining === 'number' ? err.data.attemptsRemaining : null)
-      throw err
-    } finally {
-      setPinLoading(false)
-    }
-  }
+  useEffect(() => onSessionExpired((expiredDept) => expiredDept && expiredDept === activeDept && setExpired(true)), [activeDept])
 
   if (activeDept) {
-    return <SettingsScreen token={getDeptToken(activeDept)} onBack={() => navigate('/departements')} />
+    const meta = ALLOWED.find((d) => d.key === activeDept)
+    return (
+      <>
+        <SettingsScreen token={getDeptToken(activeDept) || ''} onBack={() => navigate('/departements')} />
+        {expired && (
+          <div className="fixed inset-0 z-[60] overflow-y-auto bg-navy-950/95 px-4">
+            <DeptLogin
+              deptKey={activeDept}
+              deptLabel={meta.label}
+              deptIcon={meta.icon}
+              onLoggedIn={() => setExpired(false)}
+              notice={`${MESSAGES.session.ar}\n${MESSAGES.session.fr}`}
+            />
+          </div>
+        )}
+      </>
+    )
   }
 
   if (!chosenDept) {
@@ -72,14 +75,7 @@ export default function SettingsGate() {
   return (
     <div>
       <BackBar onBack={() => setChosenDept(null)} />
-      <PinPad
-        deptLabel={meta.label}
-        deptIcon={meta.icon}
-        onSubmit={handlePin}
-        error={pinError}
-        loading={pinLoading}
-        attemptsRemaining={attemptsRemaining}
-      />
+      <DeptLogin deptKey={chosenDept} deptLabel={meta.label} deptIcon={meta.icon} onLoggedIn={() => setActiveDept(chosenDept)} />
     </div>
   )
 }

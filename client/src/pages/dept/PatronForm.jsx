@@ -4,15 +4,24 @@ import AuditReportCard from '../../components/AuditReportCard'
 import DevisCard from '../../components/DevisCard'
 import PersonnelAdminCard from '../../components/PersonnelAdminCard'
 import { api } from '../../lib/api'
+import { errorMessage } from '../../lib/errors'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
 import { DEPARTMENT_META } from '../../lib/constants'
 
 export default function PatronForm({ token }) {
   const [tab, setTab] = useState('finances')
   const [models, setModels] = useState(null)
   const [openId, setOpenId] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   async function load() {
-    setModels(await api.patron.getModels(token))
+    setLoadError(null)
+    try {
+      setModels(await api.patron.getModels(token))
+    } catch (err) {
+      setLoadError(err)
+    }
   }
 
   useEffect(() => {
@@ -45,7 +54,14 @@ export default function PatronForm({ token }) {
           <CpmCard token={token} />
           <ExportCard token={token} />
           <AuditReportCard token={token} />
-          {!models ? (
+          {!models && loadError ? (
+            <div className="flex flex-col items-center gap-2 py-6 text-center">
+              <ErrorNote message={errorMessage(loadError, { load: true })} />
+              <button onClick={load} className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10">
+                إعادة المحاولة
+              </button>
+            </div>
+          ) : !models ? (
             <div className="py-10 text-center text-slate-400">Chargement…</div>
           ) : models.length === 0 ? (
             <div className="py-10 text-center text-slate-400">Aucun modèle enregistré.</div>
@@ -95,11 +111,13 @@ const ACTION_LABELS = {
 
 function AuditLogTab({ token }) {
   const [entries, setEntries] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
-    api.patron.getAuditLog(token).then(setEntries)
+    api.patron.getAuditLog(token).then(setEntries).catch(setLoadError)
   }, [token])
 
+  if (!entries && loadError) return <ErrorNote message={errorMessage(loadError, { load: true })} className="py-10 text-center" />
   if (!entries) return <div className="py-10 text-center text-slate-400">Chargement…</div>
   if (entries.length === 0) return <div className="py-10 text-center text-slate-400">Aucune activité enregistrée.</div>
 
@@ -149,26 +167,25 @@ function formatDateTime(iso) {
 function CpmCard({ token }) {
   const [cpm, setCpm] = useState('')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [loadError, setLoadError] = useState(null)
+  const save = useSaveStatus()
 
   useEffect(() => {
-    api.patron.getCpm(token).then((r) => {
-      setCpm(r.cpm === null ? '' : String(r.cpm))
-      setLoading(false)
-    })
+    api.patron
+      .getCpm(token)
+      .then((r) => {
+        setCpm(r.cpm === null ? '' : String(r.cpm))
+        setLoading(false)
+      })
+      .catch((err) => {
+        setLoadError(err)
+        setLoading(false)
+      })
   }, [token])
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await api.patron.updateCpm(token, Number(cpm) || 0)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
-    }
+    await save.run(() => api.patron.updateCpm(token, Number(cpm) || 0))
   }
 
   return (
@@ -196,11 +213,12 @@ function CpmCard({ token }) {
           </label>
           <button
             type="submit"
-            disabled={saving}
+            disabled={save.saving}
             className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-6 text-sm font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
-            {saving ? '…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+            {save.saving ? '…' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
           </button>
+          <ErrorNote message={save.error || (loadError ? errorMessage(loadError, { load: true }) : '')} className="basis-full" />
         </form>
       )}
     </GlowCard>
@@ -209,11 +227,11 @@ function CpmCard({ token }) {
 
 function ExportCard({ token }) {
   const [exporting, setExporting] = useState(false)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState('')
 
   async function handleExport() {
     setExporting(true)
-    setError(false)
+    setError('')
     try {
       const blob = await api.patron.exportData(token)
       const url = URL.createObjectURL(blob)
@@ -224,8 +242,8 @@ function ExportCard({ token }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-    } catch {
-      setError(true)
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
     } finally {
       setExporting(false)
     }
@@ -249,14 +267,14 @@ function ExportCard({ token }) {
           {exporting ? 'Export en cours…' : '⬇ Exporter (.xlsx)'}
         </button>
       </div>
-      {error && <div className="mt-2 text-sm text-status-bad">Échec de l'export, réessayez.</div>}
+      <ErrorNote message={error} className="mt-2" />
     </GlowCard>
   )
 }
 
 function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
   const [form, setForm] = useState(() => formFromModel(model))
-  const [saving, setSaving] = useState(false)
+  const save = useSaveStatus()
 
   // Re-sync the form whenever a fresh save comes back from the server (e.g.
   // after another tab/session edited the same model) — but only while this
@@ -268,13 +286,10 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      const saved = await api.patron.update(token, model.id, form)
-      setForm(formFromModel({ ...model, ...saved }))
+    const { ok, result } = await save.run(() => api.patron.update(token, model.id, form))
+    if (ok) {
+      setForm(formFromModel({ ...model, ...result }))
       onSaved()
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -425,11 +440,12 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
 
             <button
               type="submit"
-              disabled={saving}
+              disabled={save.saving}
               className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
             >
-              {saving ? 'Enregistrement…' : 'Enregistrer'}
+              {save.saving ? 'Enregistrement…' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
             </button>
+            <ErrorNote message={save.error} />
           </form>
           <DevisCard token={token} modelId={model.id} />
         </>

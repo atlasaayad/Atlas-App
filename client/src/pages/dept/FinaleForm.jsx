@@ -7,6 +7,8 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
 
 const GROUPS = [
   {
@@ -38,15 +40,13 @@ const GROUPS = [
 const DETAIL_KEYS = GROUPS.flatMap((g) => g.fields.map(([key]) => key))
 
 export default function FinaleForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
+  const { modelId, dashboard, loading, loadError, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [enCours, setEnCours] = useState(0)
   const [details, setDetails] = useState(Object.fromEntries(DETAIL_KEYS.map((k) => [k, 0])))
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
   const [effectif, setEffectif] = useState({})
-  const [savingEffectif, setSavingEffectif] = useState(false)
-  const [effectifSaved, setEffectifSaved] = useState(false)
+  const saveEffectif = useSaveStatus()
 
   useEffect(() => {
     if (dashboard) {
@@ -57,33 +57,19 @@ export default function FinaleForm({ token, chainNumber }) {
   }, [dashboard])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!modelId) return <NoModel chainNumber={chainNumber} />
+  if (!modelId) return <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={refresh} />
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      const payload = { enCours: Number(enCours) || 0 }
-      for (const key of DETAIL_KEYS) payload[key] = Number(details[key]) || 0
-      await api.finale.update(token, modelId, payload)
-      setSaved(true)
-      refresh()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
-    }
+    const payload = { enCours: Number(enCours) || 0 }
+    for (const key of DETAIL_KEYS) payload[key] = Number(details[key]) || 0
+    const { ok } = await save.run(() => api.finale.update(token, modelId, payload))
+    if (ok) refresh()
   }
 
   async function submitEffectif() {
-    setSavingEffectif(true)
-    try {
-      await api.finale.updateEffectif(token, modelId, effectif)
-      setEffectifSaved(true)
-      refresh()
-      setTimeout(() => setEffectifSaved(false), 2000)
-    } finally {
-      setSavingEffectif(false)
-    }
+    const { ok } = await saveEffectif.run(() => api.finale.updateEffectif(token, modelId, effectif))
+    if (ok) refresh()
   }
 
   return (
@@ -136,11 +122,12 @@ export default function FinaleForm({ token, chainNumber }) {
 
       <button
         type="submit"
-        disabled={saving}
+        disabled={save.saving}
         className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
       >
-        {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+        {save.saving ? 'Enregistrement…' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
       </button>
+      <ErrorNote message={save.error} />
 
       <GlowCard title="Effectif Finale">
         <p className="mb-3 text-sm text-slate-400">
@@ -157,11 +144,12 @@ export default function FinaleForm({ token, chainNumber }) {
         <button
           type="button"
           onClick={submitEffectif}
-          disabled={savingEffectif}
+          disabled={saveEffectif.saving}
           className="mt-4 w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
         >
-          {savingEffectif ? 'Enregistrement…' : effectifSaved ? 'Enregistré ✓' : 'Enregistrer'}
+          {saveEffectif.saving ? 'Enregistrement…' : saveEffectif.saved ? 'Enregistré ✓' : 'Enregistrer'}
         </button>
+        <ErrorNote message={saveEffectif.error} className="mt-2" />
       </GlowCard>
     </form>
   )
