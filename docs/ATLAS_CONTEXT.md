@@ -3,7 +3,7 @@
 > Read this file before any task. Update it at the end of every merged PR (sections 4, 6 and 7).
 > Never write secrets here (PINs, tokens, keys, passwords).
 
-Last update: 2026-09-30 (after PR #45)
+Last update: 2026-09-30 (after PR #46)
 
 ---
 
@@ -68,6 +68,7 @@ Models & variants (photo, gamme/VT, launch timer) · Planning (manual days, Plan
 | #43 | Hardening: Predict code removed, Ask auth, personnel-admin auth, lockout dept+IP, CORS, PIN warning, ESLint 9 |
 | #44 | Fiche Modèle (documents, composition, factory info, timeline) + Ask "Connexion" button |
 | #45 | Client-side photo compression (small images unchanged) + drop Predict tables |
+| #46 | Shared project context: `docs/ATLAS_CONTEXT.md` + root `CLAUDE.md` |
 
 ## 7. Known issues / backlog (small, not started)
 - A test depends on the time of day ("Couleur/Variante … total combiné exact" fails before ~12:00 factory time) → make it time-independent.
