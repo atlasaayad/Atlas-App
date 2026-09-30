@@ -662,6 +662,24 @@ function IdentiteTab({ token, model, onSaved }) {
 const MAX_SOURCE_BYTES = 30 * 1024 * 1024 // refuse only absurd files before decoding
 const MAX_DIMENSION = 1600
 const MAX_DATA_URI_CHARS = 3 * 1024 * 1024 // ≈2.2 MB image — well under Vercel's body limit
+// A photo already this small is sent exactly as picked — no re-encoding,
+// no PNG→JPEG conversion, no quality loss. Only bigger ones are shrunk.
+const PASSTHROUGH_MAX_BYTES = 2.2 * 1024 * 1024
+const PASSTHROUGH_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+
+function readFileAsDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+async function prepareImage(file) {
+  if (file.size <= PASSTHROUGH_MAX_BYTES && PASSTHROUGH_TYPES.has(file.type)) return readFileAsDataUri(file)
+  return compressImage(file)
+}
 
 async function decodeImage(file) {
   if (typeof createImageBitmap === 'function') {
@@ -725,7 +743,7 @@ function ModelImageUploader({ token, model, onSaved }) {
     try {
       let dataUri
       try {
-        dataUri = await compressImage(file)
+        dataUri = await prepareImage(file)
       } catch {
         setError('ما قدرناش نقراو هاد الصورة — جرّب صورة JPG أو PNG أخرى.')
         return
