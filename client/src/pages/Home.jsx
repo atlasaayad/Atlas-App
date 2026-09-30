@@ -11,6 +11,7 @@ import HistoriqueModal from '../components/HistoriqueModal'
 import DetailsFinaleModal from '../components/DetailsFinaleModal'
 import ClassementModal from '../components/ClassementModal'
 import PlanReelCard from '../components/PlanReelCard'
+import FicheModeleModal from '../components/FicheModeleModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS, DELAY_REASONS } from '../lib/constants'
@@ -164,33 +165,35 @@ function MultiModelDashboard({ dashboards, chainRendement }) {
       <GlowCard>
         <div className="space-y-2.5">
           {dashboards.map((d) => (
-            <button
-              key={d.id}
-              onClick={() => setSelectedId(d.id)}
-              className={`flex w-full items-center gap-3 rounded-md border p-3 text-right ${
-                selectedId === d.id ? 'border-turquoise bg-turquoise/10' : 'border-slate-800 bg-navy-900/40'
-              }`}
-            >
-              {d.identity.imageUrl && (
-                <img src={d.identity.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-md border border-slate-700 object-cover" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <RoleBadge role={d.role} />
-                  <span className="font-display text-sm font-semibold text-slate-100">
-                    {d.identity.client} <span className="text-slate-500">· {d.identity.dessin}</span>
-                  </span>
+            <div key={d.id} className="flex items-stretch gap-2">
+              <button
+                onClick={() => setSelectedId(d.id)}
+                className={`flex min-w-0 flex-1 items-center gap-3 rounded-md border p-3 text-right ${
+                  selectedId === d.id ? 'border-turquoise bg-turquoise/10' : 'border-slate-800 bg-navy-900/40'
+                }`}
+              >
+                {d.identity.imageUrl && (
+                  <img src={d.identity.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-md border border-slate-700 object-cover" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <RoleBadge role={d.role} />
+                    <span className="font-display text-sm font-semibold text-slate-100">
+                      {d.identity.client} <span className="text-slate-500">· {d.identity.dessin}</span>
+                    </span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                    <span>
+                      Sortie: <span className="font-mono text-turquoise">{d.bilan.totalSortie.toLocaleString('fr-FR')}</span> /{' '}
+                      <span className="font-mono">{(d.qteTotaleCombined ?? d.identity.qteTotale ?? 0).toLocaleString('fr-FR')}</span>
+                    </span>
+                    {d.identity.debut && <span>Début: {d.identity.debut}</span>}
+                    {d.identity.finPrevue && <span>Fin prévue: {d.identity.finPrevue}</span>}
+                  </div>
                 </div>
-                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                  <span>
-                    Sortie: <span className="font-mono text-turquoise">{d.bilan.totalSortie.toLocaleString('fr-FR')}</span> /{' '}
-                    <span className="font-mono">{(d.qteTotaleCombined ?? d.identity.qteTotale ?? 0).toLocaleString('fr-FR')}</span>
-                  </span>
-                  {d.identity.debut && <span>Début: {d.identity.debut}</span>}
-                  {d.identity.finPrevue && <span>Fin prévue: {d.identity.finPrevue}</span>}
-                </div>
-              </div>
-            </button>
+              </button>
+              <FicheButton modelId={d.id} title={`${d.identity.client} · ${d.identity.dessin}`} compact />
+            </div>
           ))}
         </div>
       </GlowCard>
@@ -210,6 +213,27 @@ function MultiModelDashboard({ dashboards, chainRendement }) {
 
       {selected && <DashboardBody data={selected} role={selected.role} hideRendement />}
     </div>
+  )
+}
+
+// Opens the (login-protected) Fiche Modèle. The public card itself carries
+// no Fiche data at all — everything is fetched by the modal, with a token.
+function FicheButton({ modelId, title, compact = false }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className={`shrink-0 rounded-md border border-turquoise/40 text-sm text-turquoise active:bg-turquoise/10 ${
+          compact ? 'w-12 text-lg' : 'h-10 px-3'
+        }`}
+        title="Fiche Modèle"
+        aria-label="Fiche Modèle"
+      >
+        {compact ? '📋' : '📋 Fiche Modèle'}
+      </button>
+      {open && <FicheModeleModal modelId={modelId} title={title} onClose={() => setOpen(false)} />}
+    </>
   )
 }
 
@@ -289,6 +313,7 @@ function DashboardBody({ data, role = null, hideRendement = false }) {
             <Field label="Début" value={data.identity.debut} />
             <Field label="Fin prévue" value={data.identity.finPrevue} />
           </div>
+          <FicheButton modelId={data.id} title={`${data.identity.client} · ${data.identity.dessin}`} />
         </div>
         {data.launchTimer?.startedAt && <LaunchTimerStatus launchTimer={data.launchTimer} />}
         {hasVariants && (

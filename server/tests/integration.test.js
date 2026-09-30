@@ -14,6 +14,9 @@ import path from 'node:path'
 import ExcelJS from 'exceljs'
 import { app } from '../src/app.js'
 import { isOriginAllowed } from '../src/cors.js'
+import jwt from 'jsonwebtoken'
+import { presignUrl } from '@vercel/blob'
+import { setDocumentStorageForTests, DOCUMENT_MAX_BYTES } from '../src/documentStorage.js'
 import { runSeed, productionPinWarning } from '../src/db/seed.js'
 import { get, run, all, pool, migrateModelStatus } from '../src/db/index.js'
 import { incrementDailyUsage, DAILY_LIMIT } from '../src/routes/ask.js'
@@ -2597,4 +2600,541 @@ test('Avertissement PIN_* manquants en production', async (t) => {
 test('ESLint: `npm run lint` passe (0 erreur)', { skip: !existsSync(path.join(REPO_ROOT, 'client/node_modules/eslint')) && 'client deps not installed' }, () => {
   // Throws (non-zero exit) on any lint error; warnings are allowed.
   execFileSync('npm', ['run', 'lint'], { cwd: REPO_ROOT, stdio: 'pipe' })
+})
+
+// ---------------------------------------------------------------------------
+// Fiche Modèle — documents (private storage), composition, factory info,
+// manufacturing timeline. Storage is a fake in-memory adapter here (there
+// is no real Blob store in tests); the real private-Blob path is verified
+// manually on the Vercel preview.
+// ---------------------------------------------------------------------------
+
+function fakeDocumentStorage() {
+  const objects = new Map()
+  const calls = { presign: [], read: [], remove: [] }
+  return {
+    objects,
+    calls,
+    async presignUpload(args) {
+      calls.presign.push(args)
+      return { type: 'blob.generate-presigned-url', presignedUrlPayload: { fake: true } }
+    },
+    async stat(pathname) {
+      return objects.get(pathname) || null
+    },
+    async remove(pathname) {
+      calls.remove.push(pathname)
+      objects.delete(pathname)
+    },
+    async signedReadUrl(pathname, validUntil) {
+      calls.read.push({ pathname, validUntil })
+      return `https://fake-private-blob.test/${pathname}?until=${validUntil}`
+    },
+  }
+}
+
+test('Fiche Modèle', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const patronToken = await login('patron', '3333')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+  const coupeToken = await login('coupe', '9999')
+  const logisticsToken = await login('logistics', '6666')
+  const today = todayInFactoryTZ()
+
+  const openBefore = await call(`/chains/${TEST_CHAIN}/open-models`)
+  assert.equal(openBefore.data.models.length, 0, `chaîne ${TEST_CHAIN} doit être libre pour ce test`)
+
+  const storage = fakeDocumentStorage()
+  setDocumentStorageForTests(storage)
+  const savedEnv = { token: process.env.DOCS_BLOB_READ_WRITE_TOKEN }
+  process.env.DOCS_BLOB_READ_WRITE_TOKEN = 'test-docs-token'
+  const savedFactory = await get("SELECT value FROM config WHERE key = 'factory_info'")
+
+  const created = []
+  t.after(async () => {
+    setDocumentStorageForTests(null)
+    if (savedEnv.token === undefined) delete process.env.DOCS_BLOB_READ_WRITE_TOKEN
+    else process.env.DOCS_BLOB_READ_WRITE_TOKEN = savedEnv.token
+    if (savedFactory) await run("UPDATE config SET value = $1 WHERE key = 'factory_info'", [savedFactory.value])
+    else await run("DELETE FROM config WHERE key = 'factory_info'")
+    for (const id of [...created].reverse()) {
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+      await run('DELETE FROM models WHERE id = $1', [id])
+    }
+  })
+
+  async function createModel(client, qteTotale = 100) {
+    const res = await call('/methode/models', { method: 'POST', token: methodeToken, body: { chainNumber: TEST_CHAIN, debut: today, client, qteTotale, dessin: client } })
+    assert.equal(res.status, 201)
+    created.push(res.data.id)
+    return res.data.id
+  }
+  const modelA = await createModel('TEST_FICHE_A', 50)
+  const modelB = await createModel('TEST_FICHE_B', 80)
+  const variantRes = await call(`/methode/models/${modelA}/variants`, { method: 'POST', token: methodeToken, body: { label: 'Rouge', qteTotale: 20 } })
+  assert.equal(variantRes.status, 201)
+  const variantA = variantRes.data.id
+  created.push(variantA)
+
+  // Full 3-step upload as the browser does it; returns the confirm response.
+  async function upload(modelId, token, { filename = 'tech-pack.pdf', mimeType = 'application/pdf', sizeBytes = 8 * 1024 * 1024, stored } = {}) {
+    const reqRes = await call(`/models/${modelId}/documents/upload-request`, { method: 'POST', token, body: { filename, mimeType, sizeBytes } })
+    if (reqRes.status !== 200) return { step: 'request', ...reqRes }
+    const { ticket, pathname } = reqRes.data
+    const presign = await call(`/models/${modelId}/documents/presign`, {
+      method: 'POST',
+      token,
+      body: { type: 'blob.generate-presigned-url', payload: { pathname, clientPayload: ticket, multipart: false } },
+    })
+    if (presign.status !== 200) return { step: 'presign', ...presign }
+    storage.objects.set(pathname, stored || { size: sizeBytes, contentType: mimeType }) // the "direct browser upload"
+    const confirm = await call(`/models/${modelId}/documents`, { method: 'POST', token, body: { ticket } })
+    return { step: 'confirm', pathname, ticket, ...confirm }
+  }
+
+  // --- Documents: authorization & storage -----------------------------------
+
+  let docA
+  await t.test('Méthode téléverse un PDF (~8 Mo) en 3 étapes; aucune URL ni chemin de stockage renvoyé', async () => {
+    const res = await upload(modelA, methodeToken)
+    assert.equal(res.status, 201)
+    docA = res.data.document
+    assert.equal(docA.filename, 'tech-pack.pdf')
+    assert.equal(docA.mimeType, 'application/pdf')
+    assert.equal(docA.sizeBytes, 8 * 1024 * 1024)
+    assert.equal(docA.uploadedBy, 'methode')
+    assert.ok(!JSON.stringify(res.data).includes('model-docs/'))
+    // The presigned PUT was scoped to that one pathname, type and size, 5 min.
+    const p = storage.calls.presign.at(-1)
+    assert.match(p.pathname, new RegExp(`^model-docs/${modelA}/[A-Za-z0-9_-]{32}\\.pdf$`))
+    assert.equal(p.contentType, 'application/pdf')
+    assert.equal(p.sizeBytes, 8 * 1024 * 1024)
+    assert.ok(p.validUntil > Date.now() && p.validUntil <= Date.now() + 5 * 60 * 1000 + 2000)
+    const row = await get('SELECT * FROM model_documents WHERE id = $1', [docA.id])
+    assert.equal(row.model_id, modelA)
+    assert.equal(row.storage_pathname, p.pathname)
+    const audit = await get("SELECT dept_key FROM audit_log WHERE model_id = $1 AND action = 'upload_document'", [modelA])
+    assert.equal(audit.dept_key, 'methode')
+  })
+
+  await t.test('Patron téléverse (JPG, PNG) et supprime', async () => {
+    const jpg = await upload(modelA, patronToken, { filename: 'page1.JPG', mimeType: 'image/jpeg', sizeBytes: 300000 })
+    assert.equal(jpg.status, 201)
+    const png = await upload(modelA, patronToken, { filename: 'page2.png', mimeType: 'image/png', sizeBytes: 200000 })
+    assert.equal(png.status, 201)
+    const del = await call(`/models/${modelA}/documents/${png.data.document.id}`, { method: 'DELETE', token: patronToken })
+    assert.equal(del.status, 200)
+    assert.ok(!storage.objects.has(png.pathname)) // private object removed too
+    assert.equal(await get('SELECT 1 FROM model_documents WHERE id = $1', [png.data.document.id]), undefined)
+    assert.ok(await get("SELECT 1 FROM audit_log WHERE model_id = $1 AND action = 'delete_document' AND dept_key = 'patron'", [modelA]))
+  })
+
+  await t.test('Méthode supprime', async () => {
+    const res = await upload(modelA, methodeToken, { filename: 'old.pdf', sizeBytes: 1000 })
+    assert.equal(res.status, 201)
+    assert.equal((await call(`/models/${modelA}/documents/${res.data.document.id}`, { method: 'DELETE', token: methodeToken })).status, 200)
+  })
+
+  await t.test('déconnecté: ni liste, ni ouverture, ni téléversement (401)', async () => {
+    assert.equal((await call(`/models/${modelA}/fiche`)).status, 401)
+    assert.equal((await call(`/models/${modelA}/documents/${docA.id}/open`, { method: 'POST' })).status, 401)
+    assert.equal((await call(`/models/${modelA}/documents/upload-request`, { method: 'POST', body: { filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 10 } })).status, 401)
+    assert.equal((await call(`/models/${modelA}/documents/${docA.id}`, { method: 'DELETE' })).status, 401)
+  })
+
+  await t.test('tout département connecté peut lister et ouvrir (URL signée de 2 min, auditée)', async () => {
+    for (const token of [productionToken, qualityToken, coupeToken, methodeToken, patronToken]) {
+      const fiche = await call(`/models/${modelA}/fiche`, { token })
+      assert.equal(fiche.status, 200)
+      assert.ok(fiche.data.documents.some((d) => d.id === docA.id))
+      assert.ok(!JSON.stringify(fiche.data).includes('model-docs/')) // metadata only
+    }
+    const before = Date.now()
+    const open = await call(`/models/${modelA}/documents/${docA.id}/open`, { method: 'POST', token: productionToken })
+    assert.equal(open.status, 200)
+    assert.ok(open.data.url.startsWith('https://fake-private-blob.test/model-docs/'))
+    assert.ok(open.data.expiresAt >= before + 2 * 60 * 1000 && open.data.expiresAt <= Date.now() + 2 * 60 * 1000)
+    assert.equal(storage.calls.read.at(-1).validUntil, open.data.expiresAt)
+    assert.ok(await get("SELECT 1 FROM audit_log WHERE model_id = $1 AND action = 'open_document' AND dept_key = 'production'", [modelA]))
+  })
+
+  await t.test('autres départements: ni téléversement ni suppression (403)', async () => {
+    for (const token of [productionToken, qualityToken, coupeToken, logisticsToken]) {
+      assert.equal((await call(`/models/${modelA}/documents/upload-request`, { method: 'POST', token, body: { filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 10 } })).status, 403)
+      assert.equal((await call(`/models/${modelA}/documents/presign`, { method: 'POST', token, body: {} })).status, 403)
+      assert.equal((await call(`/models/${modelA}/documents`, { method: 'POST', token, body: {} })).status, 403)
+      assert.equal((await call(`/models/${modelA}/documents/${docA.id}`, { method: 'DELETE', token })).status, 403)
+    }
+    assert.ok(await get('SELECT 1 FROM model_documents WHERE id = $1', [docA.id]))
+  })
+
+  await t.test('type MIME, extension et cohérence type/extension vérifiés côté serveur', async () => {
+    const bad = (body) => call(`/models/${modelA}/documents/upload-request`, { method: 'POST', token: methodeToken, body: { sizeBytes: 1000, ...body } })
+    assert.equal((await bad({ filename: 'x.exe', mimeType: 'application/x-msdownload' })).data.error, 'unsupported_type')
+    assert.equal((await bad({ filename: 'x.docx', mimeType: 'application/pdf' })).data.error, 'unsupported_extension')
+    assert.equal((await bad({ filename: 'noext', mimeType: 'application/pdf' })).data.error, 'unsupported_extension')
+    assert.equal((await bad({ filename: 'x.png', mimeType: 'application/pdf' })).data.error, 'type_extension_mismatch')
+    assert.equal((await bad({ filename: 'x.pdf', mimeType: 'image/jpeg' })).data.error, 'type_extension_mismatch')
+    assert.equal((await bad({ filename: 'x.jpeg', mimeType: 'image/jpeg' })).status, 200)
+  })
+
+  await t.test('taille: 10 Mo exactement et juste en dessous acceptés, juste au-dessus refusé', async () => {
+    assert.equal(DOCUMENT_MAX_BYTES, 10 * 1024 * 1024)
+    const exact = await upload(modelB, methodeToken, { filename: 'exact.pdf', sizeBytes: DOCUMENT_MAX_BYTES })
+    assert.equal(exact.status, 201)
+    const below = await upload(modelB, methodeToken, { filename: 'below.pdf', sizeBytes: DOCUMENT_MAX_BYTES - 1 })
+    assert.equal(below.status, 201)
+    const above = await upload(modelB, methodeToken, { filename: 'above.pdf', sizeBytes: DOCUMENT_MAX_BYTES + 1 })
+    assert.equal(above.step, 'request')
+    assert.equal(above.status, 400)
+    assert.equal(above.data.error, 'file_too_large')
+    const way = await upload(modelB, methodeToken, { filename: 'big.pdf', sizeBytes: 50 * 1024 * 1024 })
+    assert.equal(way.data.error, 'file_too_large')
+  })
+
+  await t.test('confirmation: fichier réellement stocké différent du ticket (taille/type) → refusé et supprimé du stockage', async () => {
+    const bigger = await upload(modelB, methodeToken, { filename: 'lie.pdf', sizeBytes: 1000, stored: { size: 11 * 1024 * 1024, contentType: 'application/pdf' } })
+    assert.equal(bigger.status, 400)
+    assert.equal(bigger.data.error, 'upload_mismatch')
+    assert.ok(!storage.objects.has(bigger.pathname))
+    const html = await upload(modelB, methodeToken, { filename: 'lie2.pdf', sizeBytes: 1000, stored: { size: 1000, contentType: 'text/html' } })
+    assert.equal(html.data.error, 'upload_mismatch')
+    assert.equal(await get("SELECT 1 FROM model_documents WHERE filename IN ('lie.pdf', 'lie2.pdf')"), undefined)
+    // Nothing uploaded at all → no row.
+    const r = await call(`/models/${modelB}/documents/upload-request`, { method: 'POST', token: methodeToken, body: { filename: 'ghost.pdf', mimeType: 'application/pdf', sizeBytes: 10 } })
+    const ghost = await call(`/models/${modelB}/documents`, { method: 'POST', token: methodeToken, body: { ticket: r.data.ticket } })
+    assert.equal(ghost.data.error, 'upload_not_found')
+  })
+
+  await t.test('presign: seul le chemin choisi par le serveur est signable', async () => {
+    const r = await call(`/models/${modelA}/documents/upload-request`, { method: 'POST', token: methodeToken, body: { filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 10 } })
+    const other = await call(`/models/${modelA}/documents/presign`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { type: 'blob.generate-presigned-url', payload: { pathname: `model-docs/${modelA}/chosen-by-client.pdf`, clientPayload: r.data.ticket } },
+    })
+    assert.equal(other.data.error, 'pathname_mismatch')
+    const completed = await call(`/models/${modelA}/documents/presign`, { method: 'POST', token: methodeToken, body: { type: 'blob.upload-completed', payload: {} } })
+    assert.equal(completed.data.error, 'invalid_event')
+  })
+
+  await t.test('ticket expiré, falsifié, ou réutilisé sur un autre modèle → refusé', async () => {
+    const r = await call(`/models/${modelA}/documents/upload-request`, { method: 'POST', token: methodeToken, body: { filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 10 } })
+    const { ticket, pathname } = r.data
+    storage.objects.set(pathname, { size: 10, contentType: 'application/pdf' })
+
+    const onB = await call(`/models/${modelB}/documents`, { method: 'POST', token: methodeToken, body: { ticket } })
+    assert.equal(onB.data.error, 'ticket_model_mismatch')
+    const presignOnB = await call(`/models/${modelB}/documents/presign`, {
+      method: 'POST',
+      token: methodeToken,
+      body: { type: 'blob.generate-presigned-url', payload: { pathname, clientPayload: ticket } },
+    })
+    assert.equal(presignOnB.data.error, 'ticket_model_mismatch')
+
+    const [h, p, sig] = ticket.split('.')
+    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p, 'base64url')), sz: 1 })).toString('base64url')
+    assert.equal((await call(`/models/${modelA}/documents`, { method: 'POST', token: methodeToken, body: { ticket: `${h}.${forged}.${sig}` } })).data.error, 'invalid_ticket')
+    assert.equal((await call(`/models/${modelA}/documents`, { method: 'POST', token: methodeToken, body: { ticket: ticket.slice(0, -2) + 'xx' } })).data.error, 'invalid_ticket')
+
+    const expired = jwt.sign(
+      { typ: 'fiche_doc_upload', mid: modelA, p: pathname, fn: 'a.pdf', ct: 'application/pdf', sz: 10, by: 'methode', exp: Math.floor(Date.now() / 1000) - 5 },
+      process.env.JWT_SECRET
+    )
+    assert.equal((await call(`/models/${modelA}/documents`, { method: 'POST', token: methodeToken, body: { ticket: expired } })).data.error, 'ticket_expired')
+
+    // A login token is not an upload ticket (and vice versa).
+    assert.equal((await call(`/models/${modelA}/documents`, { method: 'POST', token: methodeToken, body: { ticket: methodeToken } })).data.error, 'invalid_ticket')
+    assert.equal((await call(`/models/${modelA}/fiche`, { token: ticket })).status, 401)
+  })
+
+  await t.test('isolation: un document du modèle A est introuvable via le modèle B', async () => {
+    assert.equal((await call(`/models/${modelB}/documents/${docA.id}/open`, { method: 'POST', token: productionToken })).status, 404)
+    assert.equal((await call(`/models/${modelB}/documents/${docA.id}`, { method: 'DELETE', token: methodeToken })).status, 404)
+    const ficheB = await call(`/models/${modelB}/fiche`, { token: productionToken })
+    assert.ok(!ficheB.data.documents.some((d) => d.id === docA.id))
+    assert.ok(await get('SELECT 1 FROM model_documents WHERE id = $1', [docA.id]))
+  })
+
+  await t.test('les URL de lecture signées expirent: le SDK refuse de signer une délégation expirée', async () => {
+    const pathname = `model-docs/${modelA}/x.pdf`
+    const delegation = (validUntil) =>
+      `${Buffer.from(JSON.stringify({ storeId: 'store_testfiche', pathname, operations: ['get'], validUntil })).toString('base64url')}.sig`
+    const ok = await presignUrl(
+      { delegationToken: delegation(Date.now() + 120000), clientSigningToken: 'k' },
+      { operation: 'get', pathname, access: 'private' }
+    )
+    assert.match(ok.presignedUrl, /private\.blob\.vercel-storage\.com\/model-docs\//)
+    await assert.rejects(
+      presignUrl({ delegationToken: delegation(Date.now() - 1000), clientSigningToken: 'k' }, { operation: 'get', pathname, access: 'private' }),
+      /expired/
+    )
+  })
+
+  await t.test('écrans publics: aucune donnée de document (métadonnées, chemins, URL)', async () => {
+    const ficheA = await call(`/models/${modelA}/fiche`, { token: methodeToken })
+    const secrets = ['model-docs/', 'fake-private-blob', 'tech-pack.pdf', docA.id]
+    for (const p of [`/chains/${TEST_CHAIN}/dashboard`, `/models/${modelA}/dashboard`, `/models/${modelA}`, '/chains', '/models', `/chains/${TEST_CHAIN}/open-models`, '/chains/ranking', '/early-warnings', '/effectifs/overview']) {
+      const res = await call(p)
+      assert.equal(res.status, 200, p)
+      const body = JSON.stringify(res.data)
+      for (const s of secrets) assert.ok(!body.includes(s), `${p} leaks ${s}`)
+    }
+    assert.ok(ficheA.data.documents.length > 0)
+  })
+
+  await t.test('DOCS_BLOB_READ_WRITE_TOKEN absent: pas de plantage, 503 clair, le reste de la Fiche fonctionne', async () => {
+    delete process.env.DOCS_BLOB_READ_WRITE_TOKEN
+    try {
+      const fiche = await call(`/models/${modelA}/fiche`, { token: productionToken })
+      assert.equal(fiche.status, 200)
+      assert.equal(fiche.data.documentsStorageConfigured, false)
+      assert.ok(Array.isArray(fiche.data.timeline))
+      const up = await call(`/models/${modelA}/documents/upload-request`, { method: 'POST', token: methodeToken, body: { filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 10 } })
+      assert.equal(up.status, 503)
+      assert.equal(up.data.error, 'documents_storage_not_configured')
+      assert.equal((await call(`/models/${modelA}/documents/${docA.id}/open`, { method: 'POST', token: productionToken })).status, 503)
+    } finally {
+      process.env.DOCS_BLOB_READ_WRITE_TOKEN = 'test-docs-token'
+    }
+  })
+
+  // --- Composition ----------------------------------------------------------
+
+  const putComposition = (modelId, rows, token = methodeToken) => call(`/models/${modelId}/composition`, { method: 'PUT', token, body: { rows } })
+
+  await t.test('composition: total d’une partie < 100 ou > 100 refusé', async () => {
+    const low = await putComposition(modelA, [{ part: 'Principal', fiber: 'Coton', percentage: 95 }, { part: 'Principal', fiber: 'Élasthanne', percentage: 2 }])
+    assert.equal(low.status, 400)
+    assert.equal(low.data.error, 'part_total_invalid')
+    assert.deepEqual(low.data.totals, { Principal: 97 })
+    const high = await putComposition(modelA, [{ part: 'Principal', fiber: 'Coton', percentage: 95 }, { part: 'Principal', fiber: 'Élasthanne', percentage: 5.01 }])
+    assert.equal(high.data.error, 'part_total_invalid')
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: 'Coton', percentage: 100.001 }])).data.error, 'invalid_percentage')
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: 'Coton', percentage: 0 }])).data.error, 'invalid_percentage')
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: 'Coton', percentage: 33.333 }])).data.error, 'invalid_percentage')
+  })
+
+  await t.test('composition: 100% exact et plusieurs parties indépendantes acceptés (2 décimales)', async () => {
+    const ok = await putComposition(modelA, [
+      { part: 'Principal', fiber: 'Coton', percentage: 95 },
+      { part: 'Principal', fiber: 'Élasthanne', percentage: 5 },
+      { part: 'Doublure', fiber: 'Polyester', percentage: 100 },
+      { part: 'Poches', fiber: 'Coton', percentage: 33.33 },
+      { part: 'Poches', fiber: 'Polyester', percentage: 66.67 },
+    ])
+    assert.equal(ok.status, 200)
+    assert.deepEqual(ok.data.composition.map((r) => [r.part, r.fiber, r.percentage]), [
+      ['Principal', 'Coton', 95],
+      ['Principal', 'Élasthanne', 5],
+      ['Doublure', 'Polyester', 100],
+      ['Poches', 'Coton', 33.33],
+      ['Poches', 'Polyester', 66.67],
+    ])
+  })
+
+  await t.test('composition: normalisation des parties/fibres (casse, espaces) + Autre personnalisé', async () => {
+    const res = await putComposition(modelA, [
+      { part: ' principal ', fiber: 'coton', percentage: 60 },
+      { part: 'PRINCIPAL', fiber: 'POLYESTER', percentage: 40 },
+      { part: 'Col  roulé', fiber: 'Fibre   de bambou', percentage: 50 },
+      { part: 'col ROULÉ', fiber: 'fibre de BAMBOU ', percentage: 50 },
+    ])
+    // Same custom fiber twice in the same part → duplicate after normalization.
+    assert.equal(res.data.error, 'duplicate_fiber')
+    const ok = await putComposition(modelA, [
+      { part: ' principal ', fiber: 'coton', percentage: 60 },
+      { part: 'PRINCIPAL', fiber: 'POLYESTER', percentage: 40 },
+      { part: 'Col  roulé', fiber: 'Fibre   de bambou', percentage: 50 },
+      { part: 'col ROULÉ', fiber: 'élasthanne', percentage: 50 },
+      { part: '', fiber: 'x', percentage: 1 },
+    ])
+    assert.equal(ok.data.error, 'part_total_invalid') // '' → Principal → 101%
+    const good = await putComposition(modelA, [
+      { part: ' principal ', fiber: 'coton', percentage: 60 },
+      { part: 'PRINCIPAL', fiber: 'POLYESTER', percentage: 40 },
+      { part: 'Col  roulé', fiber: 'Fibre   de bambou', percentage: 50 },
+      { part: 'col ROULÉ', fiber: 'élasthanne', percentage: 50 },
+    ])
+    assert.equal(good.status, 200)
+    assert.deepEqual(good.data.composition.map((r) => [r.part, r.fiber]), [
+      ['Principal', 'Coton'],
+      ['Principal', 'Polyester'],
+      ['Col roulé', 'Fibre de bambou'],
+      ['Col roulé', 'Élasthanne'],
+    ])
+    assert.equal((await putComposition(modelA, [{ part: 'Autre', fiber: 'Coton', percentage: 100 }])).data.error, 'part_custom_required')
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: 'autre', percentage: 100 }])).data.error, 'fiber_custom_required')
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: '', percentage: 100 }])).data.error, 'fiber_required')
+  })
+
+  await t.test('composition: Méthode et Patron modifient, les autres non; vider = retirer', async () => {
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: 'Lin', percentage: 100 }], productionToken)).status, 403)
+    assert.equal((await putComposition(modelA, [{ part: 'Principal', fiber: 'Lin', percentage: 100 }])).status, 200)
+    assert.equal((await call(`/models/${modelA}/composition`, { method: 'PUT', body: { rows: [] } })).status, 401)
+    const patron = await putComposition(modelA, [{ part: 'Principal', fiber: 'Coton', percentage: 95 }, { part: 'Principal', fiber: 'Élasthanne', percentage: 5 }], patronToken)
+    assert.equal(patron.status, 200)
+    const fiche = await call(`/models/${modelA}/fiche`, { token: qualityToken })
+    assert.equal(fiche.data.composition.length, 2)
+    assert.equal(fiche.data.permissions.canEditComposition, false)
+  })
+
+  // --- Colour variants: shared Fiche, own timeline ---------------------------
+
+  await t.test('couleur: documents et composition hérités du modèle principal', async () => {
+    const fiche = await call(`/models/${variantA}/fiche`, { token: productionToken })
+    assert.equal(fiche.status, 200)
+    assert.equal(fiche.data.model.isVariant, true)
+    assert.equal(fiche.data.model.owner.id, modelA)
+    assert.ok(fiche.data.documents.some((d) => d.id === docA.id))
+    assert.equal(fiche.data.composition.length, 2)
+    const open = await call(`/models/${variantA}/documents/${docA.id}/open`, { method: 'POST', token: productionToken })
+    assert.equal(open.status, 200)
+    // An upload from a colour's Fiche lands on the main model.
+    const up = await upload(variantA, methodeToken, { filename: 'colour-sheet.pdf', sizeBytes: 5000 })
+    assert.equal(up.status, 201)
+    assert.equal((await get('SELECT model_id FROM model_documents WHERE id = $1', [up.data.document.id])).model_id, modelA)
+    assert.deepEqual(fiche.data.colours.map((c) => c.id), [modelA, variantA])
+  })
+
+  // --- Factory information --------------------------------------------------
+
+  await t.test('usine: lecture par tout département connecté, modification Patron seulement, une seule valeur config', async () => {
+    await run("DELETE FROM config WHERE key = 'factory_info'")
+    const empty = await call('/factory-info', { token: productionToken })
+    assert.equal(empty.status, 200)
+    assert.equal(empty.data.factory, null)
+    assert.equal(empty.data.canEdit, false)
+    assert.equal((await call('/factory-info')).status, 401)
+
+    const body = { legalName: 'Atlas Manufacturing SARL', ice: '001234567000089', address: '12 Zone Franche', city: 'Tanger', country: '' }
+    assert.equal((await call('/factory-info', { method: 'PUT', token: methodeToken, body })).status, 403)
+    assert.equal((await call('/factory-info', { method: 'PUT', token: productionToken, body })).status, 403)
+    assert.equal((await call('/factory-info', { method: 'PUT', body })).status, 401)
+    assert.equal((await call('/factory-info', { method: 'PUT', token: patronToken, body: { ...body, ice: '12AB' } })).data.error, 'invalid_ice')
+
+    const saved = await call('/factory-info', { method: 'PUT', token: patronToken, body })
+    assert.equal(saved.status, 200)
+    assert.equal(saved.data.factory.country, 'Maroc') // default
+    const rows = await all("SELECT value FROM config WHERE key = 'factory_info'")
+    assert.equal(rows.length, 1)
+    assert.deepEqual(JSON.parse(rows[0].value), { ...body, country: 'Maroc' })
+
+    const read = await call('/factory-info', { token: methodeToken })
+    assert.equal(read.data.factory.legalName, 'Atlas Manufacturing SARL')
+    assert.equal(read.data.canEdit, false)
+    assert.equal((await call('/factory-info', { token: patronToken })).data.canEdit, true)
+    const fiche = await call(`/models/${modelB}/fiche`, { token: qualityToken })
+    assert.equal(fiche.data.factory.city, 'Tanger')
+  })
+
+  // --- Timeline -------------------------------------------------------------
+
+  const stage = async (modelId, key) => (await call(`/models/${modelId}/fiche`, { token: productionToken })).data.timeline.find((s) => s.key === key)
+
+  await t.test('timeline: sans activité → Non commencée partout (Planning: Non planifié)', async () => {
+    const timeline = (await call(`/models/${modelB}/fiche`, { token: productionToken })).data.timeline
+    const byKey = Object.fromEntries(timeline.map((s) => [s.key, s.status]))
+    assert.deepEqual(byKey, {
+      lancement: 'non_commencee',
+      planning: 'non_planifie',
+      coupe: 'non_commencee',
+      magasin: 'non_commencee',
+      mecanicien: 'non_commencee',
+      echantillon: 'non_commencee',
+      production: 'non_commencee',
+      qualite: 'non_commencee',
+      finale: 'non_commencee', // pre-created zero row is NOT activity
+      depot: 'non_commencee',
+      export: 'non_commencee',
+    })
+    assert.ok(timeline.every((s) => s.start === null && s.end === null))
+  })
+
+  await t.test('timeline: Lancement terminé seulement quand le chronomètre est arrêté', async () => {
+    await call(`/methode/models/${modelA}/launch-timer`, { method: 'PUT', token: methodeToken, body: { objectifHeures: 2 } })
+    assert.equal((await stage(modelA, 'lancement')).status, 'non_commencee')
+    await call(`/methode/models/${modelA}/launch-timer/start`, { method: 'POST', token: methodeToken })
+    const running = await stage(modelA, 'lancement')
+    assert.equal(running.status, 'en_cours')
+    assert.equal(running.start, today)
+    assert.equal(running.end, null)
+    await call(`/methode/models/${modelA}/launch-timer/stop`, { method: 'POST', token: methodeToken, body: {} })
+    const done = await stage(modelA, 'lancement')
+    assert.equal(done.status, 'terminee')
+    assert.equal(done.end, today)
+  })
+
+  await t.test('timeline: activité sans signal de fin → En cours (postes, finale, dépôt, export — jamais Terminée même à 100% exporté)', async () => {
+    await call(`/poste/models/${modelA}`, { method: 'PUT', token: coupeToken, body: { percentage: 100, note: '' } })
+    const coupe = await stage(modelA, 'coupe')
+    assert.equal(coupe.status, 'en_cours')
+    assert.equal(coupe.start, today)
+    await call(`/logistics/models/${modelA}/exports`, { method: 'POST', token: logisticsToken, body: { description: 'Lot 1', quantite: 50, date: today } })
+    const exp = await stage(modelA, 'export')
+    assert.equal(exp.status, 'en_cours')
+    assert.deepEqual(exp.detail, { exported: 50, target: 50 })
+    await call(`/methode/models/${modelA}/planning/days`, { method: 'POST', token: methodeToken, body: { date: today } })
+    const planning = await stage(modelA, 'planning')
+    assert.equal(planning.status, 'planifie')
+    assert.equal(planning.start, today)
+  })
+
+  await t.test('timeline: Production & Qualité par couleur (pas de mélange), Qualité jamais « Terminée » à la clôture', async () => {
+    assert.equal((await call(`/production/models/${variantA}/hourly/0`, { method: 'PUT', token: productionToken, body: { qty: 7, date: today } })).status, 200)
+    assert.equal((await call(`/quality/models/${variantA}/hourly/0`, { method: 'PUT', token: qualityToken, body: { pieceRetouche: 1, date: today } })).status, 200)
+
+    const vProd = await stage(variantA, 'production')
+    assert.equal(vProd.status, 'en_cours')
+    assert.deepEqual(vProd.detail, { produced: 7, target: 20 })
+    assert.equal((await stage(variantA, 'qualite')).status, 'en_cours')
+    // The main model's own colour has no production yet: not mixed in.
+    assert.equal((await stage(modelA, 'production')).status, 'non_commencee')
+    assert.equal((await stage(modelA, 'qualite')).status, 'non_commencee')
+    // Stages Atlas only records on the main model: said so on a colour.
+    assert.equal((await stage(variantA, 'lancement')).status, 'suivi_modele_principal')
+    assert.equal((await stage(variantA, 'export')).status, 'suivi_modele_principal')
+
+    assert.equal((await call(`/production/models/${modelA}/hourly/1`, { method: 'PUT', token: productionToken, body: { qty: 3, date: today } })).status, 200)
+    assert.deepEqual((await stage(modelA, 'production')).detail, { produced: 3, target: 50 })
+
+    // Close the model (existing lifecycle route, unchanged).
+    assert.equal((await call(`/models/${modelA}/close`, { method: 'POST', token: methodeToken })).status, 200)
+    assert.equal((await stage(modelA, 'production')).status, 'terminee')
+    assert.equal((await stage(variantA, 'production')).status, 'terminee')
+    assert.equal((await stage(variantA, 'qualite')).status, 'en_cours') // closure is NOT a quality signal
+    assert.equal((await stage(modelA, 'qualite')).status, 'non_commencee')
+    assert.equal((await stage(modelA, 'coupe')).status, 'donnees_insuffisantes')
+    assert.equal((await stage(modelA, 'export')).status, 'donnees_insuffisantes')
+    assert.equal((await stage(modelA, 'finale')).status, 'non_commencee')
+    assert.equal((await stage(modelA, 'lancement')).status, 'terminee')
+  })
+
+  // --- Compatibility --------------------------------------------------------
+
+  await t.test('ancien modèle sans données Fiche: la Fiche et le tableau de bord public se chargent', async () => {
+    const legacyId = 'mdl_test_fiche_legacy'
+    const now = new Date().toISOString()
+    await run(
+      `INSERT INTO models (id, client, qte_totale, chain_number, active, status, created_at, updated_at)
+       VALUES ($1, 'TEST_LEGACY', 10, 7, 0, 'active', $2, $2)`,
+      [legacyId, now]
+    )
+    created.push(legacyId)
+    const fiche = await call(`/models/${legacyId}/fiche`, { token: productionToken })
+    assert.equal(fiche.status, 200)
+    assert.deepEqual(fiche.data.documents, [])
+    assert.deepEqual(fiche.data.composition, [])
+    assert.ok(fiche.data.timeline.length > 0)
+    assert.equal((await call(`/models/${legacyId}/dashboard`)).status, 200)
+    assert.equal((await call('/models/does-not-exist/fiche', { token: productionToken })).status, 404)
+  })
+})
+
+test('Ask Atlas: bouton « Connexion » vers /departements quand la connexion est requise', () => {
+  const src = readFileSync(path.join(REPO_ROOT, 'client/src/pages/Ask.jsx'), 'utf8')
+  assert.match(src, /to="\/departements"/)
+  assert.match(src, />\s*Connexion\s*</)
 })

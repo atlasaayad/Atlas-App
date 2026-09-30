@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import GlowCard from '../components/GlowCard'
 import { api } from '../lib/api'
 import { CHAIN_NUMBERS } from '../lib/constants'
@@ -48,7 +49,7 @@ export default function Ask() {
           : err?.data?.error === 'daily_limit_reached'
             ? 'تم الوصول للحد اليومي، جرب بكرة 🙏'
             : 'صار خطأ، حاول مرة ثانية.'
-      setMessages((m) => [...m, { role: 'assistant', text }])
+      setMessages((m) => [...m, { role: 'assistant', text, needsLogin: err?.status === 401 }])
     } finally {
       setLoading(false)
     }
@@ -107,6 +108,14 @@ export default function Ask() {
                 }`}
               >
                 {m.text}
+                {m.needsLogin && (
+                  <Link
+                    to="/departements"
+                    className="mt-2 flex h-10 w-fit items-center rounded-md border border-turquoise/50 px-4 text-sm font-medium text-turquoise active:bg-turquoise/10"
+                  >
+                    Connexion
+                  </Link>
+                )}
               </div>
             </div>
           ))}

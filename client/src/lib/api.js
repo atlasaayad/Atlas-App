@@ -25,7 +25,11 @@ export function clearDeptToken(deptKey) {
 // Any department's token currently held by this browser tab — for the
 // endpoints open to whoever is logged in right now, whatever their
 // department (Ask Atlas). null when no department has entered its PIN yet.
-export function getAnyDeptToken() {
+export function getAnyDeptToken(preferredDeptKeys = []) {
+  for (const deptKey of preferredDeptKeys) {
+    const token = getDeptToken(deptKey)
+    if (token) return token
+  }
   for (let i = 0; i < sessionStorage.length; i++) {
     const key = sessionStorage.key(i)
     if (key?.startsWith('atlas_token_')) return sessionStorage.getItem(key)
@@ -77,6 +81,30 @@ async function request(path, { method = 'GET', body, token, timeoutMs = REQUEST_
     throw error
   }
   return data
+}
+
+// Fiche Modèle document upload: 1) Atlas authorizes it and picks the
+// storage pathname, 2) the file goes STRAIGHT from the browser to the
+// private Blob store with a short-lived presigned PUT (never through the
+// Atlas API — Vercel's function body limit is ~4.5 MB), 3) Atlas checks
+// what really landed there before recording it. The Blob SDK is loaded on
+// demand, so the public dashboards never download it.
+async function uploadFicheDocument(token, modelId, file, mimeType, onProgress) {
+  const { ticket, pathname } = await request(`/models/${modelId}/documents/upload-request`, {
+    method: 'POST',
+    body: { filename: file.name, mimeType, sizeBytes: file.size },
+    token,
+  })
+  const { uploadPresigned } = await import('@vercel/blob/client')
+  await uploadPresigned(pathname, file, {
+    access: 'private',
+    contentType: mimeType,
+    handleUploadUrl: `${BASE}/models/${modelId}/documents/presign`,
+    clientPayload: ticket,
+    headers: { Authorization: `Bearer ${token}` },
+    onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
+  })
+  return request(`/models/${modelId}/documents`, { method: 'POST', body: { ticket }, token, timeoutMs: 30000 })
 }
 
 export const api = {
@@ -207,6 +235,16 @@ export const api = {
     updateWorkHour: (token, id, start, end) =>
       request(`/settings/work-hours/${id}`, { method: 'PUT', body: { start, end }, token }),
     deleteWorkHour: (token, id) => request(`/settings/work-hours/${id}`, { method: 'DELETE', token }),
+  },
+  fiche: {
+    get: (token, modelId) => request(`/models/${modelId}/fiche`, { token }),
+    saveComposition: (token, modelId, rows) =>
+      request(`/models/${modelId}/composition`, { method: 'PUT', body: { rows }, token }),
+    uploadDocument: uploadFicheDocument,
+    openDocument: (token, modelId, docId) => request(`/models/${modelId}/documents/${docId}/open`, { method: 'POST', token }),
+    deleteDocument: (token, modelId, docId) => request(`/models/${modelId}/documents/${docId}`, { method: 'DELETE', token }),
+    getFactory: (token) => request('/factory-info', { token }),
+    saveFactory: (token, factory) => request('/factory-info', { method: 'PUT', body: factory, token }),
   },
   feedback: {
     submit: (token, message) => request('/settings/feedback', { method: 'POST', body: { message }, token }),
