@@ -3,7 +3,7 @@
 > Read this file before any task. Update it at the end of every merged PR (sections 4, 6 and 7).
 > Never write secrets here (PINs, tokens, keys, passwords).
 
-Last update: 2026-09-30 (PR #47 — pre-trial fixes, not merged yet)
+Last update: 2026-09-30 (after PR #47 — pre-trial fixes, phone-tested on preview)
 
 ---
 
