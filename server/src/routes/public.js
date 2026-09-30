@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { all, get } from '../db/index.js'
-import { verifyPin, issueToken, requireDept, clientIp } from '../auth.js'
+import { verifyPin, issueToken, requireDept, requireAnyDept, clientIp } from '../auth.js'
 import { DEPARTMENTS, CHAIN_NUMBERS, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels, getFamilyIds, roleInChain } from '../openModels.js'
@@ -100,9 +100,26 @@ publicRouter.get('/chains', async (req, res) => {
   )
 })
 
-publicRouter.get('/models/:id', async (req, res) => {
+// Fields anyone may read without a PIN (identity, quantities, VT/DT). The
+// gamme (operations, machines, times), the Commande number, the launch team
+// names and the required headcount are for logged-in departments only.
+const PUBLIC_MODEL_FIELDS = [
+  'id', 'client', 'dessin', 'chain_number', 'status', 'active', 'qte_totale', 'debut', 'fin_prevue',
+  'vt', 'dt', 'nd', 'parent_model_id', 'variant_label', 'image_url', 'closed_at',
+]
+
+// No token → public view. A token that is sent but invalid/expired → 401
+// (never a silently reduced view: Méthode would then show an empty gamme
+// and could save over the real one). Valid token → full detail, as before.
+publicRouter.get('/models/:id', (req, res, next) => {
+  if (!req.headers.authorization) return sendModel(req, res, false).catch(next)
+  return requireAnyDept()(req, res, () => sendModel(req, res, true).catch(next))
+})
+
+async function sendModel(req, res, full) {
   const model = await get('SELECT * FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+  if (!full) return res.json(Object.fromEntries(PUBLIC_MODEL_FIELDS.map((f) => [f, model[f] ?? null])))
   const [gamme, effectifRows, launchTimerRow, chainSpecialties] = await Promise.all([
     all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id]),
     all('SELECT * FROM effectif_requis WHERE model_id = $1', [model.id]),
@@ -116,7 +133,7 @@ publicRouter.get('/models/:id', async (req, res) => {
   // that must never leak back into a live entry screen.
   for (const r of effectifRows) if (r.specialty in effectif) effectif[r.specialty] = r.required
   res.json({ ...model, gamme, effectif, launchTimer: formatLaunchTimer(launchTimerRow) })
-})
+}
 
 // Raw config + timestamps only — the ticking countdown/overrun display is
 // derived from these client-side (every second) using the same
