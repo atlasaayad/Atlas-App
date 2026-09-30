@@ -54,6 +54,7 @@ export function ensureSchema() {
       .then(migrateQualityHistoryUniqueKey)
       .then(migratePlanningDaysBackfill)
       .then(migrateModelStatus)
+      .then(dropRemovedPredictTables)
       .catch((err) => {
         schemaReady = null
         throw err
@@ -640,6 +641,21 @@ async function migratePlanningDaysBackfill() {
 // Couleur/Variante variants, so nothing that was hidden before reappears.
 // Guarded by a config flag so it runs once per database — after that,
 // closing is only ever the explicit, confirmed action, never automatic.
+// The football "Predict" app was removed from Atlas (see git history before
+// c4e648d); these were its only two tables — standalone (no foreign key,
+// view or Atlas code refers to them). IF EXISTS makes this a no-op on every
+// boot after the first. Deliberately NOT CASCADE (it would refuse rather
+// than touch anything else), and a failure here is only logged: this
+// clean-up must never be able to stop Atlas from starting.
+export async function dropRemovedPredictTables() {
+  try {
+    await run('DROP TABLE IF EXISTS predict_analysis_usage')
+    await run('DROP TABLE IF EXISTS predict_football_cache')
+  } catch (err) {
+    console.error('dropRemovedPredictTables failed (ignored, Atlas unaffected):', err)
+  }
+}
+
 export async function migrateModelStatus() {
   const done = await get('SELECT value FROM config WHERE key = $1', ['models_status_backfilled'])
   if (done) return
