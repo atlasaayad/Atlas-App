@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import GlowCard from './GlowCard'
 import { api } from '../lib/api'
+import { WARNING_LIMITS, confirmIfLarge } from '../lib/warnings'
 import { useSaveStatus } from '../hooks/useSaveStatus'
 import ErrorNote from './ErrorNote'
 import { errorMessage } from '../lib/errors'
@@ -57,6 +58,7 @@ export default function PersonnelAdminCard({ token, updateFn }) {
 
   async function submit(e) {
     e.preventDefault()
+    if (!confirmIfLarge('Personnel administratif', total, WARNING_LIMITS.personnelAdmin)) return
     const { ok } = await save.run(() => updateFn(token, selectedDate, Number(total) || 0))
     if (ok) {
       // Only the cumulative figure is refreshed; a failure here is not a

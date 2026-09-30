@@ -6,6 +6,7 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { WARNING_LIMITS, confirmIfLarge } from '../../lib/warnings'
 import { errorMessage } from '../../lib/errors'
 import { todayInFactoryTZ } from '../../lib/date'
 
@@ -109,6 +110,7 @@ export default function ProductionForm({ token, chainNumber }) {
 
   async function saveSlot(idx) {
     const slot = hourlySlots.find((s) => s.index === idx)
+    if (!confirmIfLarge('Production', slot?.qty, WARNING_LIMITS.productionPerHour)) return
     setSavingSlot(idx)
     setSlotErrors((s) => ({ ...s, [idx]: false }))
     try {
@@ -149,6 +151,7 @@ export default function ProductionForm({ token, chainNumber }) {
     const slot = hourlySlots.find((s) => s.index === idx)
     const color = slot?.byModel.find((c) => c.modelId === colorModelId)
     const key = `${idx}:${colorModelId}`
+    if (!confirmIfLarge('Production', color?.qty, WARNING_LIMITS.productionPerHour)) return
     setSavingSlot(key)
     setSlotErrors((s) => ({ ...s, [key]: false }))
     try {
@@ -165,6 +168,7 @@ export default function ProductionForm({ token, chainNumber }) {
 
   async function saveTotals(e) {
     e.preventDefault()
+    if (!confirmIfLarge('Total entré', totalEntree, WARNING_LIMITS.totalEntree)) return
     setSavingTotals(true)
     setTotalsError(false)
     try {

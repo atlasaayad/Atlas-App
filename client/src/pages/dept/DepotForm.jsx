@@ -6,6 +6,7 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { WARNING_LIMITS, confirmIfLarge } from '../../lib/warnings'
 import { useSaveStatus } from '../../hooks/useSaveStatus'
 import ErrorNote from '../../components/ErrorNote'
 
@@ -28,6 +29,7 @@ export default function DepotForm({ token, chainNumber }) {
 
   async function submit(e) {
     e.preventDefault()
+    if (!confirmIfLarge('Total pièces sur dépôt', totalPieces, WARNING_LIMITS.depotPieces)) return
     const { ok } = await save.run(() => api.depot.update(token, modelId, Number(totalPieces), Number(effectifTotal)))
     if (ok) refresh()
   }

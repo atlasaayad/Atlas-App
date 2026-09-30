@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { all, run, logAudit } from '../db/index.js'
 import { requireDept, requireAnyDept } from '../auth.js'
+import { reject, normalizeName, rejectBadWorkHour } from '../validation.js'
 import { getSpecialties, addSpecialty, renameSpecialty, deleteSpecialty } from '../specialties.js'
 import { getWorkHours, addWorkHour, updateWorkHour, deleteWorkHour } from '../workHours.js'
 
@@ -14,6 +15,20 @@ const GROUP_KEYS = new Set(['chain', 'finale'])
 // SettingsGate.jsx — there is no separate "settings" PIN).
 const requireSettings = requireDept(['methode', 'patron'])
 
+// A new (or renamed) specialty that differs from an EXISTING one only by
+// capitals / spaces / accents would split its attendance data in two —
+// refused. Exact matches keep their current behaviour (add: no-op; rename:
+// the deliberate merge in specialties.js). Existing rows are never touched.
+async function rejectSimilarSpecialty(res, groupKey, newName, currentName = null) {
+  const wanted = String(newName || '').trim()
+  if (!wanted) return false
+  const key = normalizeName(wanted)
+  const existing = (await getSpecialties(groupKey)).find((n) => n !== currentName && normalizeName(n) === key)
+  if (!existing) return false
+  if (currentName !== null && existing === wanted) return false // rename onto an exact name = existing merge
+  return reject(res, 'similar_specialty_exists', `كاين ديجا تخصص بنفس الاسم: "${existing}"`, `Une spécialité identique existe déjà : « ${existing} »`, { existing })
+}
+
 settingsRouter.get('/settings/specialties/:groupKey', requireSettings, async (req, res) => {
   const { groupKey } = req.params
   if (!GROUP_KEYS.has(groupKey)) return res.status(400).json({ error: 'invalid_group' })
@@ -23,6 +38,7 @@ settingsRouter.get('/settings/specialties/:groupKey', requireSettings, async (re
 settingsRouter.post('/settings/specialties/:groupKey', requireSettings, async (req, res) => {
   const { groupKey } = req.params
   if (!GROUP_KEYS.has(groupKey)) return res.status(400).json({ error: 'invalid_group' })
+  if (await rejectSimilarSpecialty(res, groupKey, req.body?.name)) return
   try {
     await addSpecialty(groupKey, req.body?.name)
   } catch (err) {
@@ -35,6 +51,7 @@ settingsRouter.post('/settings/specialties/:groupKey', requireSettings, async (r
 settingsRouter.put('/settings/specialties/:groupKey/:name', requireSettings, async (req, res) => {
   const { groupKey, name } = req.params
   if (!GROUP_KEYS.has(groupKey)) return res.status(400).json({ error: 'invalid_group' })
+  if (await rejectSimilarSpecialty(res, groupKey, req.body?.name, name)) return
   try {
     await renameSpecialty(groupKey, name, req.body?.name)
   } catch (err) {
@@ -62,6 +79,7 @@ settingsRouter.get('/settings/work-hours', requireSettings, async (req, res) => 
 })
 
 settingsRouter.post('/settings/work-hours', requireSettings, async (req, res) => {
+  if (await rejectInvalidSlot(res, req.body?.start, req.body?.end)) return
   try {
     await addWorkHour(req.body?.start, req.body?.end)
   } catch (err) {
@@ -72,6 +90,7 @@ settingsRouter.post('/settings/work-hours', requireSettings, async (req, res) =>
 })
 
 settingsRouter.put('/settings/work-hours/:id', requireSettings, async (req, res) => {
+  if (await rejectInvalidSlot(res, req.body?.start, req.body?.end, req.params.id)) return
   try {
     await updateWorkHour(req.params.id, req.body?.start, req.body?.end)
   } catch (err) {
@@ -80,6 +99,17 @@ settingsRouter.put('/settings/work-hours/:id', requireSettings, async (req, res)
   await logAudit({ deptKey: req.dept, action: 'update_work_hour', details: { id: req.params.id, start: req.body?.start, end: req.body?.end } })
   res.json({ workHours: await getWorkHours() })
 })
+
+// End after start + no overlap with the other slots. Malformed times are
+// left to workHours.js's own check (400 invalid_time), as before.
+async function rejectInvalidSlot(res, start, end, ownId = null) {
+  const TIME = /^([01]\d|2[0-3]):[0-5]\d$/
+  const s = String(start || '').trim()
+  const e = String(end || '').trim()
+  if (!TIME.test(s) || !TIME.test(e)) return false
+  const others = (await getWorkHours()).filter((w) => w.id !== ownId)
+  return rejectBadWorkHour(res, s, e, others)
+}
 
 settingsRouter.delete('/settings/work-hours/:id', requireSettings, async (req, res) => {
   try {

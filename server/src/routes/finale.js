@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative, rejectNegativeMap } from '../validation.js'
 import { getSpecialties } from '../specialties.js'
 
 export const finaleRouter = Router()
@@ -18,8 +19,22 @@ const DETAIL_FIELDS = [
   'moyenneProdControleFinal',
 ]
 
+// Screen labels, for validation messages.
+const FIELD_LABELS = {
+  pieceRetouche: 'Pièce retouche',
+  pieceTerminee: 'Pièce terminée',
+  piece2eme: 'Pièce 2ème',
+  encoursSpecial: 'Encours spécial',
+  encoursRepassage: 'Encours repassage',
+  encoursControle: 'Encours contrôle',
+  moyenneProdSpecial: 'Moyenne prod/h spécial',
+  moyenneProdRepassageFinal: 'Moyenne prod/h repassage final',
+  moyenneProdControleFinal: 'Moyenne prod/h contrôle final',
+}
+
 finaleRouter.put('/models/:id', async (req, res) => {
   const { id } = req.params
+  if (rejectNegative(res, [['En cours Finale', req.body?.enCours], ...DETAIL_FIELDS.map((f) => [FIELD_LABELS[f], req.body?.[f]])])) return
   const enCours = Math.max(0, Number(req.body?.enCours) || 0)
   const details = Object.fromEntries(DETAIL_FIELDS.map((f) => [f, Math.max(0, Number(req.body?.[f]) || 0)]))
   const now = new Date().toISOString()
@@ -68,6 +83,7 @@ finaleRouter.put('/models/:id', async (req, res) => {
 finaleRouter.put('/models/:id/effectif', async (req, res) => {
   const { id } = req.params
   const effectif = req.body?.effectif || {}
+  if (rejectNegativeMap(res, effectif)) return
   const now = new Date().toISOString()
   const specialties = await getSpecialties('finale')
   for (const spec of specialties) {

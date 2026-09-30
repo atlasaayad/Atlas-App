@@ -3162,3 +3162,153 @@ test('Tables Predict supprimées, sans toucher aux tables Atlas', async () => {
   assert.deepEqual(atlasTablesAfter, atlasTablesBefore)
   assert.equal((await get('SELECT COUNT(*) AS n FROM models')).n, modelsBefore.n)
 })
+
+// ---------------------------------------------------------------------------
+// Batch B — server-side validation (400 + bilingual message). Only new input
+// is checked; nothing existing is modified.
+// ---------------------------------------------------------------------------
+
+test('Validation serveur: valeurs impossibles refusées avec un message AR/FR', async (t) => {
+  const TEST_CHAIN = 8
+  const today = todayInFactoryTZ()
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const qualityToken = await login('quality', '7777')
+  const finaleToken = await login('finale', '1313')
+  const depotToken = await login('depot', '1010')
+  const logisticsToken = await login('logistics', '6666')
+  const rhToken = await login('rh', '8888')
+  const patronToken = await login('patron', '3333')
+  assert.equal((await call(`/chains/${TEST_CHAIN}/open-models`)).data.models.length, 0)
+
+  const created = []
+  t.after(async () => {
+    for (const id of created.reverse()) {
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+      await run('DELETE FROM models WHERE id = $1', [id])
+    }
+  })
+  const expect400 = (res, code) => {
+    assert.equal(res.status, 400, JSON.stringify(res.data))
+    assert.equal(res.data.error, code)
+    assert.ok(res.data.message?.ar && res.data.message?.fr, 'bilingual message')
+  }
+
+  await t.test('modèle: Qté totale / Commande négatives et Fin prévue avant Début refusées (création et modification)', async () => {
+    const base = { client: 'TEST_VALID', chainNumber: TEST_CHAIN, debut: today }
+    expect400(await call('/methode/models', { method: 'POST', token: methodeToken, body: { ...base, qteTotale: -50 } }), 'negative_value')
+    expect400(await call('/methode/models', { method: 'POST', token: methodeToken, body: { ...base, commande: -1 } }), 'negative_value')
+    expect400(await call('/methode/models', { method: 'POST', token: methodeToken, body: { ...base, debut: '2026-10-10', finPrevue: '2026-10-01' } }), 'fin_before_debut')
+    const ok = await call('/methode/models', { method: 'POST', token: methodeToken, body: { ...base, qteTotale: 100, finPrevue: today } })
+    assert.equal(ok.status, 201) // same day is fine
+    created.push(ok.data.id)
+    const put = (body) => call(`/methode/models/${ok.data.id}`, { method: 'PUT', token: methodeToken, body: { client: 'TEST_VALID', qteTotale: 100, debut: today, ...body } })
+    expect400(await put({ qteTotale: -5 }), 'negative_value')
+    expect400(await put({ finPrevue: '2000-01-01' }), 'fin_before_debut')
+    expect400(await put({ client: '  ' }), 'client_required')
+    assert.equal((await put({ qteTotale: 150 })).status, 200)
+    expect400(await call(`/methode/models/${ok.data.id}/variants`, { method: 'POST', token: methodeToken, body: { label: 'Rouge', qteTotale: -3 } }), 'negative_value')
+  })
+
+  await t.test('gamme: temps ≤ 0 refusé avec le numéro de ligne; temps valides acceptés', async () => {
+    const id = created[0]
+    const bad = await call(`/methode/models/${id}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', tps: 30 }, { operation: 'B', tps: 0 }] } })
+    expect400(bad, 'invalid_operation_time')
+    assert.equal(bad.data.line, 2)
+    expect400(await call(`/methode/models/${id}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', tps: -30 }] } }), 'invalid_operation_time')
+    assert.equal((await call(`/methode/models/${id}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', tps: 30 }] } })).status, 200)
+  })
+
+  await t.test('quantités négatives refusées partout (production, qualité, finale, dépôt, logistique, effectif, présence, planning, personnel)', async () => {
+    const id = created[0]
+    const cases = [
+      [`/production/models/${id}/hourly/0`, productionToken, { qty: -5, date: today }],
+      [`/production/models/${id}/totals`, productionToken, { totalEntree: -1 }],
+      [`/quality/models/${id}/hourly/0`, qualityToken, { pieceRetouche: -2, date: today }],
+      [`/quality/models/${id}`, qualityToken, { reprises: -1 }],
+      [`/finale/models/${id}`, finaleToken, { enCours: 10, pieceTerminee: -4 }],
+      [`/finale/models/${id}/effectif`, finaleToken, { effectif: { Machiniste: -1 } }],
+      [`/depot/models/${id}`, depotToken, { totalPieces: -8, effectifTotal: 2 }],
+      [`/methode/models/${id}/effectif`, methodeToken, { effectif: { Machinistes: -3 } }],
+      [`/methode/models/${id}/attendance`, methodeToken, { attendance: { Machinistes: -1 }, date: today }],
+      [`/rh/models/${id}/attendance`, rhToken, { attendance: { Machinistes: -1 }, date: today }],
+      [`/methode/models/${id}/planning/${today}`, methodeToken, { hourly: [{ index: 0, qty: -10 }] }],
+      ['/rh/personnel-admin', rhToken, { date: today, total: -1 }],
+      ['/patron/personnel-admin', patronToken, { date: today, total: -1 }],
+    ]
+    for (const [path, token, body] of cases) expect400(await call(path, { method: 'PUT', token, body }), 'negative_value')
+    const logi = await call(`/logistics/models/${id}/exports`, { method: 'POST', token: logisticsToken, body: { description: 'x', quantite: -10, date: today } })
+    expect400(logi, 'negative_value')
+    // Nothing was written by the refused calls.
+    assert.equal(await get('SELECT 1 FROM production_history WHERE model_id = $1', [id]), undefined)
+    assert.equal(await get('SELECT 1 FROM logistics_exports WHERE model_id = $1', [id]), undefined)
+  })
+
+  await t.test('avertissement seulement (pas de blocage): retouches > production, grandes valeurs, zéro', async () => {
+    const id = created[0]
+    assert.equal((await call(`/quality/models/${id}/hourly/0`, { method: 'PUT', token: qualityToken, body: { pieceRetouche: 500, date: today } })).status, 200)
+    assert.equal((await call(`/finale/models/${id}`, { method: 'PUT', token: finaleToken, body: { enCours: 250000 } })).status, 200)
+    assert.equal((await call(`/production/models/${id}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 0 } })).status, 200)
+  })
+})
+
+test('Validation serveur: heures de travail (fin ≤ début, chevauchement) et spécialités quasi identiques', async (t) => {
+  const methodeToken = await login('methode', '1111')
+  const before = (await call('/settings/work-hours', { token: methodeToken })).data.workHours
+  const last = before[before.length - 1]
+  const specialtiesBefore = (await call('/settings/specialties/chain', { token: methodeToken })).data.specialties
+  t.after(async () => {
+    // Restore: drop any slot this test appended, and any test specialty.
+    let wh = (await call('/settings/work-hours', { token: methodeToken })).data.workHours
+    while (wh.length > before.length) {
+      await call(`/settings/work-hours/${wh[wh.length - 1].id}`, { method: 'DELETE', token: methodeToken })
+      wh = (await call('/settings/work-hours', { token: methodeToken })).data.workHours
+    }
+    await run("DELETE FROM specialty_defs WHERE name LIKE 'QA Brod%' OR name LIKE 'qa brod%'")
+  })
+  const add = (start, end) => call('/settings/work-hours', { method: 'POST', token: methodeToken, body: { start, end } })
+
+  await t.test('fin ≤ début refusée; chevauchement refusé (création et modification); bout-à-bout accepté', async () => {
+    let r = await add('18:00', '17:00')
+    assert.equal(r.status, 400)
+    assert.equal(r.data.error, 'end_before_start')
+    assert.ok(r.data.message.ar && r.data.message.fr)
+    assert.equal((await add('17:00', '17:00')).data.error, 'end_before_start')
+    const [h, m] = before[0].start.split(':').map(Number)
+    const inside = `${String(h).padStart(2, '0')}:${String(m + 10).padStart(2, '0')}`
+    r = await add(inside, before[0].end)
+    assert.equal(r.data.error, 'overlapping_slot')
+    assert.equal(r.data.clash, `${before[0].start}-${before[0].end}`)
+    // Touching the last slot's end is fine.
+    const [eh, em] = last.end.split(':').map(Number)
+    const next = `${String(eh + 1).padStart(2, '0')}:${String(em).padStart(2, '0')}`
+    r = await add(last.end, next)
+    assert.equal(r.status, 201)
+    const appended = r.data.workHours[r.data.workHours.length - 1]
+    // Moving it onto an existing slot is refused; changing it to itself is fine.
+    assert.equal((await call(`/settings/work-hours/${appended.id}`, { method: 'PUT', token: methodeToken, body: { start: last.start, end: next } })).data.error, 'overlapping_slot')
+    assert.equal((await call(`/settings/work-hours/${appended.id}`, { method: 'PUT', token: methodeToken, body: { start: last.end, end: next } })).status, 200)
+    // Existing order and slots untouched.
+    const after = (await call('/settings/work-hours', { token: methodeToken })).data.workHours
+    assert.deepEqual(after.slice(0, before.length), before)
+  })
+
+  await t.test('spécialité: même nom à la casse / aux espaces / aux accents près refusée; nom nouveau accepté', async () => {
+    const existing = specialtiesBefore[0] // e.g. "Machinistes"
+    for (const variant of [existing.toLowerCase(), `  ${existing.toUpperCase()}  `, existing.replace(/e/, 'é')]) {
+      const r = await call('/settings/specialties/chain', { method: 'POST', token: methodeToken, body: { name: variant } })
+      assert.equal(r.status, 400, variant)
+      assert.equal(r.data.error, 'similar_specialty_exists')
+      assert.equal(r.data.existing, existing)
+    }
+    const r = await call('/settings/specialties/chain', { method: 'POST', token: methodeToken, body: { name: 'QA Brodeuse' } })
+    assert.equal(r.status, 201)
+    // Renaming onto a near-duplicate of ANOTHER specialty is refused…
+    const ren = await call('/settings/specialties/chain/QA%20Brodeuse', { method: 'PUT', token: methodeToken, body: { name: existing.toLowerCase() } })
+    assert.equal(ren.data.error, 'similar_specialty_exists')
+    // …fixing its own capitals is fine.
+    assert.equal((await call('/settings/specialties/chain/QA%20Brodeuse', { method: 'PUT', token: methodeToken, body: { name: 'QA BRODEUSE' } })).status, 200)
+    const now = (await call('/settings/specialties/chain', { token: methodeToken })).data.specialties
+    assert.deepEqual(now.filter((n) => !/^qa brod/i.test(n)), specialtiesBefore) // nothing existing changed
+  })
+})

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { get, all, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative } from '../validation.js'
 import { todayInFactoryTZ } from '../calc.js'
 import { getWorkHours } from '../workHours.js'
 import { getHourlyEntryTargets } from '../openModels.js'
@@ -67,6 +68,7 @@ productionRouter.get('/models/:id/hourly', async (req, res) => {
 // today), Historique, exports, and the early-warning agent.
 productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   const { id, slotIndex } = req.params
+  if (rejectNegative(res, [['Quantité', req.body?.qty]])) return
   const qty = Number(req.body?.qty) || 0
   const idx = Number(slotIndex)
 
@@ -134,6 +136,7 @@ productionRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
 // table doesn't apply to it.
 productionRouter.put('/models/:id/totals', async (req, res) => {
   const { id } = req.params
+  if (rejectNegative(res, [['Total entré', req.body?.totalEntree]])) return
   const totalEntree = Number(req.body?.totalEntree) || 0
   const now = new Date().toISOString()
   await Promise.all([

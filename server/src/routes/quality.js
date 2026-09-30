@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { nanoid } from 'nanoid'
 import { get, all, run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative } from '../validation.js'
 import { todayInFactoryTZ, computeQualityPct } from '../calc.js'
 import { getWorkHours } from '../workHours.js'
 import { getHourlyEntryTargets } from '../openModels.js'
@@ -99,6 +100,7 @@ qualityRouter.get('/models/:id/hourly', async (req, res) => {
 // normal (single-colour) model's request is unchanged.
 qualityRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
   const { id, slotIndex } = req.params
+  if (rejectNegative(res, [['Pièces retouche', req.body?.pieceRetouche]])) return
   const pieceRetouche = Math.max(0, Number(req.body?.pieceRetouche) || 0)
   const idx = Number(slotIndex)
 
@@ -156,6 +158,7 @@ qualityRouter.put('/models/:id/hourly/:slotIndex', async (req, res) => {
 // is never written here or anywhere else — always computed live.
 qualityRouter.put('/models/:id', async (req, res) => {
   const { id } = req.params
+  if (rejectNegative(res, [['Reprises', req.body?.reprises]])) return
   const reprises = Math.max(0, Number(req.body?.reprises) || 0)
   const now = new Date().toISOString()
   await Promise.all([

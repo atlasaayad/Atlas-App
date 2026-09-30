@@ -1,12 +1,14 @@
 import { Router } from 'express'
 import { run, logAudit } from '../db/index.js'
 import { requireDept } from '../auth.js'
+import { rejectNegative } from '../validation.js'
 
 export const depotRouter = Router()
 depotRouter.use(requireDept('depot'))
 
 depotRouter.put('/models/:id', async (req, res) => {
   const { id } = req.params
+  if (rejectNegative(res, [['Total pièces', req.body?.totalPieces], ['Effectif Dépôt', req.body?.effectifTotal]])) return
   const totalPieces = Math.max(0, Number(req.body?.totalPieces) || 0)
   // effectifTotal — headcount present at this chain's Dépôt, a single number
   // (no specialty breakdown), feeding the "État des effectifs" overview

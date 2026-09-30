@@ -7,6 +7,7 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { WARNING_LIMITS, confirmIfLarge } from '../../lib/warnings'
 import { useSaveStatus } from '../../hooks/useSaveStatus'
 import ErrorNote from '../../components/ErrorNote'
 
@@ -22,6 +23,7 @@ export default function LogisticsForm({ token, chainNumber }) {
 
   async function submit(e) {
     e.preventDefault()
+    if (!confirmIfLarge('Quantité', form.quantite, WARNING_LIMITS.exportQuantity)) return
     const { ok } = await save.run(() => api.logistics.addExport(token, modelId, form))
     if (ok) {
       setForm({ description: '', quantite: '', date: '' })
