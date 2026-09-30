@@ -5,6 +5,10 @@ import { errorMessage } from '../lib/errors'
 import ErrorNote from '../components/ErrorNote'
 import { AVAILABLE_LANGUAGES, getLanguagePreference, setLanguagePreference } from '../lib/languagePreference'
 
+// The language choice is only stored — no screen is translated yet — so it
+// is hidden until real FR/AR (+ right-to-left) support exists (backlog).
+const SHOW_LANGUAGE_SETTING = false
+
 export default function SettingsScreen({ token, onBack }) {
   return (
     <div className="space-y-4">
@@ -19,7 +23,7 @@ export default function SettingsScreen({ token, onBack }) {
       <WorkHoursCard token={token} />
       <FactoryInfoCard token={token} />
       <FeedbackCard token={token} />
-      <LanguageCard />
+      {SHOW_LANGUAGE_SETTING && <LanguageCard />}
     </div>
   )
 }
