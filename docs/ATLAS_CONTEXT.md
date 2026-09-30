@@ -3,7 +3,7 @@
 > Read this file before any task. Update it at the end of every merged PR (sections 4, 6 and 7).
 > Never write secrets here (PINs, tokens, keys, passwords).
 
-Last update: 2026-09-30 (after PR #46)
+Last update: 2026-09-30 (PR #47 — pre-trial fixes, not merged yet)
 
 ---
 
@@ -52,6 +52,12 @@ Last update: 2026-09-30 (after PR #46)
 - Timeline: never infer "Terminée" from the last activity date. Only explicit signals (launch timer stopped; production = model closed). Qualité is never "Terminée" from model closure alone.
 - Model photos compressed on the phone: JPEG/PNG/WebP ≤ 2.2 MB are uploaded unchanged; anything larger → 1600 px, JPEG 0.85 (lowered to 0.75 / 0.65 only if still too big).
 - Football/Predict app removed completely (code + tables). Never reintroduce.
+- **Errors (client):** every save/load goes through `lib/api.js` (error `kind`) + `lib/errors.js` (the ONE bilingual AR/FR message catalogue) + `useSaveStatus` / `ErrorNote`. A failed save stays red until the next attempt, never hidden by an older "Enregistré ✓", and never clears what was typed. Server messages (`message: {ar, fr}`) are shown as-is.
+- **Expired session:** a 401 on a call that sent a token clears that department's token and shows its PIN pad on top of the form (form stays mounted, values kept). Public screens never send a token → never affected. No retry, no loop.
+- **Server validation** (`server/src/validation.js`, 400 + AR/FR message, new input only, existing rows never modified): no negative quantities anywhere; gamme TPS > 0; Fin prévue ≥ Début; work hours end > start and no overlap (ordering/storage unchanged); specialties differing only by capitals/spaces/accents refused (exact-name rename merge kept).
+- **Warnings (confirm only, never blocking)** in `client/src/lib/warnings.js`: retouches > that hour's production; > 2,000 pieces/hour; Total entré, Qté totale, Commande > 1,000,000; Finale, Dépôt, export > 100,000; operation > 1,800 s; personnel administratif > 1,000.
+- **`/api/models/:id`:** without a token → identity/quantities/VT only (no gamme, machines, Commande, launch team, required headcount); valid token → full detail; token sent but invalid → 401 (never a reduced view).
+- Language option hidden in Réglages until real FR/AR + RTL exists.
 - **No DPP / QR / EU integration yet.** EU textile DPP delegated act expected ~2027, mandatory ~2028-2029. Fiche Modèle (composition, factory identity, stage dates) is the groundwork. Do not display "DPP" or "Passeport numérique" in the UI.
 
 ## 5. Modules in production
@@ -69,10 +75,19 @@ Models & variants (photo, gamme/VT, launch timer) · Planning (manual days, Plan
 | #44 | Fiche Modèle (documents, composition, factory info, timeline) + Ask "Connexion" button |
 | #45 | Client-side photo compression (small images unchanged) + drop Predict tables |
 | #46 | Shared project context: `docs/ATLAS_CONTEXT.md` + root `CLAUDE.md` |
+| #47 | Pre-trial fixes: clear AR/FR errors + expired-session re-login (A), server validation + warnings (B), public `/api/models/:id` restricted (E), typed counters / Patron fits phone / confirm export delete / language hidden (D part) |
 
 ## 7. Known issues / backlog (small, not started)
 - A test depends on the time of day ("Couleur/Variante … total combiné exact" fails before ~12:00 factory time) → make it time-independent.
 - Downloaded documents get the random storage name → serve with the original filename (Content-Disposition).
+- Language: real FR/AR translation + right-to-left layout (option hidden for now) — QA #8, #18.
+- Patron model list: colour variant shown as a duplicate model name without colour; closed models not marked (QA #12).
+- "Client · Dessin" labels: empty "()" when no Dessin; model pickers mix dessin/client (QA #13).
+- Excel export is a raw database dump (technical columns, ids, UTC timestamps) → readable export (QA #15).
+- Journal shows some raw action codes (e.g. `update_quality_hourly`) (QA #16).
+- Coupe/postes % wording ("نسبة إنجاز") vs Fiche timeline meaning (health) → one meaning (QA #17).
+- Typos mixing scripts ("بالدépôt"); native grey browser confirm dialogs (QA #19).
+- Public dashboard response still includes `identity.commande` (not displayed) → consider removing.
 - Server code is not linted (ESLint only in `client/`); 26 old style warnings.
 - No CI (GitHub Actions) — tests only run by hand.
 - CORS default preview pattern (`server/src/cors.js`) still also matches the deleted `atlas-app-kfr5` project → remove it.
