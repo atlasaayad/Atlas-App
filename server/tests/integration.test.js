@@ -784,7 +784,7 @@ test('Temps de lancement: Démarrer/Arrêter، هدف تحقق بدون سبب،
       },
     })
     assert.equal(put.status, 200)
-    const model = await call(`/models/${modelId}`)
+    const model = await call(`/models/${modelId}`, { token: methodeToken })
     assert.equal(model.data.launchTimer.objectifHeures, 2)
     assert.equal(model.data.launchTimer.agentMethode, 'Ali')
     assert.equal(model.data.launchTimer.startedAt, null)
@@ -809,7 +809,7 @@ test('Temps de lancement: Démarrer/Arrêter، هدف تحقق بدون سبب،
     assert.equal(stop.status, 200)
     assert.equal(stop.data.overrun, false)
 
-    const model = await call(`/models/${modelId}`)
+    const model = await call(`/models/${modelId}`, { token: methodeToken })
     assert.equal(model.data.launchTimer.responsible, null)
     assert.equal(model.data.launchTimer.reasonCode, null)
 
@@ -864,7 +864,7 @@ test('Temps de lancement: Démarrer/Arrêter، هدف تحقق بدون سبب،
     assert.equal(stop.status, 200)
     assert.equal(stop.data.overrun, true)
 
-    const model = await call(`/models/${modelId2}`)
+    const model = await call(`/models/${modelId2}`, { token: methodeToken })
     assert.equal(model.data.launchTimer.responsible, 'Omar (Mécanicien)')
     assert.equal(model.data.launchTimer.reasonCode, 'machine_breakdown')
     assert.equal(model.data.launchTimer.reasonComment, 'Panne moteur')
@@ -1965,7 +1965,7 @@ test('⚙️ Réglages: gestion des spécialités (ajout/renommage/suppression) 
       if (previouslyActive) await run('UPDATE models SET active = 1 WHERE id = $1', [previouslyActive.id])
     })
 
-    const model = await call(`/models/${settingsModelId}`)
+    const model = await call(`/models/${settingsModelId}`, { token: methodeToken })
     assert.equal(model.data.effectif[TMP], 0) // la nouvelle spécialité apparaît, requis = 0 par défaut
   })
 
@@ -2003,7 +2003,7 @@ test('⚙️ Réglages: gestion des spécialités (ajout/renommage/suppression) 
     const row = await get('SELECT required FROM effectif_requis WHERE model_id = $1 AND specialty = $2', [settingsModelId, TMP_RENAMED])
     assert.equal(row.required, 7)
 
-    const modelAfter = await call(`/models/${settingsModelId}`)
+    const modelAfter = await call(`/models/${settingsModelId}`, { token: methodeToken })
     assert.equal(TMP_RENAMED in modelAfter.data.effectif, false) // n'apparaît plus sur un écran de saisie live
   })
 
@@ -3264,7 +3264,7 @@ test('Validation serveur: heures de travail (fin ≤ début, chevauchement) et s
       await call(`/settings/work-hours/${wh[wh.length - 1].id}`, { method: 'DELETE', token: methodeToken })
       wh = (await call('/settings/work-hours', { token: methodeToken })).data.workHours
     }
-    await run("DELETE FROM specialty_defs WHERE name LIKE 'QA Brod%' OR name LIKE 'qa brod%'")
+    await run("DELETE FROM specialty_defs WHERE name ILIKE 'qa brod%'")
   })
   const add = (start, end) => call('/settings/work-hours', { method: 'POST', token: methodeToken, body: { start, end } })
 
@@ -3310,5 +3310,62 @@ test('Validation serveur: heures de travail (fin ≤ début, chevauchement) et s
     assert.equal((await call('/settings/specialties/chain/QA%20Brodeuse', { method: 'PUT', token: methodeToken, body: { name: 'QA BRODEUSE' } })).status, 200)
     const now = (await call('/settings/specialties/chain', { token: methodeToken })).data.specialties
     assert.deepEqual(now.filter((n) => !/^qa brod/i.test(n)), specialtiesBefore) // nothing existing changed
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Batch E — /api/models/:id: public = identity only; logged in = full detail.
+// ---------------------------------------------------------------------------
+
+test('/api/models/:id: sans connexion, seulement l’identité; connecté, le détail complet', async (t) => {
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const today = todayInFactoryTZ()
+  assert.equal((await call('/chains/8/open-models')).data.models.length, 0)
+  const res = await call('/methode/models', { method: 'POST', token: methodeToken, body: { client: 'TEST_PUBLIC_MODEL', dessin: 'PUB-1', chainNumber: 8, qteTotale: 300, commande: 4521, debut: today } })
+  const id = res.data.id
+  t.after(async () => {
+    await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+    await run('DELETE FROM models WHERE id = $1', [id])
+  })
+  await call(`/methode/models/${id}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'Montage col secret', machine: '301', tps: 45 }] } })
+  await call(`/methode/models/${id}/launch-timer`, { method: 'PUT', token: methodeToken, body: { objectifHeures: 2, agentMethode: 'Ali', chefChaine: 'Samira' } })
+
+  await t.test('public: pas de gamme, opérations, machines, commande, équipe de lancement ni effectif requis', async () => {
+    const pub = await call(`/models/${id}`)
+    assert.equal(pub.status, 200)
+    for (const k of ['gamme', 'commande', 'launchTimer', 'effectif', 'close_prompt_dismissed_on']) assert.equal(k in pub.data, false, k)
+    const body = JSON.stringify(pub.data)
+    for (const secret of ['Montage col secret', '301', '4521', 'Ali', 'Samira']) assert.ok(!body.includes(secret), secret)
+    assert.equal(pub.data.client, 'TEST_PUBLIC_MODEL')
+    assert.equal(pub.data.dessin, 'PUB-1')
+    assert.equal(pub.data.chain_number, 8)
+    assert.equal(pub.data.qte_totale, 300)
+    assert.equal(pub.data.status, 'active')
+    assert.equal(pub.data.vt, 0.75)
+  })
+
+  await t.test('connecté (n’importe quel département): détail complet comme avant', async () => {
+    for (const token of [methodeToken, productionToken]) {
+      const full = await call(`/models/${id}`, { token })
+      assert.equal(full.status, 200)
+      assert.equal(full.data.gamme[0].operation, 'Montage col secret')
+      assert.equal(full.data.commande, 4521)
+      assert.equal(full.data.launchTimer.agentMethode, 'Ali')
+      assert.ok('effectif' in full.data)
+    }
+  })
+
+  await t.test('jeton envoyé mais invalide/expiré → 401 (jamais une vue réduite silencieuse)', async () => {
+    assert.equal((await call(`/models/${id}`, { token: 'expired.invalid.token' })).status, 401)
+    assert.equal((await call('/models/does-not-exist')).status, 404)
+  })
+
+  await t.test('écrans publics inchangés sans connexion', async () => {
+    for (const p of ['/chains', `/chains/8/dashboard`, `/models/${id}/dashboard`, '/chains/ranking', '/early-warnings', '/effectifs/overview', '/models']) {
+      assert.equal((await call(p)).status, 200, p)
+    }
+    const dash = await call('/chains/8/dashboard')
+    assert.equal(dash.data.identity.client, 'TEST_PUBLIC_MODEL')
   })
 })

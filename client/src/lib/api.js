@@ -160,7 +160,9 @@ export const api = {
   getRanking: () => request('/chains/ranking'),
   getPersonnelAdmin: (token, date) => request(`/personnel-admin?date=${date}`, { token }),
   getEffectifsOverview: () => request('/effectifs/overview'),
-  getModel: (id) => request(`/models/${id}`),
+  // Full detail (gamme, effectif, launch team) needs a login; without a
+  // token the server returns only the public identity fields.
+  getModel: (token, id) => request(`/models/${id}`, { token }),
   getDashboard: (id) => request(`/models/${id}/dashboard`),
   getDashboardByChain: (chainNumber) => request(`/chains/${chainNumber}/dashboard`),
   getChainOpenModels: (chainNumber, kind) =>

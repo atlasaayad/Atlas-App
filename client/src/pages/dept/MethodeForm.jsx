@@ -81,7 +81,7 @@ export default function MethodeForm({ token, chainNumber }) {
       // Dashboard fetched alongside the model so the Présence tab can show
       // today's actual headcount (rh_attendance) next to the required
       // headcount (effectif_requis) — getModel() alone only has the latter.
-      const [m, dash] = await Promise.all([api.getModel(targetId), api.getDashboard(targetId)])
+      const [m, dash] = await Promise.all([api.getModel(token, targetId), api.getDashboard(targetId)])
       setModel(m)
       setDashboard(dash)
       setSelectedModelId(targetId)
