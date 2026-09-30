@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, getAnyDeptToken } from '../lib/api'
+import { errorMessage } from '../lib/errors'
 
 // Fiche Modèle — opened from a model's card on Home (public). Everything
 // inside requires a department login: without one, only a "Connexion"
@@ -40,12 +41,15 @@ const ERRORS = {
   fiber_custom_required: 'Précisez le nom de la fibre « Autre ».',
   fiber_required: 'Choisissez une fibre pour chaque ligne.',
   storage_error: 'Erreur du stockage des documents — réessayez.',
-  request_timeout: 'Délai dépassé — vérifiez la connexion et réessayez.',
-  network_error: 'Connexion impossible — vérifiez le réseau.',
 }
 
+// Fiche-specific codes keep their precise wording; everything else (no
+// connection, session expired, server error…) uses the shared messages.
+// Errors thrown by the Blob SDK during the direct upload have no HTTP kind.
 function errorText(err) {
-  return ERRORS[err?.message] || ERRORS[err?.data?.error] || 'Une erreur est survenue — réessayez.'
+  if (ERRORS[err?.data?.error]) return ERRORS[err.data.error]
+  if (String(err?.name || '').startsWith('Blob')) return ERRORS.storage_error
+  return errorMessage(err)
 }
 
 function formatDate(value) {
@@ -124,7 +128,7 @@ export default function FicheModeleModal({ modelId, title, onClose }) {
             </Link>
           </div>
         ) : error ? (
-          <div className="rounded-md border border-red-500/40 p-3 text-sm text-red-300">{error}</div>
+          <div className="whitespace-pre-line rounded-md border border-red-500/40 p-3 text-sm text-red-300">{error}</div>
         ) : !fiche ? (
           <div className="py-10 text-center text-sm text-slate-400">Chargement…</div>
         ) : (
@@ -248,7 +252,7 @@ function DocumentsSection({ token, fiche, onChanged }) {
     >
       {!configured && <p className="mb-2 text-sm text-amber-300">Stockage des documents non configuré</p>}
       {canManage && configured && <p className="mb-2 text-xs text-slate-500">PDF, JPG ou PNG — 10 Mo maximum par fichier.</p>}
-      {message && <p className="mb-2 text-sm text-red-300">{message}</p>}
+      {message && <p className="mb-2 whitespace-pre-line text-sm text-red-300">{message}</p>}
       {fiche.documents.length === 0 ? (
         <p className="text-sm text-slate-500">Aucun document</p>
       ) : (
@@ -478,7 +482,7 @@ function CompositionSection({ token, fiche, onSaved }) {
             </ul>
           )}
           {missingCustom && <p className="text-sm text-amber-300">Précisez le nom pour chaque « Autre ».</p>}
-          {message && <p className="text-sm text-red-300">{message}</p>}
+          {message && <p className="whitespace-pre-line text-sm text-red-300">{message}</p>}
 
           <div className="flex gap-2">
             <button
@@ -546,6 +550,7 @@ function TimelineSection({ token, fiche }) {
   const [colourId, setColourId] = useState(fiche.model.id)
   const [timeline, setTimeline] = useState(fiche.timeline)
   const [loading, setLoading] = useState(false)
+  const [pickError, setPickError] = useState('')
 
   useEffect(() => {
     setTimeline(fiche.timeline)
@@ -556,8 +561,11 @@ function TimelineSection({ token, fiche }) {
     setColourId(id)
     if (id === fiche.model.id) return setTimeline(fiche.timeline)
     setLoading(true)
+    setPickError('')
     try {
       setTimeline((await api.fiche.get(token, id)).timeline)
+    } catch (err) {
+      setPickError(errorText(err))
     } finally {
       setLoading(false)
     }
@@ -578,6 +586,7 @@ function TimelineSection({ token, fiche }) {
           ))}
         </div>
       )}
+      {pickError && <p className="mb-2 whitespace-pre-line text-sm text-red-300">{pickError}</p>}
       {loading ? (
         <div className="py-4 text-center text-sm text-slate-400">Chargement…</div>
       ) : (

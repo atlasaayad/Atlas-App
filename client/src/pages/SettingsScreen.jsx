@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import GlowCard from '../components/GlowCard'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from '../components/ErrorNote'
 import { AVAILABLE_LANGUAGES, getLanguagePreference, setLanguagePreference } from '../lib/languagePreference'
 
 export default function SettingsScreen({ token, onBack }) {
@@ -48,6 +50,7 @@ function SpecialtiesCard({ token }) {
       .then((r) => {
         if (!cancelled) setSpecialties(r.specialties)
       })
+      .catch((err) => !cancelled && setError(errorMessage(err, { load: true })))
       .finally(() => !cancelled && setLoading(false))
     return () => {
       cancelled = true
@@ -64,22 +67,34 @@ function SpecialtiesCard({ token }) {
       setSpecialties(r.specialties)
       setNewName('')
     } catch (err) {
-      setError(err.data?.error === 'already_exists' ? 'هاد التخصص موجود من قبل.' : 'فشل الإضافة.')
+      setError(errorMessage(err, { codes: { already_exists: 'هاد التخصص موجود من قبل.' } }))
     } finally {
       setSaving(false)
     }
   }
 
   async function rename(oldName, next) {
-    if (!next.trim() || next.trim() === oldName) return
-    const r = await api.settings.renameSpecialty(token, groupKey, oldName, next.trim())
-    setSpecialties(r.specialties)
+    if (!next.trim() || next.trim() === oldName) return true
+    setError('')
+    try {
+      const r = await api.settings.renameSpecialty(token, groupKey, oldName, next.trim())
+      setSpecialties(r.specialties)
+      return true
+    } catch (err) {
+      setError(errorMessage(err, { codes: { already_exists: 'هاد التخصص موجود من قبل.' } }))
+      return false
+    }
   }
 
   async function remove(name) {
     if (!confirm(`حذف "${name}"؟ البيانات القديمة بيه تبقى محفوظة بالتاريخ، غير كيختفي من شاشات الإدخال الجديدة.`)) return
-    const r = await api.settings.deleteSpecialty(token, groupKey, name)
-    setSpecialties(r.specialties)
+    setError('')
+    try {
+      const r = await api.settings.deleteSpecialty(token, groupKey, name)
+      setSpecialties(r.specialties)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
   }
 
   return (
@@ -127,7 +142,7 @@ function SpecialtiesCard({ token }) {
           + إضافة
         </button>
       </form>
-      {error && <div className="mt-2 text-sm text-status-bad">{error}</div>}
+      <ErrorNote message={error} className="mt-2" />
     </GlowCard>
   )
 }
@@ -147,8 +162,7 @@ function SpecialtyRow({ name, onRename, onDelete }) {
         />
         <button
           onClick={async () => {
-            await onRename(value)
-            setEditing(false)
+            if (await onRename(value)) setEditing(false)
           }}
           className="h-10 shrink-0 rounded border border-turquoise/50 px-3 text-xs text-turquoise"
         >
@@ -197,6 +211,7 @@ function WorkHoursCard({ token }) {
       .then((r) => {
         if (!cancelled) setWorkHours(r.workHours)
       })
+      .catch((err) => !cancelled && setError(errorMessage(err, { load: true })))
       .finally(() => !cancelled && setLoading(false))
     return () => {
       cancelled = true
@@ -213,22 +228,34 @@ function WorkHoursCard({ token }) {
       setWorkHours(r.workHours)
       setNewStart('')
       setNewEnd('')
-    } catch {
-      setError('فشلت الإضافة — تحقق من الوقت.')
+    } catch (err) {
+      setError(errorMessage(err))
     } finally {
       setSaving(false)
     }
   }
 
   async function update(id, start, end) {
-    const r = await api.settings.updateWorkHour(token, id, start, end)
-    setWorkHours(r.workHours)
+    setError('')
+    try {
+      const r = await api.settings.updateWorkHour(token, id, start, end)
+      setWorkHours(r.workHours)
+      return true
+    } catch (err) {
+      setError(errorMessage(err))
+      return false
+    }
   }
 
   async function remove(id) {
     if (!confirm('حذف آخر شريحة ساعة؟')) return
-    const r = await api.settings.deleteWorkHour(token, id)
-    setWorkHours(r.workHours)
+    setError('')
+    try {
+      const r = await api.settings.deleteWorkHour(token, id)
+      setWorkHours(r.workHours)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
   }
 
   return (
@@ -275,7 +302,7 @@ function WorkHoursCard({ token }) {
           + إضافة شريحة
         </button>
       </form>
-      {error && <div className="mt-2 text-sm text-status-bad">{error}</div>}
+      <ErrorNote message={error} className="mt-2" />
     </GlowCard>
   )
 }
@@ -304,8 +331,7 @@ function WorkHourRow({ workHour, isLast, onUpdate, onDelete }) {
         />
         <button
           onClick={async () => {
-            await onUpdate(start, end)
-            setEditing(false)
+            if (await onUpdate(start, end)) setEditing(false)
           }}
           className="h-10 shrink-0 rounded border border-turquoise/50 px-3 text-xs text-turquoise"
         >
@@ -367,10 +393,13 @@ function FactoryInfoCard({ token }) {
   const [message, setMessage] = useState('')
 
   useEffect(() => {
-    api.fiche.getFactory(token).then((r) => {
-      setForm({ legalName: '', ice: '', address: '', city: '', country: 'Maroc', ...(r.factory || {}) })
-      setCanEdit(r.canEdit)
-    })
+    api.fiche
+      .getFactory(token)
+      .then((r) => {
+        setForm({ legalName: '', ice: '', address: '', city: '', country: 'Maroc', ...(r.factory || {}) })
+        setCanEdit(r.canEdit)
+      })
+      .catch((err) => setMessage(errorMessage(err, { load: true })))
   }, [token])
 
   async function save(e) {
@@ -382,7 +411,7 @@ function FactoryInfoCard({ token }) {
       setForm(r.factory)
       setMessage('✓ Enregistré')
     } catch (err) {
-      setMessage(FACTORY_ERRORS[err?.data?.error] || 'Erreur — réessayez.')
+      setMessage(errorMessage(err, { codes: FACTORY_ERRORS }))
     } finally {
       setSaving(false)
     }
@@ -390,7 +419,9 @@ function FactoryInfoCard({ token }) {
 
   return (
     <GlowCard title="🏭 Informations usine (Fiche Modèle)">
-      {!form ? (
+      {!form && message ? (
+        <ErrorNote message={message} className="py-2" />
+      ) : !form ? (
         <div className="py-4 text-center text-sm text-slate-500">Chargement…</div>
       ) : (
         <form onSubmit={save} className="space-y-3">
@@ -408,7 +439,7 @@ function FactoryInfoCard({ token }) {
               />
             </label>
           ))}
-          {message && <p className={`text-sm ${message.startsWith('✓') ? 'text-emerald-300' : 'text-red-300'}`}>{message}</p>}
+          {message && <p className={`whitespace-pre-line text-sm ${message.startsWith('✓') ? 'text-emerald-300' : 'text-red-300'}`}>{message}</p>}
           {canEdit && (
             <button type="submit" disabled={saving} className="h-11 w-full rounded-md bg-turquoise/90 text-sm font-semibold text-navy-950 disabled:opacity-50">
               {saving ? 'Enregistrement…' : 'Enregistrer'}
@@ -422,14 +453,20 @@ function FactoryInfoCard({ token }) {
 
 function FeedbackCard({ token }) {
   const [reports, setReports] = useState(null)
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
-    api.settings.getFeedback(token).then((r) => setReports(r.reports))
+    api.settings
+      .getFeedback(token)
+      .then((r) => setReports(r.reports))
+      .catch((err) => setLoadError(errorMessage(err, { load: true })))
   }, [token])
 
   return (
     <GlowCard title="📩 ملاحظات ومشاكل مُبلَّغة">
-      {reports === null ? (
+      {reports === null && loadError ? (
+        <ErrorNote message={loadError} className="py-2" />
+      ) : reports === null ? (
         <div className="py-4 text-center text-sm text-slate-500">Chargement…</div>
       ) : reports.length === 0 ? (
         <p className="py-2 text-sm text-slate-500">لا توجد ملاحظات بعد.</p>

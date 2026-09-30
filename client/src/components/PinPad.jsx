@@ -1,6 +1,8 @@
 import { useState } from 'react'
 
-export default function PinPad({ deptLabel, deptIcon, onSubmit, error, loading, attemptsRemaining }) {
+// `errorText` replaces "Code incorrect" when the login failed for another
+// reason (no connection, server error) — see DeptLogin.jsx.
+export default function PinPad({ deptLabel, deptIcon, onSubmit, error, errorText, loading, attemptsRemaining }) {
   const [pin, setPin] = useState('')
 
   function press(digit) {
@@ -31,7 +33,8 @@ export default function PinPad({ deptLabel, deptIcon, onSubmit, error, loading, 
         ))}
       </div>
 
-      {error && (
+      {error && errorText && <div className="whitespace-pre-line text-center text-sm text-status-bad">{errorText}</div>}
+      {error && !errorText && (
         <div className="text-center text-sm text-status-bad">
           Code incorrect, réessayez.
           {typeof attemptsRemaining === 'number' && (

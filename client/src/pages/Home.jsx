@@ -14,12 +14,15 @@ import PlanReelCard from '../components/PlanReelCard'
 import FicheModeleModal from '../components/FicheModeleModal'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from '../components/ErrorNote'
 import { CHAIN_NUMBERS, DELAY_REASONS } from '../lib/constants'
 import { computeLaunchTimerState, formatDuration } from '../lib/calc'
 
 export default function Home() {
   const [chains, setChains] = useState([])
   const [chainsLoaded, setChainsLoaded] = useState(false)
+  const [chainsError, setChainsError] = useState(null)
   const [chainNumber, setChainNumber] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [showClassement, setShowClassement] = useState(false)
@@ -38,8 +41,21 @@ export default function Home() {
       )[0]
       if (mostRecent) setChainNumber(mostRecent.chainNumber)
       setChainsLoaded(true)
-    })
-    const id = setInterval(() => api.getChains().then(setChains).catch(() => {}), 20000)
+    }).catch(setChainsError)
+    // Also ends the first-load spinner: a TV that started while the network
+    // was down recovers on its own as soon as a later refresh succeeds.
+    const id = setInterval(
+      () =>
+        api
+          .getChains()
+          .then((data) => {
+            setChains(data)
+            setChainsLoaded(true)
+            setChainsError(null)
+          })
+          .catch(() => {}),
+      20000
+    )
     return () => clearInterval(id)
   }, [])
 
@@ -99,6 +115,7 @@ export default function Home() {
       <EarlyWarningBanner />
 
       {!chainsLoaded && <LoadingSpinner />}
+      {!chainsLoaded && chainsError && <ErrorNote message={errorMessage(chainsError, { load: true })} className="text-center" />}
 
       {chainsLoaded && !chainNumber && (
         <GlowCard>

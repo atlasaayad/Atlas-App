@@ -6,10 +6,11 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { errorMessage } from '../../lib/errors'
 import { todayInFactoryTZ } from '../../lib/date'
 
 export default function ProductionForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh, openModels, totalSlots, selectModel } = useChainModel(chainNumber, {
+  const { modelId, dashboard, loading, loadError, refresh, openModels, totalSlots, selectModel } = useChainModel(chainNumber, {
     selectable: true,
     badgeKind: 'production',
   })
@@ -67,12 +68,12 @@ export default function ProductionForm({ token, chainNumber }) {
         setSlotErrors({})
         setHourlyLoading(false)
       })
-      .catch(() => {
+      .catch((err) => {
         // Without this, a failed/timed-out request left `hourlyLoading` stuck
         // at true forever — the spinner never resolves and there's no way to
         // retry short of leaving and re-entering the page.
         if (cancelled) return
-        setHourlyError(true)
+        setHourlyError(err)
         setHourlyLoading(false)
       })
     return () => {
@@ -81,7 +82,7 @@ export default function ProductionForm({ token, chainNumber }) {
   }, [modelId, selectedDate, token, retryTick])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!modelId) return <NoModel chainNumber={chainNumber} />
+  if (!modelId) return <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={refresh} />
 
   const minDate = dashboard.identity.debut || null
 
@@ -118,7 +119,8 @@ export default function ProductionForm({ token, chainNumber }) {
       // The request itself is bounded (see REQUEST_TIMEOUT_MS in api.js), so
       // this always resolves within a few seconds either way — the user is
       // never left staring at a spinner with no explanation.
-      setSlotErrors((s) => ({ ...s, [idx]: err.timedOut ? 'timeout' : true }))
+      setSavedSlots((s) => ({ ...s, [idx]: false }))
+      setSlotErrors((s) => ({ ...s, [idx]: errorMessage(err) }))
     } finally {
       setSavingSlot(null)
     }
@@ -154,7 +156,8 @@ export default function ProductionForm({ token, chainNumber }) {
       setSavedSlots((s) => ({ ...s, [key]: true }))
       refresh()
     } catch (err) {
-      setSlotErrors((s) => ({ ...s, [key]: err.timedOut ? 'timeout' : true }))
+      setSavedSlots((s) => ({ ...s, [key]: false }))
+      setSlotErrors((s) => ({ ...s, [key]: errorMessage(err) }))
     } finally {
       setSavingSlot(null)
     }
@@ -170,7 +173,8 @@ export default function ProductionForm({ token, chainNumber }) {
       refresh()
       setTimeout(() => setTotalsSaved(false), 2000)
     } catch (err) {
-      setTotalsError(err.timedOut ? 'timeout' : true)
+      setTotalsSaved(false)
+      setTotalsError(errorMessage(err))
     } finally {
       setSavingTotals(false)
     }
@@ -209,7 +213,7 @@ export default function ProductionForm({ token, chainNumber }) {
           </div>
         ) : hourlyError ? (
           <div className="flex flex-col items-center gap-2 py-6 text-center">
-            <span className="text-sm text-status-bad">فشل تحميل بيانات الساعات — تحقق من الاتصال.</span>
+            <span className="whitespace-pre-line text-sm text-status-bad">{errorMessage(hourlyError, { load: true })}</span>
             <button
               onClick={() => setRetryTick((t) => t + 1)}
               className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
@@ -261,16 +265,7 @@ export default function ProductionForm({ token, chainNumber }) {
                       )}
                     </button>
                   </div>
-                  {slotErrors[slot.index] === 'timeout' && (
-                    <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
-                      انتهت مهلة الاتصال — الشبكة بطيئة جداً أو مقطوعة. تحقق من الاتصال وحاول مرة ثانية.
-                    </div>
-                  )}
-                  {slotErrors[slot.index] === true && (
-                    <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
-                      فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.
-                    </div>
-                  )}
+                  {slotErrors[slot.index] && <div className="whitespace-pre-line mt-1 pr-[6.75rem] text-xs text-status-bad">{slotErrors[slot.index]}</div>}
                 </div>
               )
             )}
@@ -322,14 +317,7 @@ export default function ProductionForm({ token, chainNumber }) {
             )}
           </button>
         </form>
-        {totalsError === 'timeout' && (
-          <div className="mt-2 text-sm text-status-bad">
-            انتهت مهلة الاتصال — الشبكة بطيئة جداً أو مقطوعة. تحقق من الاتصال وحاول مرة ثانية.
-          </div>
-        )}
-        {totalsError === true && (
-          <div className="mt-2 text-sm text-status-bad">فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.</div>
-        )}
+        {totalsError && <div className="whitespace-pre-line mt-2 text-sm text-status-bad">{totalsError}</div>}
       </GlowCard>
     </div>
   )
@@ -376,14 +364,7 @@ function ColorSlotRow({ slot, voiceMode, savingSlot, savedSlots, slotErrors, onC
                   )}
                 </button>
               </div>
-              {slotErrors[key] === 'timeout' && (
-                <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">
-                  انتهت مهلة الاتصال — الشبكة بطيئة جداً أو مقطوعة. تحقق من الاتصال وحاول مرة ثانية.
-                </div>
-              )}
-              {slotErrors[key] === true && (
-                <div className="mt-1 pr-[6.75rem] text-xs text-status-bad">فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.</div>
-              )}
+              {slotErrors[key] && <div className="whitespace-pre-line mt-1 pr-[6.75rem] text-xs text-status-bad">{slotErrors[key]}</div>}
             </div>
           )
         })}

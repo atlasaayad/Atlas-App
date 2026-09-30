@@ -22,6 +22,33 @@ export function clearDeptToken(deptKey) {
   sessionStorage.removeItem(tokenKey(deptKey))
 }
 
+// Expired session (401 on a call that SENT a token: 12h JWT expired, or the
+// department's PIN was changed). The token is dropped and every listener
+// (DeptGate / SettingsGate) is told, so the PIN pad of that same department
+// comes back on top of the form — without unmounting it, so nothing the
+// user typed is lost. Public calls never send a token, so the factory TV
+// screens can never trigger this, and nothing here retries, so it can't loop.
+const sessionExpiredListeners = new Set()
+
+export function onSessionExpired(listener) {
+  sessionExpiredListeners.add(listener)
+  return () => sessionExpiredListeners.delete(listener)
+}
+
+function deptKeyForToken(token) {
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i)
+    if (key?.startsWith('atlas_token_') && sessionStorage.getItem(key) === token) return key.slice('atlas_token_'.length)
+  }
+  return null
+}
+
+function notifySessionExpired(token) {
+  const deptKey = deptKeyForToken(token)
+  if (deptKey) clearDeptToken(deptKey)
+  for (const listener of sessionExpiredListeners) listener(deptKey)
+}
+
 // Any department's token currently held by this browser tab — for the
 // endpoints open to whoever is logged in right now, whatever their
 // department (Ask Atlas). null when no department has entered its PIN yet.
@@ -44,7 +71,9 @@ export function getAnyDeptToken(preferredDeptKeys = []) {
 // guarantees every save settles one way or the other within a bounded time.
 const REQUEST_TIMEOUT_MS = 15000
 
-async function request(path, { method = 'GET', body, token, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+// `blob: true` returns the response body as a Blob (file downloads) while
+// keeping exactly the same error handling as every JSON call.
+async function request(path, { method = 'GET', body, token, timeoutMs = REQUEST_TIMEOUT_MS, blob = false } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers['Authorization'] = `Bearer ${token}`
@@ -63,10 +92,13 @@ async function request(path, { method = 'GET', body, token, timeoutMs = REQUEST_
   } catch (err) {
     const error = new Error(err.name === 'AbortError' ? 'request_timeout' : 'network_error')
     error.timedOut = err.name === 'AbortError'
+    error.kind = 'network' // see lib/errors.js
     throw error
   } finally {
     clearTimeout(timeoutId)
   }
+
+  if (blob && res.ok) return res.blob()
 
   let data = null
   try {
@@ -78,6 +110,8 @@ async function request(path, { method = 'GET', body, token, timeoutMs = REQUEST_
     const error = new Error(data?.error || `request_failed_${res.status}`)
     error.status = res.status
     error.data = data
+    error.kind = errorKindForStatus(res.status)
+    if (res.status === 401 && token) notifySessionExpired(token)
     throw error
   }
   return data
@@ -105,6 +139,16 @@ async function uploadFicheDocument(token, modelId, file, mimeType, onProgress) {
     onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
   })
   return request(`/models/${modelId}/documents`, { method: 'POST', body: { ticket }, token, timeoutMs: 30000 })
+}
+
+function errorKindForStatus(status) {
+  if (status === 401) return 'session'
+  if (status === 403) return 'forbidden'
+  if (status === 404) return 'not_found'
+  if (status === 409) return 'conflict'
+  if (status === 423) return 'locked'
+  if (status >= 400 && status < 500) return 'invalid'
+  return 'server'
 }
 
 export const api = {
@@ -203,23 +247,14 @@ export const api = {
     getCpm: (token) => request('/patron/cpm', { token }),
     updateCpm: (token, cpm) => request('/patron/cpm', { method: 'PUT', body: { cpm }, token }),
     updatePersonnelAdmin: (token, date, total) => request('/patron/personnel-admin', { method: 'PUT', body: { date, total }, token }),
-    exportData: async (token) => {
-      const res = await fetch(`${BASE}/patron/export`, { headers: { Authorization: `Bearer ${token}` } })
-      if (!res.ok) throw new Error(`export_failed_${res.status}`)
-      return res.blob()
-    },
+    exportData: (token) => request('/patron/export', { token, blob: true, timeoutMs: 60000 }),
   },
   devis: {
     get: (token, modelId) => request(`/devis/${modelId}`, { token }),
   },
   audit: {
-    exportReport: async (token, chainNumber, from, to) => {
-      const res = await fetch(`${BASE}/audit/report?chainNumber=${chainNumber}&from=${from}&to=${to}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error(`export_failed_${res.status}`)
-      return res.blob()
-    },
+    exportReport: (token, chainNumber, from, to) =>
+      request(`/audit/report?chainNumber=${chainNumber}&from=${from}&to=${to}`, { token, blob: true, timeoutMs: 60000 }),
   },
   settings: {
     getSpecialties: (token, groupKey) => request(`/settings/specialties/${groupKey}`, { token }),

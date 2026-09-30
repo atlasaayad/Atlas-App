@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
+import NoModel from '../../components/NoModel'
 import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import DevisCard from '../../components/DevisCard'
 import { api } from '../../lib/api'
+import { errorMessage } from '../../lib/errors'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
 import { MACHINES, DELAY_REASONS } from '../../lib/constants'
 import { computeVTMinutes, computeDT, computeObjectifJour, computeLaunchTimerState, formatDuration, hoursToHHMM, hhmmToHours } from '../../lib/calc'
 import { todayInFactoryTZ } from '../../lib/date'
@@ -47,6 +51,10 @@ export default function MethodeForm({ token, chainNumber }) {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [closePrompts, setClosePrompts] = useState([])
   const [chainFullWarning, setChainFullWarning] = useState(false)
+  // First load failed (no connection…): show that with a retry — never the
+  // "create a model" form, which would invite creating a duplicate model on
+  // a chain that isn't actually empty.
+  const [loadError, setLoadError] = useState(null)
 
   // Silent re-fetch (no `loading` flip) — used after every save so a tab
   // doesn't unmount/remount and lose its own state (which tab is open, an
@@ -84,15 +92,31 @@ export default function MethodeForm({ token, chainNumber }) {
     }
   }
 
-  useEffect(() => {
+  function initialLoad() {
     setLoading(true)
+    setLoadError(null)
+    refresh()
+      .catch(setLoadError)
+      .finally(() => setLoading(false))
+  }
+
+  // After a save the save itself already succeeded — a failed reload only
+  // means the figures on screen are a bit stale, never a failed save.
+  function quietRefresh() {
+    return refresh().catch(() => {})
+  }
+
+  useEffect(() => {
     setSelectedModelId(null)
     setShowCreateForm(false)
-    refresh().finally(() => setLoading(false))
+    initialLoad()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainNumber])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
+  if (loadError && !model && openModels.length === 0) {
+    return <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={initialLoad} />
+  }
 
   // A chain holds at most two open models (fin de série + démarrage) — a
   // third is refused here and server-side (409 chain_full) until one closes.
@@ -111,7 +135,7 @@ export default function MethodeForm({ token, chainNumber }) {
         <ModelOverlapBar
           openModels={openModels}
           selectedModelId={showCreateForm ? null : selectedModelId}
-          onSelect={(id) => refresh(id)}
+          onSelect={(id) => refresh(id).catch(() => {})}
           onAddNew={requestAddNew}
         />
       )}
@@ -133,8 +157,8 @@ export default function MethodeForm({ token, chainNumber }) {
         <CreateModelForm
           token={token}
           chainNumber={chainNumber}
-          onCreated={(newId) => refresh(newId)}
-          onCancel={openModels.length > 0 ? () => refresh() : null}
+          onCreated={(newId) => refresh(newId).catch(() => {})}
+          onCancel={openModels.length > 0 ? quietRefresh : null}
         />
       </div>
     )
@@ -143,13 +167,27 @@ export default function MethodeForm({ token, chainNumber }) {
   return (
     <div className="space-y-4">
       {header}
-      <EditModel token={token} model={model} dashboard={dashboard} onSaved={() => refresh()} />
+      <EditModel token={token} model={model} dashboard={dashboard} onSaved={quietRefresh} />
       <CloseModelCard token={token} model={model} dashboard={dashboard} onClosed={() => refresh()} />
     </div>
   )
 }
 
 const MAX_OPEN_PER_CHAIN = 2
+
+// Launch-timer errors the server returns as bare codes.
+const LAUNCH_TIMER_ERROR_CODES = {
+  launch_timer_not_configured: { ar: 'عمّر Objectif والفريق وضغط Enregistrer قبل', fr: "Renseignez d'abord l'objectif et l'équipe" },
+  objectif_required: { ar: 'دخّل Objectif (heures) قبل ما تبدا', fr: "Indiquez l'objectif (heures) avant de démarrer" },
+  not_started: { ar: 'العداد ما بداش بعد', fr: "Le chronomètre n'a pas démarré" },
+  invalid_reason_code: { ar: 'اختر سبب من اللائحة', fr: 'Choisissez un motif dans la liste' },
+}
+
+// Close-model errors the server can return with no message of its own.
+const CLOSE_ERROR_CODES = {
+  not_a_root_model: { ar: 'هادي غير لون من الموديل — سد الموديل الرئيسي', fr: "C'est une couleur — clôturez le modèle principal" },
+  not_found: { ar: 'هاد الموديل ما بقاش موجود — حدّث الصفحة', fr: "Ce modèle n'existe plus — actualisez la page" },
+}
 
 // "الموديل X وصل للكمية المطلوبة — واش نسدوه؟" — one per open model whose
 // Sortie reached its Qté totale and that nobody answered "ماشي دابا" for
@@ -166,11 +204,21 @@ function ClosePrompts({ token, prompts, onDone }) {
     try {
       if (action === 'close') await api.lifecycle.closeModel(token, id)
       else await api.lifecycle.dismissClosePrompt(token, id)
+    } catch (err) {
+      // Already closed (double tap, or from another tablet) = nothing left to do.
+      if (err?.data?.error !== 'already_closed') {
+        setError(errorMessage(err, { codes: CLOSE_ERROR_CODES }))
+        setBusyId(null)
+        return
+      }
+    }
+    setBusyId(null)
+    // The action itself succeeded — a failed refresh afterwards must not be
+    // reported as a failed close.
+    try {
       await onDone()
     } catch {
-      setError('فشلت العملية — تحقق من الاتصال.')
-    } finally {
-      setBusyId(null)
+      setError(errorMessage({ kind: 'network' }, { load: true }))
     }
   }
 
@@ -200,7 +248,7 @@ function ClosePrompts({ token, prompts, onDone }) {
           </div>
         </div>
       ))}
-      {error && <div className="text-xs text-status-bad">{error}</div>}
+      <ErrorNote message={error} />
     </div>
   )
 }
@@ -226,9 +274,19 @@ function CloseModelCard({ token, model, dashboard, onClosed }) {
     setError(null)
     try {
       await api.lifecycle.closeModel(token, model.id)
+    } catch (err) {
+      if (err?.data?.error !== 'already_closed') {
+        setError(errorMessage(err, { codes: CLOSE_ERROR_CODES }))
+        setClosing(false)
+        return
+      }
+    }
+    // Closed. Reloading the screen is separate: if only the reload fails,
+    // say so — never "the close failed".
+    try {
       await onClosed()
     } catch {
-      setError('فشل الإغلاق — تحقق من الاتصال.')
+      setError(errorMessage({ kind: 'network' }, { load: true }))
       setClosing(false)
     }
   }
@@ -248,7 +306,7 @@ function CloseModelCard({ token, model, dashboard, onClosed }) {
           {closing ? 'Clôture…' : '🔒 Clôturer le modèle'}
         </button>
       </div>
-      {error && <div className="mt-2 text-xs text-status-bad">{error}</div>}
+      <ErrorNote message={error} className="mt-2" />
     </GlowCard>
   )
 }
@@ -301,9 +359,12 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
       onCreated(res.id)
     } catch (err) {
       setError(
-        err?.data?.error === 'chain_full'
-          ? 'خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين.'
-          : 'فشل إنشاء الموديل — تحقق من الاتصال.'
+        errorMessage(err, {
+          codes: {
+            chain_full: 'خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين.',
+            client_and_chain_required: { ar: 'دخّل اسم الـClient', fr: 'Indiquez le client' },
+          },
+        })
       )
     } finally {
       setSaving(false)
@@ -355,7 +416,7 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
         />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
-        {error && <div className="col-span-full text-sm text-status-bad">{error}</div>}
+        <ErrorNote message={error} className="col-span-full" />
         <button
           type="submit"
           disabled={saving}
@@ -441,8 +502,7 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
   const [attendanceLoading, setAttendanceLoading] = useState(false)
   const [attendanceError, setAttendanceError] = useState(false)
   const [retryTick, setRetryTick] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   const minDate = model.debut || null
@@ -462,9 +522,9 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
         setAttendance(r.attendance)
         setAttendanceLoading(false)
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return
-        setAttendanceError(true)
+        setAttendanceError(err)
         setAttendanceLoading(false)
       })
     return () => {
@@ -486,14 +546,9 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
   }
 
   async function submit() {
-    setSaving(true)
-    try {
-      await api.methode.updateAttendance(token, model.id, attendance, selectedDate)
-      setSaved(true)
+    const { ok } = await save.run(() => api.methode.updateAttendance(token, model.id, attendance, selectedDate))
+    if (ok) {
       onSaved()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -546,7 +601,7 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
         </div>
       ) : attendanceError ? (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
-          <span className="text-sm text-status-bad">فشل تحميل بيانات الحضور — تحقق من الاتصال.</span>
+          <span className="whitespace-pre-line text-sm text-status-bad">{errorMessage(attendanceError, { load: true })}</span>
           <button
             onClick={() => setRetryTick((t) => t + 1)}
             className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
@@ -585,7 +640,7 @@ function PresenceTab({ token, model, dashboard, onSaved }) {
         </div>
       )}
       <div className="mt-4">
-        <SaveButton onClick={submit} saving={saving || attendanceLoading || attendanceError} saved={saved} />
+        <SaveButton onClick={submit} saving={save.saving || attendanceLoading || attendanceError} saved={save.saved} error={save.error} />
       </div>
     </GlowCard>
   )
@@ -600,20 +655,14 @@ function IdentiteTab({ token, model, onSaved }) {
     dessin: model.dessin || '',
     commande: model.commande || '',
   })
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await api.methode.updateModel(token, model.id, form)
-      setSaved(true)
+    const { ok } = await save.run(() => api.methode.updateModel(token, model.id, form))
+    if (ok) {
       onSaved()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -647,7 +696,7 @@ function IdentiteTab({ token, model, onSaved }) {
         />
         <TextField label="Début" type="date" value={form.debut} onChange={(v) => setForm({ ...form, debut: v })} />
         <TextField label="Fin prévue" type="date" value={form.finPrevue} onChange={(v) => setForm({ ...form, finPrevue: v })} />
-        <SaveButton type="submit" saving={saving} saved={saved} />
+        <SaveButton type="submit" saving={save.saving} saved={save.saved} error={save.error} />
       </form>
     </GlowCard>
   )
@@ -752,9 +801,13 @@ function ModelImageUploader({ token, model, onSaved }) {
       onSaved()
     } catch (err) {
       setError(
-        err?.data?.error === 'storage_not_configured'
-          ? 'تخزين الصور غير مفعّل حالياً على هاد السيرفر.'
-          : 'فشل رفع الصورة — تحقق من الاتصال وإعادة المحاولة.'
+        errorMessage(err, {
+          codes: {
+            storage_not_configured: 'تخزين الصور غير مفعّل حالياً على هاد السيرفر.',
+            image_too_large: { ar: 'الصورة كبيرة بزاف', fr: 'Image trop lourde' },
+            unsupported_type: { ar: 'نوع الصورة غير مقبول (JPG أو PNG)', fr: 'Format non accepté (JPG ou PNG)' },
+          },
+        })
       )
     } finally {
       setUploading(false)
@@ -767,8 +820,8 @@ function ModelImageUploader({ token, model, onSaved }) {
     try {
       await api.methode.deleteModelImage(token, model.id)
       onSaved()
-    } catch {
-      setError('فشل حذف الصورة.')
+    } catch (err) {
+      setError(errorMessage(err))
     } finally {
       setUploading(false)
     }
@@ -793,7 +846,7 @@ function ModelImageUploader({ token, model, onSaved }) {
             🗑 حذف الصورة
           </button>
         )}
-        {error && <span className="text-xs text-status-bad">{error}</span>}
+        <ErrorNote message={error} className="text-xs" />
       </div>
     </div>
   )
@@ -810,22 +863,16 @@ function VariantesTab({ token, model, dashboard, onSaved }) {
   const variants = dashboard?.colors?.slice(1) || []
   const [label, setLabel] = useState('')
   const [qteTotale, setQteTotale] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
 
   async function submitNew(e) {
     e.preventDefault()
     if (!label) return
-    setSaving(true)
-    try {
-      await api.methode.addVariant(token, model.id, label, Number(qteTotale) || 0)
+    const { ok } = await save.run(() => api.methode.addVariant(token, model.id, label, Number(qteTotale) || 0))
+    if (ok) {
       setLabel('')
       setQteTotale('')
-      setSaved(true)
       onSaved()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -845,7 +892,7 @@ function VariantesTab({ token, model, dashboard, onSaved }) {
             onChange={setQteTotale}
             hint="الكمية المستهدفة الخاصة بهذا اللون فقط"
           />
-          <SaveButton type="submit" saving={saving} saved={saved} />
+          <SaveButton type="submit" saving={save.saving} saved={save.saved} error={save.error} />
         </form>
       </GlowCard>
 
@@ -868,16 +915,13 @@ function VariantRow({ token, modelId, variant, onSaved }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(variant.label || '')
   const [qteTotale, setQteTotale] = useState(variant.qteTotale || 0)
-  const [saving, setSaving] = useState(false)
+  const saveStatus = useSaveStatus()
 
   async function save() {
-    setSaving(true)
-    try {
-      await api.methode.updateVariant(token, modelId, variant.id, label, Number(qteTotale) || 0)
+    const { ok } = await saveStatus.run(() => api.methode.updateVariant(token, modelId, variant.id, label, Number(qteTotale) || 0))
+    if (ok) {
       setEditing(false)
       onSaved()
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -888,11 +932,12 @@ function VariantRow({ token, modelId, variant, onSaved }) {
         <TextField label="Qté totale" type="number" value={qteTotale} onChange={setQteTotale} />
         <button
           onClick={save}
-          disabled={saving}
+          disabled={saveStatus.saving}
           className="h-11 shrink-0 rounded-md border border-turquoise bg-turquoise/10 px-4 text-sm font-medium text-turquoise disabled:opacity-50"
         >
-          {saving ? '...' : 'Enregistrer'}
+          {saveStatus.saving ? '...' : 'Enregistrer'}
         </button>
+        <ErrorNote message={saveStatus.error} className="basis-full" />
       </div>
     )
   }
@@ -914,8 +959,7 @@ function VariantRow({ token, modelId, variant, onSaved }) {
 
 function GammeTab({ token, model, onSaved }) {
   const [lines, setLines] = useState(model.gamme.map((g) => ({ operation: g.operation, machine: g.machine, tps: g.tps })))
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   const preview = useMemo(() => {
@@ -936,14 +980,9 @@ function GammeTab({ token, model, onSaved }) {
   }
 
   async function submit() {
-    setSaving(true)
-    try {
-      await api.methode.updateGamme(token, model.id, lines)
-      setSaved(true)
+    const { ok } = await save.run(() => api.methode.updateGamme(token, model.id, lines))
+    if (ok) {
       onSaved()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -1026,7 +1065,7 @@ function GammeTab({ token, model, onSaved }) {
         + Ajouter une opération
       </button>
       <div className="mt-4">
-        <SaveButton onClick={submit} saving={saving} saved={saved} />
+        <SaveButton onClick={submit} saving={save.saving} saved={save.saved} error={save.error} />
       </div>
     </GlowCard>
   )
@@ -1065,6 +1104,8 @@ function PlanningTab({ token, model }) {
   const [summary, setSummary] = useState({ totalPlanned: 0, expectedFinishDate: null })
   const [savingCells, setSavingCells] = useState({}) // key `${date}:${index}` -> true
   const [savedCells, setSavedCells] = useState({})
+  const [errorCells, setErrorCells] = useState({}) // key -> true while its last save failed
+  const [cellError, setCellError] = useState('')
   const [newDayDate, setNewDayDate] = useState('')
   const [dayActionPending, setDayActionPending] = useState(null) // 'add' | a date being deleted
   const [dayActionError, setDayActionError] = useState(null)
@@ -1086,9 +1127,9 @@ function PlanningTab({ token, model }) {
       .then(() => {
         if (!cancelled) setLoading(false)
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return
-        setLoadError(true)
+        setLoadError(err)
         setLoading(false)
       })
     return () => {
@@ -1118,6 +1159,17 @@ function PlanningTab({ token, model }) {
       setSummary({ totalPlanned: res.totalPlanned, expectedFinishDate: res.expectedFinishDate })
       setSavedCells((s) => ({ ...s, [key]: true }))
       setTimeout(() => setSavedCells((s) => ({ ...s, [key]: false })), 1500)
+      setErrorCells((s) => {
+        const next = { ...s }
+        delete next[key]
+        if (Object.keys(next).length === 0) setCellError('')
+        return next
+      })
+    } catch (err) {
+      // The typed value stays in the cell (red border) so it can be retried.
+      setSavedCells((s) => ({ ...s, [key]: false }))
+      setErrorCells((s) => ({ ...s, [key]: true }))
+      setCellError(errorMessage(err))
     } finally {
       setSavingCells((s) => ({ ...s, [key]: false }))
     }
@@ -1133,7 +1185,7 @@ function PlanningTab({ token, model }) {
       await loadPlanning()
       setNewDayDate('')
     } catch (err) {
-      setDayActionError(err?.data?.error === 'date_before_debut' ? 'التاريخ قبل Début — اختر تاريخ لاحق.' : 'فشلت إضافة اليوم.')
+      setDayActionError(errorMessage(err, { codes: { date_before_debut: 'التاريخ قبل Début — اختر تاريخ لاحق.' } }))
     } finally {
       setDayActionPending(null)
     }
@@ -1152,8 +1204,8 @@ function PlanningTab({ token, model }) {
         delete next[date]
         return next
       })
-    } catch {
-      setDayActionError('فشل حذف اليوم.')
+    } catch (err) {
+      setDayActionError(errorMessage(err))
     } finally {
       setDayActionPending(null)
     }
@@ -1206,7 +1258,7 @@ function PlanningTab({ token, model }) {
         >
           {dayActionPending === 'add' ? 'جاري الإضافة…' : '+ إضافة يوم'}
         </button>
-        {dayActionError && <span className="text-xs text-status-bad">{dayActionError}</span>}
+        <ErrorNote message={dayActionError} className="basis-full" />
       </form>
 
       {loading ? (
@@ -1216,7 +1268,7 @@ function PlanningTab({ token, model }) {
         </div>
       ) : loadError ? (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
-          <span className="text-sm text-status-bad">فشل تحميل المخطط — تحقق من الاتصال.</span>
+          <span className="whitespace-pre-line text-sm text-status-bad">{errorMessage(loadError, { load: true })}</span>
           <button
             onClick={() => setRetryTick((t) => t + 1)}
             className="rounded border border-turquoise/50 px-4 py-2 text-sm font-medium text-turquoise active:bg-turquoise/10"
@@ -1265,7 +1317,7 @@ function PlanningTab({ token, model }) {
                             saveCell(row.date, s.index, e.target.value)
                           }}
                           className={`h-10 w-20 rounded border bg-navy-900 px-1.5 text-center text-sm text-slate-200 placeholder:text-slate-600 focus:border-turquoise focus:outline-none ${
-                            savedCells[key] ? 'border-turquoise' : 'border-slate-700'
+                            errorCells[key] ? 'border-status-bad' : savedCells[key] ? 'border-turquoise' : 'border-slate-700'
                           } ${savingCells[key] ? 'opacity-50' : ''}`}
                         />
                       </td>
@@ -1287,27 +1339,22 @@ function PlanningTab({ token, model }) {
           </table>
         </div>
       )}
+      <ErrorNote message={cellError} className="mt-2" />
     </GlowCard>
   )
 }
 
 function EffectifTab({ token, model, onSaved }) {
   const [effectif, setEffectif] = useState({ ...model.effectif })
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   const nd = useMemo(() => Object.values(effectif).reduce((s, v) => s + (Number(v) || 0), 0), [effectif])
 
   async function submit() {
-    setSaving(true)
-    try {
-      await api.methode.updateEffectif(token, model.id, effectif)
-      setSaved(true)
+    const { ok } = await save.run(() => api.methode.updateEffectif(token, model.id, effectif))
+    if (ok) {
       onSaved()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -1335,7 +1382,7 @@ function EffectifTab({ token, model, onSaved }) {
         ))}
       </div>
       <div className="mt-4">
-        <SaveButton onClick={submit} saving={saving} saved={saved} />
+        <SaveButton onClick={submit} saving={save.saving} saved={save.saved} error={save.error} />
       </div>
     </GlowCard>
   )
@@ -1355,8 +1402,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
     agentQuality: lt.agentQuality || '',
     chefChaine: lt.chefChaine || '',
   })
-  const [savingConfig, setSavingConfig] = useState(false)
-  const [configSaved, setConfigSaved] = useState(false)
+  const configSave = useSaveStatus()
   const [now, setNow] = useState(new Date())
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -1385,15 +1431,8 @@ function LaunchTimerTab({ token, model, onSaved }) {
 
   async function saveConfig(e) {
     e.preventDefault()
-    setSavingConfig(true)
-    try {
-      await persistConfig()
-      setConfigSaved(true)
-      onSaved()
-      setTimeout(() => setConfigSaved(false), 2000)
-    } finally {
-      setSavingConfig(false)
-    }
+    const { ok } = await configSave.run(() => persistConfig())
+    if (ok) onSaved()
   }
 
   async function start() {
@@ -1416,8 +1455,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
         // for something that already worked.
         onSaved()
       } else {
-        const code = err?.data?.error || err?.message || 'unknown_error'
-        setStartError(`تعذّر بدء العداد (${code}) — تحقق من الاتصال ثم أعد المحاولة.`)
+        setStartError(errorMessage(err, { codes: LAUNCH_TIMER_ERROR_CODES }))
       }
     } finally {
       setStarting(false)
@@ -1430,9 +1468,14 @@ function LaunchTimerTab({ token, model, onSaved }) {
       return
     }
     setStopping(true)
+    setStopError('')
     try {
       await api.methode.stopLaunchTimer(token, model.id, {})
       onSaved()
+    } catch (err) {
+      if (err?.data?.error === 'already_stopped') onSaved()
+      else if (err?.data?.error === 'responsible_and_reason_required') setShowOverrunForm(true)
+      else setStopError(errorMessage(err, { codes: LAUNCH_TIMER_ERROR_CODES }))
     } finally {
       setStopping(false)
     }
@@ -1449,8 +1492,9 @@ function LaunchTimerTab({ token, model, onSaved }) {
     try {
       await api.methode.stopLaunchTimer(token, model.id, { responsible, reasonCode, reasonComment })
       onSaved()
-    } catch {
-      setStopError('فشل الحفظ — تحقق من الاتصال وحاول مرة ثانية.')
+    } catch (err) {
+      if (err?.data?.error === 'already_stopped') onSaved()
+      else setStopError(errorMessage(err, { codes: LAUNCH_TIMER_ERROR_CODES }))
     } finally {
       setStopping(false)
     }
@@ -1491,7 +1535,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
           <TextField label="Électriciens" value={form.electriciens} onChange={(v) => setForm({ ...form, electriciens: v })} />
           <TextField label="Agent Quality" value={form.agentQuality} onChange={(v) => setForm({ ...form, agentQuality: v })} />
           <TextField label="Chef de chaîne" value={form.chefChaine} onChange={(v) => setForm({ ...form, chefChaine: v })} />
-          <SaveButton type="submit" saving={savingConfig} saved={configSaved} />
+          <SaveButton type="submit" saving={configSave.saving} saved={configSave.saved} error={configSave.error} />
         </form>
       </GlowCard>
 
@@ -1508,7 +1552,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
             >
               {starting ? '...' : '▶️ Démarrer'}
             </button>
-            {startError && <p className="mt-2 text-sm text-status-bad">{startError}</p>}
+            <ErrorNote message={startError} className="mt-2" />
           </>
         )}
 
@@ -1536,6 +1580,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
                 {stopping ? '...' : '⏹ Arrêter / Première pièce terminée'}
               </button>
             )}
+            {!showOverrunForm && <ErrorNote message={stopError} className="mt-2" />}
 
             {showOverrunForm && (
               <form onSubmit={confirmOverrunStop} className="mt-4 space-y-3 rounded-md border border-amber bg-amber-soft p-3">
@@ -1579,7 +1624,7 @@ function LaunchTimerTab({ token, model, onSaved }) {
                     className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
                   />
                 </label>
-                {stopError && <div className="text-sm text-status-bad">{stopError}</div>}
+                <ErrorNote message={stopError} />
                 <button
                   type="submit"
                   disabled={stopping}
@@ -1647,15 +1692,20 @@ function Metric({ label, value }) {
 // failed to load, so there's nothing sane to submit yet" is a real reason
 // to disable the button, but it is NOT "currently saving", and must never
 // say "Enregistrement…" for something that was never actually sent.
-function SaveButton({ onClick, saving, saved, disabled, type }) {
+// `error` (from useSaveStatus) is shown in red right under the button and
+// stays until the next save attempt.
+function SaveButton({ onClick, saving, saved, disabled, type, error }) {
   return (
-    <button
-      type={type || 'button'}
-      onClick={onClick}
-      disabled={disabled ?? saving}
-      className="col-span-full w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
-    >
-      {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
-    </button>
+    <>
+      <button
+        type={type || 'button'}
+        onClick={onClick}
+        disabled={disabled ?? saving}
+        className="col-span-full w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
+      >
+        {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+      </button>
+      <ErrorNote message={error} className="col-span-full" />
+    </>
   )
 }

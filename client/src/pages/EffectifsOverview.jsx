@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import GlowCard from '../components/GlowCard'
 import Collapsible from '../components/Collapsible'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from '../components/ErrorNote'
 import { useCompany } from '../lib/CompanyContext'
 import { POLL_INTERVAL_MS } from '../lib/constants'
 
@@ -12,13 +14,19 @@ import { POLL_INTERVAL_MS } from '../lib/constants'
 export default function EffectifsOverview() {
   const { companyName } = useCompany()
   const [data, setData] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
     function load() {
-      api.getEffectifsOverview().then((r) => {
-        if (!cancelled) setData(r)
-      })
+      api
+        .getEffectifsOverview()
+        .then((r) => {
+          if (cancelled) return
+          setData(r)
+          setLoadError(null)
+        })
+        .catch((err) => !cancelled && setLoadError(err))
     }
     load()
     const id = setInterval(load, POLL_INTERVAL_MS)
@@ -28,6 +36,7 @@ export default function EffectifsOverview() {
     }
   }, [])
 
+  if (!data && loadError) return <ErrorNote message={errorMessage(loadError, { load: true })} className="py-10 text-center" />
   if (!data) return <div className="py-10 text-center text-slate-400">Chargement…</div>
 
   return (

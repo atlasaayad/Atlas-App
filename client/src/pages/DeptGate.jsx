@@ -1,11 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import PinPad from '../components/PinPad'
-import LockedScreen from '../components/LockedScreen'
+import DeptLogin from '../components/DeptLogin'
 import ChainPicker from '../components/ChainPicker'
 import FeedbackButton from '../components/FeedbackButton'
 import { DEPARTMENT_META } from '../lib/constants'
-import { api, getDeptToken, setDeptToken, clearDeptToken } from '../lib/api'
+import { getDeptToken, clearDeptToken, onSessionExpired } from '../lib/api'
+import { MESSAGES } from '../lib/errors'
 
 import MethodeForm from './dept/MethodeForm'
 import ProductionForm from './dept/ProductionForm'
@@ -37,74 +37,51 @@ export default function DeptGate() {
   const navigate = useNavigate()
   const meta = DEPARTMENT_META[deptKey]
   const [token, setToken] = useState(() => getDeptToken(deptKey))
-  const [pinError, setPinError] = useState(false)
-  const [attemptsRemaining, setAttemptsRemaining] = useState(null)
-  const [pinLoading, setPinLoading] = useState(false)
-  const [lockInfo, setLockInfo] = useState(null)
   const [chainNumber, setChainNumber] = useState(null)
+  // Session expired mid-use (401 on an authenticated call, see lib/api.js):
+  // the PIN pad is shown ON TOP of the form, which stays mounted — so the
+  // chain, the selected model and every value typed are still there after
+  // the code is entered again.
+  const [expired, setExpired] = useState(false)
 
-  const handlePin = useCallback(
-    async (pin) => {
-      setPinLoading(true)
-      setPinError(false)
-      try {
-        const res = await api.login(deptKey, pin)
-        setDeptToken(deptKey, res.token)
-        setToken(res.token)
-      } catch (err) {
-        if (err.status === 423) {
-          setLockInfo({ retryAfterSeconds: err.data?.retryAfterSeconds || 600 })
-        } else {
-          setPinError(true)
-          setAttemptsRemaining(typeof err.data?.attemptsRemaining === 'number' ? err.data.attemptsRemaining : null)
-        }
-        throw err
-      } finally {
-        setPinLoading(false)
-      }
-    },
-    [deptKey]
-  )
+  useEffect(() => onSessionExpired((expiredDept) => expiredDept === deptKey && setExpired(true)), [deptKey])
+
+  function relogged(newToken) {
+    setToken(newToken)
+    setExpired(false)
+  }
 
   function logout() {
     clearDeptToken(deptKey)
     setToken(null)
     setChainNumber(null)
+    setExpired(false)
   }
 
   if (!meta) {
     return <div className="p-6 text-center text-slate-400">Département introuvable.</div>
   }
 
-  if (!token && lockInfo) {
-    return (
-      <div>
-        <BackBar onBack={() => navigate('/departements')} />
-        <LockedScreen
-          deptLabel={meta.label}
-          deptIcon={meta.icon}
-          retryAfterSeconds={lockInfo.retryAfterSeconds}
-          onExpire={() => setLockInfo(null)}
-        />
-      </div>
-    )
-  }
-
   if (!token) {
     return (
       <div>
         <BackBar onBack={() => navigate('/departements')} />
-        <PinPad
-          deptLabel={meta.label}
-          deptIcon={meta.icon}
-          onSubmit={handlePin}
-          error={pinError}
-          loading={pinLoading}
-          attemptsRemaining={attemptsRemaining}
-        />
+        <DeptLogin deptKey={deptKey} deptLabel={meta.label} deptIcon={meta.icon} onLoggedIn={relogged} />
       </div>
     )
   }
+
+  const overlay = expired && (
+    <div className="fixed inset-0 z-[60] overflow-y-auto bg-navy-950/95 px-4">
+      <DeptLogin
+        deptKey={deptKey}
+        deptLabel={meta.label}
+        deptIcon={meta.icon}
+        onLoggedIn={relogged}
+        notice={`${MESSAGES.session.ar}\n${MESSAGES.session.fr}`}
+      />
+    </div>
+  )
 
   const FormComponent = FORM_BY_DEPT[deptKey]
 
@@ -114,6 +91,7 @@ export default function DeptGate() {
       <div>
         <BackBar onBack={() => navigate('/departements')} onLogout={logout} token={token} />
         <FormComponent token={token} />
+        {overlay}
       </div>
     )
   }
@@ -123,6 +101,7 @@ export default function DeptGate() {
       <div>
         <BackBar onBack={() => navigate('/departements')} onLogout={logout} token={token} />
         <ChainPicker deptLabel={meta.label} deptKey={deptKey} onSelect={setChainNumber} />
+        {overlay}
       </div>
     )
   }
@@ -131,6 +110,7 @@ export default function DeptGate() {
     <div>
       <BackBar onBack={() => setChainNumber(null)} onLogout={logout} label={`Chaîne ${chainNumber}`} token={token} />
       <FormComponent token={token} chainNumber={chainNumber} deptKey={deptKey} />
+      {overlay}
     </div>
   )
 }

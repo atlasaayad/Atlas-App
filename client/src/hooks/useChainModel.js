@@ -22,6 +22,9 @@ export function useChainModel(chainNumber, { selectable = false, badgeKind = nul
   const [modelId, setModelId] = useState(null)
   const [dashboard, setDashboard] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Why the chain's model couldn't be loaded (no connection, server error…)
+  // — shown by NoModel instead of a misleading "no active model".
+  const [loadError, setLoadError] = useState(null)
   const selectedRef = useRef(null)
 
   const loadList = useCallback(async () => {
@@ -32,6 +35,7 @@ export function useChainModel(chainNumber, { selectable = false, badgeKind = nul
   }, [chainNumber, badgeKind])
 
   const fetchData = useCallback(async () => {
+    setLoadError(null)
     const models = await loadList()
     const kept = models.find((m) => m.id === selectedRef.current)
     const pick = kept || (selectable ? models[models.length - 1] : models[0]) || null
@@ -49,14 +53,23 @@ export function useChainModel(chainNumber, { selectable = false, badgeKind = nul
   useEffect(() => {
     selectedRef.current = null
     setLoading(true)
-    fetchData().finally(() => setLoading(false))
+    fetchData()
+      .catch(setLoadError)
+      .finally(() => setLoading(false))
   }, [fetchData])
 
+  // Never throws: after a successful save, a failed refresh just keeps the
+  // figures already on screen (the save itself did succeed); with nothing
+  // loaded yet, the failure is shown through loadError.
   const refresh = useCallback(async () => {
     const id = selectedRef.current
-    if (!id) return fetchData()
-    const [dash] = await Promise.all([api.getDashboard(id), badgeKind ? loadList() : null])
-    if (selectedRef.current === id) setDashboard(dash)
+    try {
+      if (!id) return await fetchData()
+      const [dash] = await Promise.all([api.getDashboard(id), badgeKind ? loadList() : null])
+      if (selectedRef.current === id) setDashboard(dash)
+    } catch (err) {
+      if (!id) setLoadError(err)
+    }
   }, [fetchData, loadList, badgeKind])
 
   const selectModel = useCallback(async (id) => {
@@ -67,10 +80,12 @@ export function useChainModel(chainNumber, { selectable = false, badgeKind = nul
     try {
       const dash = await api.getDashboard(id)
       if (selectedRef.current === id) setDashboard(dash)
+    } catch (err) {
+      if (selectedRef.current === id) setLoadError(err)
     } finally {
       if (selectedRef.current === id) setLoading(false)
     }
   }, [])
 
-  return { modelId, dashboard, loading, refresh, openModels, totalSlots, selectModel }
+  return { modelId, dashboard, loading, loadError, refresh, openModels, totalSlots, selectModel }
 }

@@ -7,31 +7,31 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
 
 export default function LogisticsForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
+  const { modelId, dashboard, loading, loadError, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [form, setForm] = useState({ description: '', quantite: '', date: '' })
-  const [saving, setSaving] = useState(false)
+  const save = useSaveStatus()
+  const removal = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!modelId) return <NoModel chainNumber={chainNumber} />
+  if (!modelId) return <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={refresh} />
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await api.logistics.addExport(token, modelId, form)
+    const { ok } = await save.run(() => api.logistics.addExport(token, modelId, form))
+    if (ok) {
       setForm({ description: '', quantite: '', date: '' })
       refresh()
-    } finally {
-      setSaving(false)
     }
   }
 
   async function remove(exportId) {
-    await api.logistics.deleteExport(token, exportId)
-    refresh()
+    const { ok } = await removal.run(() => api.logistics.deleteExport(token, exportId))
+    if (ok) refresh()
   }
 
   return (
@@ -71,16 +71,18 @@ export default function LogisticsForm({ token, chainNumber }) {
           />
           <button
             type="submit"
-            disabled={saving}
+            disabled={save.saving}
             className="sm:col-span-3 rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50"
           >
-            {saving ? 'Ajout…' : 'Ajouter au programme'}
+            {save.saving ? 'Ajout…' : 'Ajouter au programme'}
           </button>
+          <ErrorNote message={save.error} className="sm:col-span-3" />
         </form>
       </GlowCard>
 
       <GlowCard title="Programme d'export">
         <ExportTable exports={dashboard.exports} />
+        <ErrorNote message={removal.error} className="mt-2" />
         {dashboard.exports.length > 0 && (
           <div className="mt-3 space-y-2">
             {dashboard.exports.map((e) => (

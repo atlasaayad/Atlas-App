@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from './ErrorNote'
 
 // Only rendered from Méthode's and Patron's own screens — both already
 // gated to those two departments' tokens by their route/auth flow, so this
@@ -7,10 +9,19 @@ import { api } from '../lib/api'
 export default function DevisCard({ token, modelId }) {
   const [state, setState] = useState('idle') // idle | loading | result | not_set
   const [cmt, setCmt] = useState(null)
+  const [error, setError] = useState('')
 
   async function generate() {
     setState('loading')
-    const res = await api.devis.get(token, modelId)
+    setError('')
+    let res
+    try {
+      res = await api.devis.get(token, modelId)
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
+      setState('idle')
+      return
+    }
     if (res.cmt === null) {
       setState('not_set')
       return
@@ -29,6 +40,7 @@ export default function DevisCard({ token, modelId }) {
       >
         {state === 'loading' ? '…' : '💰 Générer un devis'}
       </button>
+      <ErrorNote message={error} className="mt-2" />
       {state === 'result' && (
         <div className="mt-2 text-sm text-slate-300">
           التكلفة التقديرية للقطعة: <span className="font-mono text-lg font-semibold text-turquoise">{cmt.toFixed(2)}</span> درهم

@@ -6,13 +6,14 @@ import VoiceMicButton from '../../components/VoiceMicButton'
 import ModelSwitcher from '../../components/ModelSwitcher'
 import { useChainModel } from '../../hooks/useChainModel'
 import { api } from '../../lib/api'
+import { useSaveStatus } from '../../hooks/useSaveStatus'
+import ErrorNote from '../../components/ErrorNote'
 
 export default function DepotForm({ token, chainNumber }) {
-  const { modelId, dashboard, loading, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
+  const { modelId, dashboard, loading, loadError, refresh, openModels, selectModel } = useChainModel(chainNumber, { selectable: true })
   const [totalPieces, setTotalPieces] = useState(0)
   const [effectifTotal, setEffectifTotal] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
 
   useEffect(() => {
@@ -23,19 +24,12 @@ export default function DepotForm({ token, chainNumber }) {
   }, [dashboard])
 
   if (loading) return <div className="py-10 text-center text-slate-400">Chargement…</div>
-  if (!modelId) return <NoModel chainNumber={chainNumber} />
+  if (!modelId) return <NoModel chainNumber={chainNumber} loadError={loadError} onRetry={refresh} />
 
   async function submit(e) {
     e.preventDefault()
-    setSaving(true)
-    try {
-      await api.depot.update(token, modelId, Number(totalPieces), Number(effectifTotal))
-      setSaved(true)
-      refresh()
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
-    }
+    const { ok } = await save.run(() => api.depot.update(token, modelId, Number(totalPieces), Number(effectifTotal)))
+    if (ok) refresh()
   }
 
   return (
@@ -77,11 +71,12 @@ export default function DepotForm({ token, chainNumber }) {
         </label>
         <button
           type="submit"
-          disabled={saving}
+          disabled={save.saving}
           className="w-full rounded-md border border-turquoise bg-turquoise/10 py-3.5 text-base font-medium text-turquoise shadow-glow-sm active:bg-turquoise/20 disabled:opacity-50 sm:w-auto sm:px-8"
         >
-          {saving ? 'Enregistrement…' : saved ? 'Enregistré ✓' : 'Enregistrer'}
+          {save.saving ? 'Enregistrement…' : save.saved ? 'Enregistré ✓' : 'Enregistrer'}
         </button>
+        <ErrorNote message={save.error} />
       </form>
     </GlowCard>
   )

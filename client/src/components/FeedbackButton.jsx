@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
+import { useSaveStatus } from '../hooks/useSaveStatus'
+import ErrorNote from './ErrorNote'
 
 // 📩 الإبلاغ عن مشكلة — available on every logged-in department's screen
 // (rendered from DeptGate.jsx's BackBar), so whoever hits a real problem
@@ -8,23 +10,16 @@ import { api } from '../lib/api'
 export default function FeedbackButton({ token }) {
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [sent, setSent] = useState(false)
+  const save = useSaveStatus()
+  const saving = save.saving
 
   async function submit(e) {
     e.preventDefault()
     if (!message.trim()) return
-    setSaving(true)
-    try {
-      await api.feedback.submit(token, message.trim())
-      setSent(true)
+    const { ok } = await save.run(() => api.feedback.submit(token, message.trim()))
+    if (ok) {
       setMessage('')
-      setTimeout(() => {
-        setSent(false)
-        setOpen(false)
-      }, 1200)
-    } finally {
-      setSaving(false)
+      setTimeout(() => setOpen(false), 1200)
     }
   }
 
@@ -50,6 +45,7 @@ export default function FeedbackButton({ token }) {
                 placeholder="اكتب هنا…"
                 className="w-full rounded-md border border-slate-700 bg-navy-900 px-3 py-2 text-sm text-slate-200 focus:border-turquoise focus:outline-none"
               />
+              <ErrorNote message={save.error} className="mt-2" />
               <div className="mt-3 flex justify-end gap-2">
                 <button
                   type="button"
@@ -64,7 +60,7 @@ export default function FeedbackButton({ token }) {
                   disabled={saving || !message.trim()}
                   className="rounded-md border border-turquoise bg-turquoise/10 px-4 py-2 text-sm font-medium text-turquoise disabled:opacity-50"
                 >
-                  {saving ? '...' : sent ? 'تم الإرسال ✓' : 'إرسال'}
+                  {saving ? '...' : save.saved ? 'تم الإرسال ✓' : 'إرسال'}
                 </button>
               </div>
             </form>

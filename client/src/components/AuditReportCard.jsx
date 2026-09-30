@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import GlowCard from './GlowCard'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
+import ErrorNote from './ErrorNote'
 import { CHAIN_NUMBERS } from '../lib/constants'
 
 export default function AuditReportCard({ token }) {
@@ -9,20 +11,23 @@ export default function AuditReportCard({ token }) {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [exporting, setExporting] = useState(false)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    api.getChains().then((data) => {
-      setChains(data)
-      const firstActive = data.find((c) => c.model)
-      if (firstActive) setChainNumber(firstActive.chainNumber)
-    })
+    api
+      .getChains()
+      .then((data) => {
+        setChains(data)
+        const firstActive = data.find((c) => c.model)
+        if (firstActive) setChainNumber(firstActive.chainNumber)
+      })
+      .catch((err) => setError(errorMessage(err, { load: true })))
   }, [])
 
   async function handleExport() {
     if (!chainNumber || !from || !to) return
     setExporting(true)
-    setError(false)
+    setError('')
     try {
       const blob = await api.audit.exportReport(token, chainNumber, from, to)
       const url = URL.createObjectURL(blob)
@@ -33,8 +38,8 @@ export default function AuditReportCard({ token }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-    } catch {
-      setError(true)
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
     } finally {
       setExporting(false)
     }
@@ -93,7 +98,7 @@ export default function AuditReportCard({ token }) {
       >
         {exporting ? 'Génération…' : '⬇ Exporter (.xlsx)'}
       </button>
-      {error && <div className="mt-2 text-sm text-status-bad">Échec de l'export, réessayez.</div>}
+      <ErrorNote message={error} className="mt-2" />
     </GlowCard>
   )
 }

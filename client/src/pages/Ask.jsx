@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import GlowCard from '../components/GlowCard'
 import { api } from '../lib/api'
+import { errorMessage } from '../lib/errors'
 import { CHAIN_NUMBERS } from '../lib/constants'
 
 const SUGGESTED_QUESTIONS = [
@@ -20,7 +21,7 @@ export default function Ask() {
   const bottomRef = useRef(null)
 
   useEffect(() => {
-    api.getChains().then((data) => {
+    api.getChains().catch(() => []).then((data) => {
       setChains(data)
       const firstActive = data.find((c) => c.model)
       if (firstActive) setChainNumber(firstActive.chainNumber)
@@ -48,7 +49,7 @@ export default function Ask() {
           ? 'ميزة "اسأل أطلس" غير مفعّلة حالياً بهذا السيرفر.'
           : err?.data?.error === 'daily_limit_reached'
             ? 'تم الوصول للحد اليومي، جرب بكرة 🙏'
-            : 'صار خطأ، حاول مرة ثانية.'
+            : errorMessage(err)
       setMessages((m) => [...m, { role: 'assistant', text, needsLogin: err?.status === 401 }])
     } finally {
       setLoading(false)
@@ -101,7 +102,7 @@ export default function Ask() {
           {messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div
-                className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+                className={`max-w-[85%] whitespace-pre-line rounded-lg px-3 py-2 text-sm ${
                   m.role === 'user'
                     ? 'bg-turquoise/15 text-slate-100'
                     : 'border border-slate-700/70 bg-navy-900/50 text-slate-200'
