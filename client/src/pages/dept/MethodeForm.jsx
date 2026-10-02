@@ -5,6 +5,7 @@ import Stepper from '../../components/Stepper'
 import VoiceModeToggle from '../../components/VoiceModeToggle'
 import VoiceMicButton from '../../components/VoiceMicButton'
 import DevisCard from '../../components/DevisCard'
+import GarmentTypeField from '../../components/GarmentTypeField'
 import { api } from '../../lib/api'
 import { errorMessage } from '../../lib/errors'
 import { useSaveStatus } from '../../hooks/useSaveStatus'
@@ -346,7 +347,7 @@ function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
 }
 
 function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
-  const [form, setForm] = useState({ client: '', qteTotale: '', debut: '', finPrevue: '', dessin: '', commande: '' })
+  const [form, setForm] = useState({ client: '', qteTotale: '', debut: '', finPrevue: '', dessin: '', commande: '', garmentType: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [voiceMode, setVoiceMode] = useState(false)
@@ -400,6 +401,11 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
           value={form.dessin}
           onChange={(v) => setForm({ ...form, dessin: v })}
           hint="رقم أو مرجع تصميم الموديل، مثال: DSN-2451"
+        />
+        <GarmentTypeField
+          token={token}
+          value={form.garmentType}
+          onChange={(v) => setForm((f) => ({ ...f, garmentType: v }))}
         />
         <TextField
           label="Qté totale"
@@ -657,6 +663,7 @@ function IdentiteTab({ token, model, onSaved }) {
     finPrevue: model.fin_prevue || '',
     dessin: model.dessin || '',
     commande: model.commande || '',
+    garmentType: model.garment_type || '',
   })
   const save = useSaveStatus()
   const [voiceMode, setVoiceMode] = useState(false)
@@ -682,6 +689,12 @@ function IdentiteTab({ token, model, onSaved }) {
           value={form.dessin}
           onChange={(v) => setForm({ ...form, dessin: v })}
           hint="رقم أو مرجع تصميم الموديل، مثال: DSN-2451"
+        />
+        <GarmentTypeField
+          token={token}
+          value={form.garmentType}
+          onChange={(v) => setForm((f) => ({ ...f, garmentType: v }))}
+          readOnly={!!model.parent_model_id}
         />
         <TextField
           label="Qté totale"

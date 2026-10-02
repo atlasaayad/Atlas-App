@@ -4,6 +4,7 @@ import { verifyPin, issueToken, requireDept, requireAnyDept, clientIp } from '..
 import { DEPARTMENTS, CHAIN_NUMBERS, GENERIC_POSTE_DEPARTMENTS } from '../constants.js'
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels, getFamilyIds, roleInChain } from '../openModels.js'
+import { garmentTypeOf } from '../garmentTypes.js'
 import { getPlanVsReel } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
 import { getWorkHours } from '../workHours.js'
@@ -105,7 +106,7 @@ publicRouter.get('/chains', async (req, res) => {
 // names and the required headcount are for logged-in departments only.
 const PUBLIC_MODEL_FIELDS = [
   'id', 'client', 'dessin', 'chain_number', 'status', 'active', 'qte_totale', 'debut', 'fin_prevue',
-  'vt', 'dt', 'nd', 'parent_model_id', 'variant_label', 'image_url', 'closed_at',
+  'vt', 'dt', 'nd', 'parent_model_id', 'variant_label', 'image_url', 'closed_at', 'garment_type',
 ]
 
 // No token → public view. A token that is sent but invalid/expired → 401
@@ -119,6 +120,7 @@ publicRouter.get('/models/:id', (req, res, next) => {
 async function sendModel(req, res, full) {
   const model = await get('SELECT * FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
+  model.garment_type = await garmentTypeOf(model)
   if (!full) return res.json(Object.fromEntries(PUBLIC_MODEL_FIELDS.map((f) => [f, model[f] ?? null])))
   const [gamme, effectifRows, launchTimerRow, chainSpecialties] = await Promise.all([
     all('SELECT * FROM gamme_lines WHERE model_id = $1 ORDER BY seq_no', [model.id]),
@@ -473,6 +475,7 @@ export async function fullDashboard(model) {
       dessin: model.dessin,
       commande: model.commande,
       imageUrl: model.image_url || null,
+      garmentType: await garmentTypeOf(model),
     },
     dt: model.dt,
     vt: model.vt,
@@ -600,6 +603,7 @@ publicRouter.get('/chains/:chainNumber/open-models', async (req, res) => {
         client: m.client,
         dessin: m.dessin,
         imageUrl: m.image_url || null,
+        garmentType: m.garment_type || null,
         role: roleInChain(openModels, m.id),
         filledSlots,
       }

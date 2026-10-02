@@ -3,7 +3,7 @@
 > Read this file before any task. Update it at the end of every merged PR (sections 4, 6 and 7).
 > Never write secrets here (PINs, tokens, keys, passwords).
 
-Last update: 2026-10-02 (after PR #48 — trial bugs A–D merged)
+Last update: 2026-10-02 (PR #50 open — optional garment type on models)
 
 ---
 
@@ -26,7 +26,7 @@ Last update: 2026-10-02 (after PR #48 — trial bugs A–D merged)
 | Blob `atlas-images` | **Public**, fra1 — model photos only (`BLOB_READ_WRITE_TOKEN`) |
 | Blob `atlas-documents` | **Private**, fra1 — customer technical documents (`DOCS_BLOB_*`) |
 | AI | `ANTHROPIC_API_KEY` — Ask Atlas only |
-| Tests | `node:test`, 245 tests (`npm test`, needs a local Postgres test database — `DATABASE_URL` in `.env`), run by hand (no CI yet) |
+| Tests | `node:test`, 252 tests (`npm test`, needs a local Postgres test database — `DATABASE_URL` in `.env`), run by hand (no CI yet) |
 
 ## 3. Working rules (mandatory)
 1. **Branch + Pull Request.** Never commit directly to `main`. **Never merge until Mohamed says "merge"** (or explicitly authorises a conditional merge).
@@ -62,6 +62,7 @@ Last update: 2026-10-02 (after PR #48 — trial bugs A–D merged)
 - **Server validation** (`server/src/validation.js`, 400 + AR/FR message, new input only, existing rows never modified): no negative quantities anywhere; gamme TPS > 0; Fin prévue ≥ Début; work hours end > start and no overlap (ordering/storage unchanged); specialties differing only by capitals/spaces/accents refused (exact-name rename merge kept).
 - **Warnings (confirm only, never blocking)** in `client/src/lib/warnings.js`: retouches > that hour's production; > 2,000 pieces/hour; Total entré, Qté totale, Commande > 1,000,000; Finale, Dépôt, export > 100,000; operation > 1,800 s; personnel administratif > 1,000.
 - **`/api/models/:id`:** without a token → identity/quantities/VT only (no gamme, machines, Commande, launch team, required headcount); valid token → full detail; token sent but invalid → 401 (never a reduced view).
+- **Garment type (PR #50):** optional `models.garment_type` (NULL = no type, old models untouched). Chosen in Méthode (new model + Identité) from 11 defaults in code (`server/src/garmentTypes.js`) + types added in place with "+ Ajouter un autre type" (table `garment_types`). Near-duplicates (case/spaces/accents) refused, same rule as specialties. Colour variants never store a type — they always show the parent's. Shown as "Client · Type · Dessin" (Home cards, Démarrage/Fin d'entrée buttons, Patron) and "Client · Type (Dessin)" (Home chain selector), via `client/src/lib/modelLabel.js` — empty parts skipped. Excel `Modeles` sheet has a `garment_type` column (variants filled with the parent's).
 - Language option hidden in Réglages until real FR/AR + RTL exists.
 - **No DPP / QR / EU integration yet.** EU textile DPP delegated act expected ~2027, mandatory ~2028-2029. Fiche Modèle (composition, factory identity, stage dates) is the groundwork. Do not display "DPP" or "Passeport numérique" in the UI.
 
@@ -82,6 +83,7 @@ Models & variants (photo, gamme/VT, launch timer) · Planning (manual days, Plan
 | #46 | Shared project context: `docs/ATLAS_CONTEXT.md` + root `CLAUDE.md` |
 | #47 | Pre-trial fixes: clear AR/FR errors + expired-session re-login (A), server validation + warnings (B), public `/api/models/:id` restricted (E), typed counters / Patron fits phone / confirm export delete / language hidden (D part) |
 | #48 | Trial bugs: session no longer expires on cold starts + sliding renewal (A); correct offline/slow/server-starting errors, 25 s timeout + 1 safe retry, slow bar, kfr5 removed from CORS default (B); PIN pad inside Fiche Modèle / Ask (C); Home per-model view with 2 open models, "Fin d'entrée" label (D) |
+| #50 | Optional garment type on models (Méthode dropdown + add in place, variants inherit, shown on Home / changeover buttons / Patron / Excel) — **open, not merged** |
 
 ## 7. Known issues / backlog (small, not started)
 - A test depends on the time of day ("Couleur/Variante … total combiné exact" fails before ~12:00 factory time) → make it time-independent.

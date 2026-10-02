@@ -277,6 +277,8 @@ export const api = {
   methode: {
     createModel: (token, payload) => request('/methode/models', { method: 'POST', body: payload, token }),
     updateModel: (token, id, payload) => request(`/methode/models/${id}`, { method: 'PUT', body: payload, token }),
+    getGarmentTypes: (token) => request('/methode/garment-types', { token }),
+    addGarmentType: (token, name) => request('/methode/garment-types', { method: 'POST', body: { name }, token }),
     updateGamme: (token, id, lines) => request(`/methode/models/${id}/gamme`, { method: 'PUT', body: { lines }, token }),
     updateEffectif: (token, id, effectif) => request(`/methode/models/${id}/effectif`, { method: 'PUT', body: { effectif }, token }),
     getAttendance: (token, id, date) => request(`/methode/models/${id}/attendance?date=${date}`, { token }),

@@ -7,6 +7,7 @@ import { api } from '../../lib/api'
 import { errorMessage } from '../../lib/errors'
 import { useSaveStatus } from '../../hooks/useSaveStatus'
 import ErrorNote from '../../components/ErrorNote'
+import { garmentTypeOf } from '../../lib/modelLabel'
 import { DEPARTMENT_META } from '../../lib/constants'
 
 export default function PatronForm({ token }) {
@@ -318,7 +319,10 @@ function ModelFinanceCard({ token, model, open, onToggle, onSaved }) {
       <button onClick={onToggle} className="flex w-full items-center justify-between text-left">
         <div>
           <div className="font-display text-sm font-semibold text-slate-100">
-            {model.client} <span className="text-slate-500">· {model.dessin}</span>
+            {model.client}
+            {[garmentTypeOf(model), model.dessin].filter(Boolean).map((part) => (
+              <span key={part} className="text-slate-500"> · {part}</span>
+            ))}
           </div>
           <div className="text-xs text-slate-500">
             {model.active ? `Chaîne ${model.chainNumber}` : 'Inactif'}

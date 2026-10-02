@@ -1,3 +1,5 @@
+import { garmentTypeOf } from '../lib/modelLabel'
+
 // Fin de série / Démarrage: only rendered when the chain runs two models at
 // once. One button per model (fin de série first, démarrage second), each
 // with how many of today's hours already have an entry — so whoever is
@@ -29,7 +31,7 @@ export default function ModelSwitcher({ openModels, selectedId, onSelect, totalS
             >
               <span>
                 {active ? '● ' : ''}
-                {m.dessin || m.client} ({ROLE_LABEL[m.role] || ''})
+                {[m.dessin || m.client, garmentTypeOf(m)].filter(Boolean).join(' · ')} ({ROLE_LABEL[m.role] || ''})
               </span>
               {m.filledSlots !== null && m.filledSlots !== undefined && (
                 <span className="rounded bg-navy-950/60 px-1.5 py-0.5 font-mono text-[11px] text-slate-300">
