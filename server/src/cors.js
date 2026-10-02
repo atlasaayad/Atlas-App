@@ -5,13 +5,12 @@ import cors from 'cors'
 //   CORS_ALLOWED_ORIGINS        comma-separated exact origins
 //   CORS_PREVIEW_ORIGIN_PATTERN one regular expression for preview URLs
 // The defaults are the production Atlas URL and this Vercel team's preview
-// deployments of its two Atlas projects (atlas-app, atlas-app-kfr5), whose
-// URLs look like
+// deployments of the atlas-app project, whose URLs look like
 //   https://atlas-app-git-<branch>-atlasaayads-projects.vercel.app
-//   https://atlas-app-kfr5-<hash>-atlasaayads-projects.vercel.app
+//   https://atlas-app-<hash>-atlasaayads-projects.vercel.app
 // — deliberately NOT every *.vercel.app, which any Vercel user can deploy to.
 const DEFAULT_ALLOWED_ORIGINS = ['https://atlas-app-smoky.vercel.app']
-const DEFAULT_PREVIEW_ORIGIN_PATTERN = '^https://atlas-app(-kfr5)?-[a-z0-9-]+-atlasaayads-projects\\.vercel\\.app$'
+const DEFAULT_PREVIEW_ORIGIN_PATTERN = '^https://atlas-app-[a-z0-9-]+-atlasaayads-projects\\.vercel\\.app$'
 
 function allowedOrigins() {
   const raw = process.env.CORS_ALLOWED_ORIGINS
@@ -51,7 +50,8 @@ export function isOriginAllowed(origin, host) {
 // without CORS headers, so a cross-origin request from an unrelated site
 // never reaches a route handler at all.
 export function corsMiddleware() {
-  const allowCors = cors({ origin: true })
+  // X-Atlas-Token = renewed session token (auth.js), read by the client.
+  const allowCors = cors({ origin: true, exposedHeaders: ['X-Atlas-Token'] })
   return (req, res, next) => {
     if (!isOriginAllowed(req.headers.origin, req.headers.host)) {
       return res.status(403).json({ error: 'origin_not_allowed' })

@@ -1,6 +1,7 @@
+import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import { nanoid } from 'nanoid'
-import { get, run, ensureSchema, logAudit } from './index.js'
+import { all, get, run, ensureSchema, logAudit } from './index.js'
 import { DEPARTMENTS, SPECIALTIES, FINALE_SPECIALTIES, HOURLY_SLOTS } from '../constants.js'
 import { computeVTMinutes, computeDT, todayInFactoryTZ } from '../calc.js'
 
@@ -41,17 +42,51 @@ export function productionPinWarning(env = process.env) {
   )
 }
 
+// PIN sync at every cold start — WITHOUT re-hashing an unchanged PIN.
+// bcrypt salts every hash randomly, and every login token carries a
+// fingerprint of the stored hash (auth.js), so re-hashing an unchanged PIN
+// on each new Vercel instance used to log every open session out ("Session
+// expirée" long before 12 h). Now the hash is only replaced when the PIN
+// itself changed (env var edited) — which is exactly when sessions SHOULD
+// end. A cheap per-department stamp (sha256 of hash + PIN, kept in the
+// config table) avoids running bcrypt on every cold start; without it (first
+// boot after this change) a single bcrypt compare is done, then stamped.
+function pinStamp(pinHash, pin) {
+  return crypto.createHash('sha256').update(`${pinHash}:${pin}`).digest('hex')
+}
+
 async function seedDepartments() {
   const warning = productionPinWarning()
   if (warning) console.warn(warning)
 
+  const existing = Object.fromEntries((await all('SELECT key, label, icon, pin_hash FROM departments')).map((d) => [d.key, d]))
+  const stampsRow = await get("SELECT value FROM config WHERE key = 'pin_stamps'")
+  const stamps = stampsRow?.value ? JSON.parse(stampsRow.value) : {}
+  let stampsChanged = false
+
   for (const dept of DEPARTMENTS) {
     const pin = process.env[`PIN_${dept.key.toUpperCase()}`] || DEFAULT_PINS[dept.key]
-    const pinHash = bcrypt.hashSync(pin, 10)
+    const row = existing[dept.key]
+    let pinHash = row?.pin_hash
+    const unchanged = row && (stamps[dept.key] === pinStamp(row.pin_hash, pin) || bcrypt.compareSync(pin, row.pin_hash))
+    if (!unchanged) pinHash = bcrypt.hashSync(pin, 10)
+    if (!row || !unchanged || row.label !== dept.label || row.icon !== dept.icon) {
+      await run(
+        `INSERT INTO departments (key, label, icon, pin_hash) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (key) DO UPDATE SET label = excluded.label, icon = excluded.icon, pin_hash = excluded.pin_hash`,
+        [dept.key, dept.label, dept.icon, pinHash]
+      )
+    }
+    const stamp = pinStamp(pinHash, pin)
+    if (stamps[dept.key] !== stamp) {
+      stamps[dept.key] = stamp
+      stampsChanged = true
+    }
+  }
+  if (stampsChanged) {
     await run(
-      `INSERT INTO departments (key, label, icon, pin_hash) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (key) DO UPDATE SET label = excluded.label, icon = excluded.icon, pin_hash = excluded.pin_hash`,
-      [dept.key, dept.label, dept.icon, pinHash]
+      `INSERT INTO config (key, value) VALUES ('pin_stamps', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      [JSON.stringify(stamps)]
     )
   }
 }

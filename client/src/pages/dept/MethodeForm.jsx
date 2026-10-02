@@ -218,8 +218,8 @@ function ClosePrompts({ token, prompts, onDone }) {
     // reported as a failed close.
     try {
       await onDone()
-    } catch {
-      setError(errorMessage({ kind: 'network' }, { load: true }))
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
     }
   }
 
@@ -286,8 +286,8 @@ function CloseModelCard({ token, model, dashboard, onClosed }) {
     // say so — never "the close failed".
     try {
       await onClosed()
-    } catch {
-      setError(errorMessage({ kind: 'network' }, { load: true }))
+    } catch (err) {
+      setError(errorMessage(err, { load: true }))
       setClosing(false)
     }
   }

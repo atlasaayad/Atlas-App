@@ -15,6 +15,7 @@ import ExcelJS from 'exceljs'
 import { app } from '../src/app.js'
 import { isOriginAllowed } from '../src/cors.js'
 import jwt from 'jsonwebtoken'
+import crypto from 'node:crypto'
 import { presignUrl } from '@vercel/blob'
 import { setDocumentStorageForTests, DOCUMENT_MAX_BYTES } from '../src/documentStorage.js'
 import { runSeed, productionPinWarning } from '../src/db/seed.js'
@@ -3367,5 +3368,83 @@ test('/api/models/:id: sans connexion, seulement l’identité; connecté, le d�
     }
     const dash = await call('/chains/8/dashboard')
     assert.equal(dash.data.identity.client, 'TEST_PUBLIC_MODEL')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Session policy (trial bug A): a cold start must never log anyone out;
+// sessions renew while used; only inactivity, the 7-day cap or a changed PIN
+// end them.
+// ---------------------------------------------------------------------------
+
+test('Session: survit aux démarrages à froid, renouvellement glissant, expiration', async (t) => {
+  const savedPin = process.env.PIN_METHODE
+  t.after(async () => {
+    if (savedPin === undefined) delete process.env.PIN_METHODE
+    else process.env.PIN_METHODE = savedPin
+    await runSeed() // back to the default PIN
+  })
+  const token = await login('methode', '1111')
+  const authed = (tk) => fetch(`${base}/settings/feedback`, { headers: { Authorization: `Bearer ${tk}` } })
+
+  await t.test('un nouveau démarrage (autre instance Vercel) ne change pas le hash du PIN et ne coupe pas la session', async () => {
+    const before = (await get("SELECT pin_hash FROM departments WHERE key = 'methode'")).pin_hash
+    await runSeed()
+    await runSeed()
+    assert.equal((await get("SELECT pin_hash FROM departments WHERE key = 'methode'")).pin_hash, before)
+    assert.equal((await authed(token)).status, 200)
+  })
+
+  await t.test('PIN changé dans Vercel → toutes les sessions de ce département se ferment (401 pin_rotated), le nouveau PIN marche', async () => {
+    process.env.PIN_METHODE = '4321'
+    await runSeed()
+    const r = await authed(token)
+    assert.equal(r.status, 401)
+    assert.equal((await r.json()).error, 'pin_rotated')
+    assert.equal((await call('/auth/methode/login', { method: 'POST', body: { pin: '4321' } })).status, 200)
+    process.env.PIN_METHODE = '1111'
+    await runSeed()
+  })
+
+  const pinHash = async () => (await get("SELECT pin_hash FROM departments WHERE key = 'methode'")).pin_hash
+  const now = () => Math.floor(Date.now() / 1000)
+  const sign = async (claims, opts = {}) => jwt.sign({ dept: 'methode', pv: crypto.createHash('sha256').update(await pinHash()).digest('hex').slice(0, 16), ...claims }, process.env.JWT_SECRET, { algorithm: 'HS256', ...opts })
+
+  await t.test('jeton récent (< 10 min) : pas de renouvellement', async () => {
+    const fresh = await login('methode', '1111')
+    const r = await authed(fresh)
+    assert.equal(r.status, 200)
+    assert.equal(r.headers.get('x-atlas-token'), null)
+  })
+
+  await t.test('jeton utilisé après 10 min : un nouveau jeton est renvoyé (X-Atlas-Token), valable, même début de session', async () => {
+    const start = now() - 3 * 3600
+    const old = await sign({ s: start, iat: now() - 20 * 60 }, { expiresIn: '24h' })
+    const r = await authed(old)
+    assert.equal(r.status, 200)
+    const renewed = r.headers.get('x-atlas-token')
+    assert.ok(renewed)
+    const payload = jwt.decode(renewed)
+    assert.equal(payload.s, start)
+    assert.equal(payload.dept, 'methode')
+    assert.ok(payload.exp - now() > 23 * 3600) // a full new 24 h window
+    assert.equal((await authed(renewed)).status, 200)
+  })
+
+  await t.test('24 h sans activité → 401 session_expired; plus de 7 jours au total → 401 même si utilisé', async () => {
+    const idle = await sign({ s: now() - 30 * 3600, iat: now() - 25 * 3600, exp: now() - 3600 })
+    let r = await authed(idle)
+    assert.equal(r.status, 401)
+    assert.equal((await r.json()).error, 'session_expired')
+    const tooLong = await sign({ s: now() - 8 * 24 * 3600 }, { expiresIn: '24h' })
+    r = await authed(tooLong)
+    assert.equal(r.status, 401)
+    assert.equal((await r.json()).error, 'session_expired')
+  })
+
+  await t.test('mauvais département → 403 (pas une session expirée)', async () => {
+    const r = await call('/patron/cpm', { token: await login('methode', '1111') })
+    assert.equal(r.status, 403)
+    assert.equal(r.data.error, 'wrong_department')
   })
 })
