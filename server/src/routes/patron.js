@@ -42,7 +42,16 @@ patronRouter.put('/cpm', async (req, res) => {
 // and have no reason to ever leave the server even in an export the Patron
 // requested themselves.
 const EXPORT_TABLES = [
-  { sheet: 'Modeles', table: 'models', orderBy: 'chain_number' },
+  // garment_type: a Couleur/Variante row shows its parent's type (variants never store one).
+  {
+    sheet: 'Modeles',
+    table: 'models',
+    orderBy: 'chain_number',
+    transform: (rows) => {
+      const typeById = Object.fromEntries(rows.map((r) => [r.id, r.garment_type]))
+      return rows.map((r) => (r.parent_model_id ? { ...r, garment_type: typeById[r.parent_model_id] ?? null } : r))
+    },
+  },
   { sheet: 'Gamme', table: 'gamme_lines', orderBy: 'model_id, seq_no' },
   { sheet: 'Effectif Requis', table: 'effectif_requis', orderBy: 'model_id, specialty' },
   // production_history is the full permanent record (every date, not just
@@ -93,11 +102,12 @@ patronRouter.get('/export', async (req, res) => {
   workbook.creator = companyRow?.value || 'Casual'
   workbook.created = new Date()
 
-  for (const { sheet, table, columns, orderBy, limit } of EXPORT_TABLES) {
+  for (const { sheet, table, columns, orderBy, limit, transform } of EXPORT_TABLES) {
     const columnList = columns ? columns.join(', ') : '*'
     const orderClause = orderBy ? ` ORDER BY ${orderBy}` : ''
     const limitClause = limit ? ` LIMIT ${limit}` : ''
-    const rows = await all(`SELECT ${columnList} FROM ${table}${orderClause}${limitClause}`)
+    const queried = await all(`SELECT ${columnList} FROM ${table}${orderClause}${limitClause}`)
+    const rows = transform ? transform(queried) : queried
 
     const ws = workbook.addWorksheet(sheet)
     if (rows.length === 0) continue
@@ -194,6 +204,7 @@ function loadFinance(row) {
 
 patronRouter.get('/models', async (req, res) => {
   const models = await all('SELECT * FROM models ORDER BY active DESC, chain_number')
+  const typeById = Object.fromEntries(models.map((m) => [m.id, m.garment_type]))
   const result = []
   for (const model of models) {
     const finance = loadFinance(await get('SELECT * FROM patron_finance WHERE model_id = $1', [model.id]))
@@ -202,6 +213,7 @@ patronRouter.get('/models', async (req, res) => {
       id: model.id,
       client: model.client,
       dessin: model.dessin,
+      garmentType: (model.parent_model_id ? typeById[model.parent_model_id] : model.garment_type) || null,
       chainNumber: model.chain_number,
       active: !!model.active,
       ...withProfit(model, finance, exportedQty),

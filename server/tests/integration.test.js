@@ -3535,3 +3535,115 @@ test('Chaîne à 2 modèles: chaque chiffre du tableau de bord appartient à son
     assert.deepEqual(chain.models.map((m) => m.id).sort(), [oldId, newId].sort())
   })
 })
+
+test('Type de vêtement: liste, ajout sans doublon, variantes = type du parent, affichage', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const patronToken = await login('patron', '3333')
+  const created = []
+  t.after(async () => {
+    for (const id of created.reverse()) {
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+      await run('DELETE FROM models WHERE id = $1', [id])
+    }
+    await run("DELETE FROM garment_types WHERE name LIKE 'TestType%'")
+    await run("DELETE FROM audit_log WHERE action = 'add_garment_type'")
+  })
+
+  await t.test('liste par défaut (11 types) et accès réservé à Méthode', async () => {
+    const res = await call('/methode/garment-types', { token: methodeToken })
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.data.slice(0, 11), [
+      'T-shirt', 'Polo', 'Chemise', 'Veste', 'Gilet', 'Pantalon', 'Short', 'Jupe', 'Robe', 'Sweat', 'Manteau',
+    ])
+    assert.equal((await call('/methode/garment-types')).status, 401)
+  })
+
+  await t.test('ajout d’un type: enregistré, dans la liste; doublons (casse/espaces/accents) refusés', async () => {
+    const add = await call('/methode/garment-types', { method: 'POST', token: methodeToken, body: { name: '  TestType   Combinaison ' } })
+    assert.equal(add.status, 201)
+    assert.equal(add.data.name, 'TestType Combinaison')
+    assert.ok((await call('/methode/garment-types', { token: methodeToken })).data.includes('TestType Combinaison'))
+    for (const dup of ['testtype combinaison', 'TESTTYPE  COMBINAISON', 'TestType Combinaisön']) {
+      const r = await call('/methode/garment-types', { method: 'POST', token: methodeToken, body: { name: dup } })
+      assert.equal(r.status, 400, dup)
+      assert.equal(r.data.error, 'duplicate_garment_type')
+      assert.equal(r.data.existing, 'TestType Combinaison')
+      assert.ok(r.data.message.fr && r.data.message.ar)
+    }
+    const dupDefault = await call('/methode/garment-types', { method: 'POST', token: methodeToken, body: { name: ' vésté' } })
+    assert.equal(dupDefault.status, 400)
+    assert.equal(dupDefault.data.existing, 'Veste')
+    assert.equal((await call('/methode/garment-types', { method: 'POST', token: methodeToken, body: { name: '  ' } })).status, 400)
+  })
+
+  const mk = async (body) => {
+    const r = await call('/methode/models', { method: 'POST', token: methodeToken, body: { chainNumber: TEST_CHAIN, ...body } })
+    assert.equal(r.status, 201)
+    created.push(r.data.id)
+    return r.data.id
+  }
+  const oldId = await mk({ client: 'TEST_TYPE_OLD', dessin: '700', qteTotale: 100 })
+  const newId = await mk({ client: 'TEST_TYPE_NEW', dessin: '2500', qteTotale: 2500 })
+
+  await t.test('un ancien modèle reste sans type; Identité enregistre le type (orthographe de la liste)', async () => {
+    assert.equal((await call(`/models/${oldId}`)).data.garment_type, null)
+    const identity = { client: 'TEST_TYPE_NEW', dessin: '2500', qteTotale: 2500 }
+    const bad = await call(`/methode/models/${newId}`, { method: 'PUT', token: methodeToken, body: { ...identity, garmentType: 'Inconnu' } })
+    assert.equal(bad.status, 400)
+    assert.equal(bad.data.error, 'unknown_garment_type')
+    const ok = await call(`/methode/models/${newId}`, { method: 'PUT', token: methodeToken, body: { ...identity, garmentType: 'veste' } })
+    assert.equal(ok.status, 200)
+    assert.equal((await call(`/models/${newId}`, { token: methodeToken })).data.garment_type, 'Veste')
+    // A save without the field (older client) keeps the type.
+    await call(`/methode/models/${newId}`, { method: 'PUT', token: methodeToken, body: identity })
+    assert.equal((await call(`/models/${newId}`)).data.garment_type, 'Veste')
+  })
+
+  await t.test('une variante couleur prend toujours le type du parent', async () => {
+    const v = await call(`/methode/models/${newId}/variants`, { method: 'POST', token: methodeToken, body: { label: 'Bleu', qteTotale: 10 } })
+    assert.equal(v.status, 201)
+    created.push(v.data.id)
+    assert.equal((await call(`/models/${v.data.id}`)).data.garment_type, 'Veste')
+    // Setting a type on the variant itself is ignored.
+    await call(`/methode/models/${v.data.id}`, { method: 'PUT', token: methodeToken, body: { client: 'TEST_TYPE_NEW', garmentType: 'Polo' } })
+    assert.equal((await get('SELECT garment_type FROM models WHERE id = $1', [v.data.id])).garment_type, null)
+    const identity = { client: 'TEST_TYPE_NEW', dessin: '2500', qteTotale: 2500 }
+    await call(`/methode/models/${newId}`, { method: 'PUT', token: methodeToken, body: { ...identity, garmentType: 'Manteau' } })
+    assert.equal((await call(`/models/${v.data.id}`)).data.garment_type, 'Manteau')
+    const patron = (await call('/patron/models', { token: patronToken })).data
+    assert.equal(patron.find((m) => m.id === v.data.id).garmentType, 'Manteau')
+    await call(`/methode/models/${newId}`, { method: 'PUT', token: methodeToken, body: { ...identity, garmentType: 'Veste' } })
+  })
+
+  await t.test('affichage: chaînes, tableaux de bord, boutons du changement, Patron, Excel', async () => {
+    const chain = (await call('/chains')).data.find((c) => c.chainNumber === TEST_CHAIN)
+    assert.deepEqual(Object.fromEntries(chain.models.map((m) => [m.id, m.garment_type])), { [oldId]: null, [newId]: 'Veste' })
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    const byId = Object.fromEntries(dash.data.dashboards.map((d) => [d.id, d]))
+    assert.equal(byId[newId].identity.garmentType, 'Veste')
+    assert.equal(byId[oldId].identity.garmentType, null)
+    const open = (await call(`/chains/${TEST_CHAIN}/open-models`)).data.models
+    assert.equal(open.find((m) => m.id === newId).garmentType, 'Veste')
+    const patron = (await call('/patron/models', { token: patronToken })).data
+    assert.equal(patron.find((m) => m.id === newId).garmentType, 'Veste')
+    assert.equal(patron.find((m) => m.id === oldId).garmentType, null)
+
+    const res = await fetch(`${base}/patron/export`, { headers: { Authorization: `Bearer ${patronToken}` } })
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(Buffer.from(await res.arrayBuffer()))
+    const ws = wb.getWorksheet('Modeles')
+    const headers = ws.getRow(1).values
+    const idCol = headers.indexOf('id')
+    const typeCol = headers.indexOf('garment_type')
+    assert.ok(typeCol > 0)
+    const typeById = {}
+    ws.eachRow((row, n) => {
+      if (n > 1) typeById[row.getCell(idCol).value] = row.getCell(typeCol).value
+    })
+    assert.equal(typeById[newId], 'Veste')
+    const variantId = created.find((id) => id !== oldId && id !== newId)
+    assert.equal(typeById[variantId], 'Veste')
+    assert.ok(!typeById[oldId])
+  })
+})

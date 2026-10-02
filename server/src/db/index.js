@@ -152,6 +152,17 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active
 ALTER TABLE models ADD COLUMN IF NOT EXISTS closed_at TEXT;
 ALTER TABLE models ADD COLUMN IF NOT EXISTS close_prompt_dismissed_on TEXT;
 
+-- Optional garment type (T-shirt, Veste…), chosen in Méthode → Identité.
+-- NULL = no type (every model created before this existed) and nothing is
+-- shown. Set on root models only: a Couleur/Variante variant always reads
+-- its parent's type (see garmentTypes.js), it never stores its own.
+ALTER TABLE models ADD COLUMN IF NOT EXISTS garment_type TEXT;
+
+-- Types added from "+ Ajouter un autre type". The default list lives in code
+-- (DEFAULT_GARMENT_TYPES in garmentTypes.js), so this only ever holds the
+-- factory's own additions.
+CREATE TABLE IF NOT EXISTS garment_types (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at TEXT);
+
 CREATE TABLE IF NOT EXISTS gamme_lines (
   id TEXT PRIMARY KEY,
   model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,

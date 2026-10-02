@@ -17,6 +17,7 @@ import { api } from '../lib/api'
 import { errorMessage } from '../lib/errors'
 import ErrorNote from '../components/ErrorNote'
 import { CHAIN_NUMBERS, DELAY_REASONS } from '../lib/constants'
+import { garmentTypeOf, modelName, modelOptionLabel } from '../lib/modelLabel'
 import { computeLaunchTimerState, formatDuration } from '../lib/calc'
 
 export default function Home() {
@@ -98,7 +99,7 @@ export default function Home() {
                 <option key={n} value={n} disabled={!info?.model}>
                   Chaîne {n}{' '}
                   {info?.model
-                    ? `— ${(info.models?.length ? info.models : [info.model]).map((m) => `${m.client}${m.dessin ? ` (${m.dessin})` : ''}`).join(' + ')}`
+                    ? `— ${(info.models?.length ? info.models : [info.model]).map(modelOptionLabel).join(' + ')}`
                     : '(vide)'}
                 </option>
               )
@@ -241,7 +242,9 @@ function MultiModelDashboard({ dashboards, chainRendement, chain, chainNumber })
               </div>
               <div className="break-words font-display font-semibold">
                 {d.identity.client}
-                {d.identity.dessin ? <span className="text-slate-500"> · {d.identity.dessin}</span> : null}
+                {[garmentTypeOf(d.identity), d.identity.dessin].filter(Boolean).map((part) => (
+                  <span key={part} className="text-slate-500"> · {part}</span>
+                ))}
               </div>
             </button>
           )
@@ -367,7 +370,10 @@ function DashboardBody({ data, role = null, hideRendement = false, chainShared =
                 </div>
               )}
               <div className="font-display text-lg font-semibold text-slate-100">
-                {data.identity.client} <span className="text-slate-500">· {data.identity.dessin}</span>
+                {data.identity.client}
+                {[garmentTypeOf(data.identity), data.identity.dessin].filter(Boolean).map((part) => (
+                  <span key={part} className="text-slate-500"> · {part}</span>
+                ))}
               </div>
               <div className="text-xs text-slate-500">Chaîne {data.chainNumber}</div>
             </div>
@@ -377,7 +383,7 @@ function DashboardBody({ data, role = null, hideRendement = false, chainShared =
             <Field label="Début" value={data.identity.debut} />
             <Field label="Fin prévue" value={data.identity.finPrevue} />
           </div>
-          <FicheButton modelId={data.id} title={`${data.identity.client} · ${data.identity.dessin}`} />
+          <FicheButton modelId={data.id} title={modelName(data.identity)} />
         </div>
         {data.launchTimer?.startedAt && <LaunchTimerStatus launchTimer={data.launchTimer} />}
         {hasVariants && (
@@ -463,7 +469,7 @@ function DashboardBody({ data, role = null, hideRendement = false, chainShared =
           selectedColor
             ? `Bilan — ${selectedColor.label || 'Défaut'}`
             : chainShared
-              ? `Bilan — ${data.identity.client}${data.identity.dessin ? ` · ${data.identity.dessin}` : ''}`
+              ? `Bilan — ${modelName(data.identity)}`
               : 'Bilan de la chaîne'
         }
       >

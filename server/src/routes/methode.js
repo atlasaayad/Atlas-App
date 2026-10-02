@@ -11,6 +11,7 @@ import { getSpecialties } from '../specialties.js'
 import { getWorkHours } from '../workHours.js'
 import { uploadModelImage, deleteModelImage } from '../imageUpload.js'
 import { getOpenModelsForChain, MAX_OPEN_PER_CHAIN } from '../openModels.js'
+import { getGarmentTypes, findGarmentType, addGarmentType } from '../garmentTypes.js'
 
 export const methodeRouter = Router()
 methodeRouter.use(requireDept('methode'))
@@ -30,6 +31,36 @@ function buildBulkInsert(rows) {
   }
   return { valuesSql: values.join(', '), params }
 }
+
+// Optional garment type sent by the client: '' / null / absent → no type;
+// otherwise it must be in the list (returned with the list's own spelling).
+async function resolveGarmentType(res, value) {
+  if (value === undefined || value === null || String(value).trim() === '') return { value: null }
+  const found = await findGarmentType(value)
+  if (!found) {
+    reject(res, 'unknown_garment_type', 'هاد النوع ما كاينش فاللائحة', "Ce type n'est pas dans la liste")
+    return null
+  }
+  return { value: found }
+}
+
+methodeRouter.get('/garment-types', async (req, res) => {
+  res.json(await getGarmentTypes())
+})
+
+methodeRouter.post('/garment-types', async (req, res) => {
+  const name = String(req.body?.name || '').trim()
+  if (!name) return reject(res, 'name_required', 'كتب اسم النوع', 'Indiquez le nom du type')
+  if (name.length > 40) return reject(res, 'name_too_long', 'الاسم طويل بزاف (40 حرف على الأكثر)', 'Nom trop long (40 caractères max.)')
+  const result = await addGarmentType(name)
+  if (result.duplicate) {
+    return reject(res, 'duplicate_garment_type', `هاد النوع ديجا كاين: ${result.duplicate}`, `Ce type existe déjà : ${result.duplicate}`, {
+      existing: result.duplicate,
+    })
+  }
+  await logAudit({ deptKey: 'methode', action: 'add_garment_type', details: { name: result.name } })
+  res.status(201).json({ name: result.name, types: await getGarmentTypes() })
+})
 
 async function recompute(modelId) {
   const [gamme, effectifRows] = await Promise.all([
@@ -62,6 +93,8 @@ methodeRouter.post('/models', async (req, res) => {
   if (!client || !chainNumber) return res.status(400).json({ error: 'client_and_chain_required' })
   if (rejectNegative(res, [['Qté totale', qteTotale], ['Commande', commande]])) return
   if (rejectFinBeforeDebut(res, debut, finPrevue)) return
+  const garmentType = await resolveGarmentType(res, req.body?.garmentType)
+  if (!garmentType) return
 
   const openOnChain = await getOpenModelsForChain(Number(chainNumber))
   if (openOnChain.length >= MAX_OPEN_PER_CHAIN) return res.status(409).json({ error: 'chain_full' })
@@ -70,9 +103,9 @@ methodeRouter.post('/models', async (req, res) => {
   const id = `mdl_${nanoid(10)}`
 
   await run(
-    `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9)`,
-    [id, client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, chainNumber, now]
+    `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at, garment_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9, $10)`,
+    [id, client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, chainNumber, now, garmentType.value]
   )
 
   // No hourly_production seeding — production_history has no rows yet for
@@ -143,14 +176,23 @@ methodeRouter.put('/models/:id/variants/:variantId', async (req, res) => {
 
 methodeRouter.put('/models/:id', async (req, res) => {
   const { client, qteTotale, debut, finPrevue, dessin, commande } = req.body || {}
-  const model = await get('SELECT id FROM models WHERE id = $1', [req.params.id])
+  const model = await get('SELECT id, parent_model_id FROM models WHERE id = $1', [req.params.id])
   if (!model) return res.status(404).json({ error: 'not_found' })
   if (!String(client || '').trim()) return reject(res, 'client_required', 'دخّل اسم الـClient', 'Indiquez le client')
   if (rejectNegative(res, [['Qté totale', qteTotale], ['Commande', commande]])) return
   if (rejectFinBeforeDebut(res, debut, finPrevue)) return
+  // The type is only touched when the client sends it, and only on a root:
+  // a variant always shows its parent's type (garmentTypes.js).
+  const setsType = Object.prototype.hasOwnProperty.call(req.body, 'garmentType') && !model.parent_model_id
+  const garmentType = setsType ? await resolveGarmentType(res, req.body.garmentType) : { value: null }
+  if (!garmentType) return
   await run(
-    `UPDATE models SET client = $1, qte_totale = $2, debut = $3, fin_prevue = $4, dessin = $5, commande = $6, updated_at = $7 WHERE id = $8`,
-    [client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, new Date().toISOString(), req.params.id]
+    `UPDATE models SET client = $1, qte_totale = $2, debut = $3, fin_prevue = $4, dessin = $5, commande = $6, updated_at = $7${
+      setsType ? ', garment_type = $9' : ''
+    } WHERE id = $8`,
+    [client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, new Date().toISOString(), req.params.id].concat(
+      setsType ? [garmentType.value] : []
+    )
   )
   await logAudit({ deptKey: 'methode', modelId: req.params.id, action: 'update_identity', details: req.body })
   res.json({ ok: true })
