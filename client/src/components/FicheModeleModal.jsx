@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { api, getAnyDeptToken } from '../lib/api'
+import { api, getAnyDeptToken, deptKeyForToken } from '../lib/api'
+import LoginPrompt from './LoginPrompt'
 import { errorMessage } from '../lib/errors'
 
 // Fiche Modèle — opened from a model's card on Home (public). Everything
@@ -81,10 +81,19 @@ function toCents(value) {
 }
 
 export default function FicheModeleModal({ modelId, title, onClose }) {
-  const token = getAnyDeptToken(['patron', 'methode'])
+  const [token, setToken] = useState(() => getAnyDeptToken(['patron', 'methode']))
+  const [lastDept, setLastDept] = useState(() => deptKeyForToken(getAnyDeptToken(['patron', 'methode'])))
   const [fiche, setFiche] = useState(null)
   const [error, setError] = useState('')
-  const [needsLogin, setNeedsLogin] = useState(!token)
+  // null | 'login' (never logged in on this tab) | 'expired' (a 401 here)
+  const [loginReason, setLoginReason] = useState(token ? null : 'login')
+
+  // Any 401 — while loading OR from an action inside the Fiche — opens the
+  // PIN pad right here; after login the Fiche reloads by itself.
+  const sessionLost = useCallback(() => {
+    setFiche(null)
+    setLoginReason('expired')
+  }, [])
 
   const load = useCallback(async () => {
     if (!token) return
@@ -92,14 +101,21 @@ export default function FicheModeleModal({ modelId, title, onClose }) {
       setFiche(await api.fiche.get(token, modelId))
       setError('')
     } catch (err) {
-      if (err.status === 401) setNeedsLogin(true)
+      if (err.status === 401) sessionLost()
       else setError(errorText(err))
     }
-  }, [token, modelId])
+  }, [token, modelId, sessionLost])
 
   useEffect(() => {
     load()
   }, [load])
+
+  function loggedIn(dept, newToken) {
+    setLastDept(dept)
+    setError('')
+    setLoginReason(null)
+    setToken(newToken) // → load() runs again
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center sm:p-4" onClick={onClose}>
@@ -117,16 +133,13 @@ export default function FicheModeleModal({ modelId, title, onClose }) {
           </button>
         </div>
 
-        {needsLogin ? (
-          <div className="space-y-3 rounded-md border border-slate-800 bg-navy-950/60 p-4 text-sm text-slate-300">
-            <p>La Fiche Modèle est réservée aux départements connectés. Entrez le code PIN de votre département pour la consulter.</p>
-            <Link
-              to="/departements"
-              className="inline-flex h-11 items-center rounded-md border border-turquoise/50 px-5 font-medium text-turquoise active:bg-turquoise/10"
-            >
-              Connexion
-            </Link>
-          </div>
+        {loginReason ? (
+          <LoginPrompt
+            preferredDept={loginReason === 'expired' ? lastDept : null}
+            expired={loginReason === 'expired'}
+            intro="La Fiche Modèle est réservée aux départements connectés. Choisissez votre département et entrez son code PIN."
+            onLoggedIn={loggedIn}
+          />
         ) : error ? (
           <div className="whitespace-pre-line rounded-md border border-red-500/40 p-3 text-sm text-red-300">{error}</div>
         ) : !fiche ? (
@@ -139,10 +152,10 @@ export default function FicheModeleModal({ modelId, title, onClose }) {
                 {fiche.model.owner.client} · {fiche.model.owner.dessin}).
               </div>
             )}
-            <DocumentsSection token={token} fiche={fiche} onChanged={load} />
-            <CompositionSection token={token} fiche={fiche} onSaved={load} />
+            <DocumentsSection token={token} fiche={fiche} onChanged={load} onSessionLost={sessionLost} />
+            <CompositionSection token={token} fiche={fiche} onSaved={load} onSessionLost={sessionLost} />
             <FactorySection factory={fiche.factory} />
-            <TimelineSection token={token} fiche={fiche} />
+            <TimelineSection token={token} fiche={fiche} onSessionLost={sessionLost} />
           </div>
         )}
       </div>
@@ -166,7 +179,7 @@ function Section({ title, children, action }) {
 // 1. Documents techniques client
 // ---------------------------------------------------------------------------
 
-function DocumentsSection({ token, fiche, onChanged }) {
+function DocumentsSection({ token, fiche, onChanged, onSessionLost }) {
   const inputRef = useRef(null)
   const [busy, setBusy] = useState(null) // 'upload' | doc id
   const [progress, setProgress] = useState(null)
@@ -193,6 +206,7 @@ function DocumentsSection({ token, fiche, onChanged }) {
       await api.fiche.uploadDocument(token, modelId, file, mimeType, setProgress)
       await onChanged()
     } catch (err) {
+      if (err.status === 401) return onSessionLost()
       setMessage(errorText(err))
     } finally {
       setBusy(null)
@@ -213,6 +227,7 @@ function DocumentsSection({ token, fiche, onChanged }) {
       } else window.location.href = url
     } catch (err) {
       tab?.close()
+      if (err.status === 401) return onSessionLost()
       setMessage(errorText(err))
     }
   }
@@ -225,6 +240,7 @@ function DocumentsSection({ token, fiche, onChanged }) {
       await api.fiche.deleteDocument(token, modelId, doc.id)
       await onChanged()
     } catch (err) {
+      if (err.status === 401) return onSessionLost()
       setMessage(errorText(err))
     } finally {
       setBusy(null)
@@ -353,7 +369,7 @@ function toEditorRow(r) {
   }
 }
 
-function CompositionSection({ token, fiche, onSaved }) {
+function CompositionSection({ token, fiche, onSaved, onSessionLost }) {
   const [editing, setEditing] = useState(false)
   const [rows, setRows] = useState([])
   const [saving, setSaving] = useState(false)
@@ -390,6 +406,7 @@ function CompositionSection({ token, fiche, onSaved }) {
       await onSaved()
       setEditing(false)
     } catch (err) {
+      if (err.status === 401) return onSessionLost()
       setMessage(errorText(err))
     } finally {
       setSaving(false)
@@ -546,7 +563,7 @@ function stageDetail(stage) {
   return null
 }
 
-function TimelineSection({ token, fiche }) {
+function TimelineSection({ token, fiche, onSessionLost }) {
   const [colourId, setColourId] = useState(fiche.model.id)
   const [timeline, setTimeline] = useState(fiche.timeline)
   const [loading, setLoading] = useState(false)
@@ -565,6 +582,7 @@ function TimelineSection({ token, fiche }) {
     try {
       setTimeline((await api.fiche.get(token, id)).timeline)
     } catch (err) {
+      if (err.status === 401) return onSessionLost()
       setPickError(errorText(err))
     } finally {
       setLoading(false)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import LoginPrompt from '../components/LoginPrompt'
 import GlowCard from '../components/GlowCard'
 import { api } from '../lib/api'
 import { errorMessage } from '../lib/errors'
@@ -18,6 +18,8 @@ export default function Ask() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  // The question waiting for a login (PIN pad shown in place, then re-sent).
+  const [loginFor, setLoginFor] = useState(null)
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export default function Ask() {
           : err?.data?.error === 'daily_limit_reached'
             ? 'تم الوصول للحد اليومي، جرب بكرة 🙏'
             : errorMessage(err)
-      setMessages((m) => [...m, { role: 'assistant', text, needsLogin: err?.status === 401 }])
+      setMessages((m) => [...m, { role: 'assistant', text, needsLogin: err?.status === 401, question: q }])
     } finally {
       setLoading(false)
     }
@@ -110,12 +112,12 @@ export default function Ask() {
               >
                 {m.text}
                 {m.needsLogin && (
-                  <Link
-                    to="/departements"
+                  <button
+                    onClick={() => setLoginFor(m.question)}
                     className="mt-2 flex h-10 w-fit items-center rounded-md border border-turquoise/50 px-4 text-sm font-medium text-turquoise active:bg-turquoise/10"
                   >
                     Connexion
-                  </Link>
+                  </button>
                 )}
               </div>
             </div>
@@ -153,6 +155,26 @@ export default function Ask() {
           </button>
         </form>
       </GlowCard>
+      {loginFor !== null && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center sm:p-4" onClick={() => setLoginFor(null)}>
+          <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-lg border border-turquoise/30 bg-navy-900 p-4 sm:rounded-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
+              <div className="font-display text-base font-semibold text-slate-100">Connexion</div>
+              <button onClick={() => setLoginFor(null)} className="flex h-10 w-10 items-center justify-center rounded text-slate-400" aria-label="Fermer">
+                ✕
+              </button>
+            </div>
+            <LoginPrompt
+              intro="« اسأل أطلس » كتحتاج دخول بشي قسم — اختر القسم ودخّل الرمز."
+              onLoggedIn={() => {
+                const q = loginFor
+                setLoginFor(null)
+                send(q)
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
