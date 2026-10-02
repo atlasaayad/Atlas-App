@@ -16,13 +16,11 @@ if (!JWT_SECRET || INSECURE_DEFAULTS.has(JWT_SECRET)) {
   )
 }
 
-const TOKEN_TTL = '12h'
-
 // A short fingerprint of a department's current pin_hash, embedded in every
 // token issued for it. Rotating a PIN changes pin_hash, which changes this
 // fingerprint, which invalidates every token issued under the old PIN —
 // without it, a token issued right before a PIN rotation would stay valid
-// for up to TOKEN_TTL regardless of the rotation.
+// for its whole validity regardless of the rotation.
 function pinFingerprint(pinHash) {
   return crypto.createHash('sha256').update(pinHash).digest('hex').slice(0, 16)
 }
@@ -95,11 +93,69 @@ export async function verifyPin(deptKey, pin, ip = 'unknown') {
   return { ok: false, reason: 'invalid', attemptsRemaining: MAX_ATTEMPTS - attempts }
 }
 
-export function issueToken(deptKey, pinHash) {
-  return jwt.sign({ dept: deptKey, pv: pinFingerprint(pinHash) }, JWT_SECRET, {
-    expiresIn: TOKEN_TTL,
+// Session policy (Mohamed's decision): the PIN is entered once; the session
+// then lasts as long as it is used. Each token is valid SESSION_IDLE_TTL
+// after it was issued, and any authenticated request made with a token older
+// than RENEW_AFTER_SECONDS gets a fresh one in the X-Atlas-Token response
+// header (the client swaps it in silently) — so only SESSION_IDLE_TTL of
+// inactivity, closing the tab (sessionStorage), Déconnexion, or the PIN
+// being changed (fingerprint below) ends a session. `s` (session start)
+// survives renewals and caps one session at SESSION_MAX_SECONDS overall.
+const SESSION_IDLE_TTL = '24h'
+const RENEW_AFTER_SECONDS = 10 * 60
+const SESSION_MAX_SECONDS = 7 * 24 * 60 * 60
+export const RENEWED_TOKEN_HEADER = 'X-Atlas-Token'
+
+export function issueToken(deptKey, pinHash, sessionStart = Math.floor(Date.now() / 1000)) {
+  return jwt.sign({ dept: deptKey, pv: pinFingerprint(pinHash), s: sessionStart }, JWT_SECRET, {
+    expiresIn: SESSION_IDLE_TTL,
     algorithm: 'HS256',
   })
+}
+
+// Shared by requireDept / requireAnyDept. Responds itself (401/403) and
+// returns null on refusal; otherwise returns the department key.
+async function authenticate(req, res, allowed) {
+  const header = req.headers.authorization || ''
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null
+  if (!token) {
+    res.status(401).json({ error: 'missing_token' })
+    return null
+  }
+
+  let payload
+  try {
+    payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
+  } catch (err) {
+    res.status(401).json({ error: err?.name === 'TokenExpiredError' ? 'session_expired' : 'invalid_token' })
+    return null
+  }
+  if (!payload.dept) {
+    res.status(401).json({ error: 'invalid_token' })
+    return null
+  }
+  if (allowed && !allowed.includes(payload.dept)) {
+    res.status(403).json({ error: 'wrong_department' })
+    return null
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const sessionStart = payload.s ?? payload.iat
+  if (nowSeconds - sessionStart > SESSION_MAX_SECONDS) {
+    res.status(401).json({ error: 'session_expired' })
+    return null
+  }
+
+  const dept = await get('SELECT pin_hash FROM departments WHERE key = $1', [payload.dept])
+  if (!dept || pinFingerprint(dept.pin_hash) !== payload.pv) {
+    res.status(401).json({ error: 'pin_rotated' })
+    return null
+  }
+
+  if (nowSeconds - payload.iat > RENEW_AFTER_SECONDS) {
+    res.setHeader(RENEWED_TOKEN_HEADER, issueToken(payload.dept, dept.pin_hash, sessionStart))
+  }
+  return payload.dept
 }
 
 // Express middleware: requires a valid Bearer token scoped to `deptKey`
@@ -108,54 +164,20 @@ export function issueToken(deptKey, pinHash) {
 export function requireDept(deptKeyOrKeys) {
   const allowed = Array.isArray(deptKeyOrKeys) ? deptKeyOrKeys : [deptKeyOrKeys]
   return async (req, res, next) => {
-    const header = req.headers.authorization || ''
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null
-    if (!token) return res.status(401).json({ error: 'missing_token' })
-
-    let payload
-    try {
-      payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
-    } catch {
-      return res.status(401).json({ error: 'invalid_token' })
-    }
-    if (!allowed.includes(payload.dept)) return res.status(403).json({ error: 'wrong_department' })
-
-    const dept = await get('SELECT pin_hash FROM departments WHERE key = $1', [payload.dept])
-    if (!dept || pinFingerprint(dept.pin_hash) !== payload.pv) {
-      return res.status(401).json({ error: 'pin_rotated' })
-    }
-
-    req.dept = payload.dept
+    const dept = await authenticate(req, res, allowed)
+    if (!dept) return
+    req.dept = dept
     next()
   }
 }
 
-// Like requireDept(), but accepts a valid token from ANY department rather
-// than a specific allow-list — for the one endpoint genuinely meant to be
-// open to whoever happens to be logged in right now (📩 feedback
-// submission, routes/settings.js): any real department's token proves
-// "a real person on the floor submitted this", without hardcoding which
-// departments exist here (unlike requireDept, this never needs updating
-// when a new department is added).
+// Like requireDept(), but accepts a valid token from ANY department (📩
+// feedback, Ask Atlas, Fiche Modèle reads…).
 export function requireAnyDept() {
   return async (req, res, next) => {
-    const header = req.headers.authorization || ''
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null
-    if (!token) return res.status(401).json({ error: 'missing_token' })
-
-    let payload
-    try {
-      payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
-    } catch {
-      return res.status(401).json({ error: 'invalid_token' })
-    }
-
-    const dept = await get('SELECT pin_hash FROM departments WHERE key = $1', [payload.dept])
-    if (!dept || pinFingerprint(dept.pin_hash) !== payload.pv) {
-      return res.status(401).json({ error: 'pin_rotated' })
-    }
-
-    req.dept = payload.dept
+    const dept = await authenticate(req, res, null)
+    if (!dept) return
+    req.dept = dept
     next()
   }
 }
