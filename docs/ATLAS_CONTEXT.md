@@ -3,7 +3,7 @@
 > Read this file before any task. Update it at the end of every merged PR (sections 4, 6 and 7).
 > Never write secrets here (PINs, tokens, keys, passwords).
 
-Last update: 2026-10-02 (PR #48 open — trial bugs A–D: session, connection errors, Fiche login, 2-model Home)
+Last update: 2026-10-02 (after PR #48 — trial bugs A–D merged)
 
 ---
 
@@ -81,7 +81,7 @@ Models & variants (photo, gamme/VT, launch timer) · Planning (manual days, Plan
 | #45 | Client-side photo compression (small images unchanged) + drop Predict tables |
 | #46 | Shared project context: `docs/ATLAS_CONTEXT.md` + root `CLAUDE.md` |
 | #47 | Pre-trial fixes: clear AR/FR errors + expired-session re-login (A), server validation + warnings (B), public `/api/models/:id` restricted (E), typed counters / Patron fits phone / confirm export delete / language hidden (D part) |
-| #48 | Trial bugs: session no longer expires on cold starts + sliding renewal (A); correct offline/slow/server-starting errors, 25 s timeout + 1 safe retry, slow bar, kfr5 removed from CORS default (B); PIN pad inside Fiche Modèle / Ask (C); Home per-model view with 2 open models, "Fin d'entrée" label (D) — **open, not merged** |
+| #48 | Trial bugs: session no longer expires on cold starts + sliding renewal (A); correct offline/slow/server-starting errors, 25 s timeout + 1 safe retry, slow bar, kfr5 removed from CORS default (B); PIN pad inside Fiche Modèle / Ask (C); Home per-model view with 2 open models, "Fin d'entrée" label (D) |
 
 ## 7. Known issues / backlog (small, not started)
 - A test depends on the time of day ("Couleur/Variante … total combiné exact" fails before ~12:00 factory time) → make it time-independent.
