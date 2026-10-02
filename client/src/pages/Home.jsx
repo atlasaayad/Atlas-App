@@ -96,7 +96,10 @@ export default function Home() {
               const info = chains.find((c) => c.chainNumber === n)
               return (
                 <option key={n} value={n} disabled={!info?.model}>
-                  Chaîne {n} {info?.model ? `— ${info.model.client} (${info.model.dessin})` : '(vide)'}
+                  Chaîne {n}{' '}
+                  {info?.model
+                    ? `— ${(info.models?.length ? info.models : [info.model]).map((m) => `${m.client}${m.dessin ? ` (${m.dessin})` : ''}`).join(' + ')}`
+                    : '(vide)'}
                 </option>
               )
             })}
@@ -129,15 +132,21 @@ export default function Home() {
 
       {chainsLoaded && chainNumber && loading && !data && <LoadingSpinner />}
 
-      {chainsLoaded && chainNumber && !loading && error && (
+      {/* "No active model" only when the server says so (404). Any other
+          failure (slow / waking server…) is shown as what it is, and the
+          last figures stay on screen meanwhile. */}
+      {chainsLoaded && chainNumber && !loading && error && error.status === 404 && (
         <GlowCard>
           <div className="py-10 text-center text-slate-400">Aucun modèle actif sur la Chaîne {chainNumber}.</div>
         </GlowCard>
       )}
+      {chainsLoaded && chainNumber && !loading && error && error.status !== 404 && (
+        <ErrorNote message={errorMessage(error, { load: true })} className="text-center" />
+      )}
 
-      {chainNumber && data &&
+      {chainNumber && data && !(error && error.status === 404) &&
         (data.multi ? (
-          <MultiModelDashboard dashboards={data.dashboards} chainRendement={data.chainRendement} />
+          <MultiModelDashboard dashboards={data.dashboards} chainRendement={data.chainRendement} chain={data.chain} chainNumber={chainNumber} />
         ) : (
           <DashboardBody data={data} />
         ))}
@@ -154,8 +163,10 @@ export default function Home() {
 // shown for the chain as a whole, since both models share one workforce.
 // A single-model chain never reaches this component.
 const ROLE_BADGE = {
-  demarrage: { label: 'DÉMARRAGE', dot: '🟢', className: 'border-status-good/50 bg-status-good/10 text-status-good' },
-  fin_de_serie: { label: 'FIN DE SÉRIE', dot: '🟠', className: 'border-amber bg-amber-soft text-amber' },
+  demarrage: { label: 'DÉMARRAGE', short: 'Démarrage', dot: '🟢', className: 'border-status-good/50 bg-status-good/10 text-status-good' },
+  // Label only — internal role name stays fin_de_serie. The old model has
+  // stopped ENTERING the chain (the new one now enters) but is still coming out.
+  fin_de_serie: { label: "FIN D'ENTRÉE", short: "Fin d'entrée", dot: '🟠', className: 'border-amber bg-amber-soft text-amber' },
 }
 
 function RoleBadge({ role }) {
@@ -168,67 +179,101 @@ function RoleBadge({ role }) {
   )
 }
 
-function MultiModelDashboard({ dashboards, chainRendement }) {
-  const [selectedId, setSelectedId] = useState(dashboards[0]?.id || null)
-  useEffect(() => {
-    if (!dashboards.some((d) => d.id === selectedId)) setSelectedId(dashboards[0]?.id || null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashboards.map((d) => d.id).join(',')])
+// Which of the two models this device last looked at on a given chain.
+function storedChoice(chainNumber) {
+  try {
+    return localStorage.getItem(`atlas_home_model_${chainNumber}`)
+  } catch {
+    return null
+  }
+}
+function storeChoice(chainNumber, id) {
+  try {
+    localStorage.setItem(`atlas_home_model_${chainNumber}`, id)
+  } catch {
+    // private mode / storage blocked — the choice just isn't remembered
+  }
+}
 
-  const selected = dashboards.find((d) => d.id === selectedId) || dashboards[0]
+// Chain with 2 open models (démarrage + fin d'entrée): one button per
+// model; EVERYTHING model-specific below (hourly chart, objectifs, demandé/
+// produit/restant, bilan, Fiche…) belongs to the selected model only. Only
+// the workforce and the chain rendement are shared, and labelled "Chaîne".
+// Default = démarrage; the last choice is remembered on this device.
+function MultiModelDashboard({ dashboards, chainRendement, chain, chainNumber }) {
+  const pickDefault = () => {
+    const stored = storedChoice(chainNumber)
+    if (stored && dashboards.some((d) => d.id === stored)) return stored
+    return (dashboards.find((d) => d.role === 'demarrage') || dashboards[0])?.id || null
+  }
+  const [selectedId, setSelectedId] = useState(pickDefault)
+  useEffect(() => {
+    if (!dashboards.some((d) => d.id === selectedId)) setSelectedId(pickDefault())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainNumber, dashboards.map((d) => d.id).join(',')])
+
+  function choose(id) {
+    setSelectedId(id)
+    storeChoice(chainNumber, id)
+  }
+
+  const ordered = [...dashboards].sort((a, b) => (a.role === 'demarrage' ? -1 : b.role === 'demarrage' ? 1 : 0))
+  const selected = dashboards.find((d) => d.id === selectedId) || ordered[0]
 
   return (
     <div className="space-y-4">
-      <GlowCard>
-        <div className="space-y-2.5">
-          {dashboards.map((d) => (
-            <div key={d.id} className="flex items-stretch gap-2">
-              <button
-                onClick={() => setSelectedId(d.id)}
-                className={`flex min-w-0 flex-1 items-center gap-3 rounded-md border p-3 text-right ${
-                  selectedId === d.id ? 'border-turquoise bg-turquoise/10' : 'border-slate-800 bg-navy-900/40'
-                }`}
-              >
-                {d.identity.imageUrl && (
-                  <img src={d.identity.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-md border border-slate-700 object-cover" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <RoleBadge role={d.role} />
-                    <span className="font-display text-sm font-semibold text-slate-100">
-                      {d.identity.client} <span className="text-slate-500">· {d.identity.dessin}</span>
-                    </span>
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                    <span>
-                      Sortie: <span className="font-mono text-turquoise">{d.bilan.totalSortie.toLocaleString('fr-FR')}</span> /{' '}
-                      <span className="font-mono">{(d.qteTotaleCombined ?? d.identity.qteTotale ?? 0).toLocaleString('fr-FR')}</span>
-                    </span>
-                    {d.identity.debut && <span>Début: {d.identity.debut}</span>}
-                    {d.identity.finPrevue && <span>Fin prévue: {d.identity.finPrevue}</span>}
-                  </div>
-                </div>
-              </button>
-              <FicheButton modelId={d.id} title={`${d.identity.client} · ${d.identity.dessin}`} compact />
+      <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="Modèle affiché">
+        {ordered.map((d) => {
+          const b = ROLE_BADGE[d.role] || ROLE_BADGE.demarrage
+          const active = selected?.id === d.id
+          return (
+            <button
+              key={d.id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => choose(d.id)}
+              className={`min-h-14 min-w-0 rounded-md border px-3 py-2 text-left text-sm ${
+                active ? 'border-turquoise bg-turquoise/10 text-slate-100' : 'border-slate-700 bg-navy-900/40 text-slate-400'
+              }`}
+            >
+              <div className="text-xs font-semibold">
+                {b.dot} {b.short}
+              </div>
+              <div className="break-words font-display font-semibold">
+                {d.identity.client}
+                {d.identity.dessin ? <span className="text-slate-500"> · {d.identity.dessin}</span> : null}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      <GlowCard title={`Chaîne ${chainNumber} — ${dashboards.length} modèles (commun)`}>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">Ouvriers (chaîne)</div>
+            <div className="flex gap-4">
+              <span className="font-mono text-sm text-slate-300">Présents: {chain?.ouvriers?.presents ?? 0}</span>
+              <span className="font-mono text-sm text-slate-300">Requis: {chain?.ouvriers?.requis ?? 0}</span>
             </div>
-          ))}
+          </div>
         </div>
+        {chainRendement && (
+          <div className="mt-3 border-t border-slate-800 pt-3">
+            <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">Rendement chaîne ({chainRendement.modelsCount} modèles)</div>
+            <p className="mb-3 text-xs text-slate-500">
+              محسوب على السلسلة كاملة: مجموع (كمية كل موديل × temps unitaire ديالو) ÷ (effectif × الدقائق) — حيت الجوج
+              موديلات كيخدمو بنفس العمال.
+            </p>
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <RendementLevel label="بالساعة" data={chainRendement.hourly} />
+              <RendementLevel label="اليوم" data={chainRendement.daily} />
+            </div>
+          </div>
+        )}
       </GlowCard>
 
-      {chainRendement && (
-        <GlowCard title={`Rendement chaîne (${chainRendement.modelsCount} modèles)`}>
-          <p className="mb-3 text-xs text-slate-500">
-            محسوب على السلسلة كاملة: مجموع (كمية كل موديل × temps unitaire ديالو) ÷ (effectif × الدقائق) — حيت الجوج
-            موديلات كيخدمو بنفس العمال.
-          </p>
-          <div className="grid grid-cols-2 gap-3 text-center">
-            <RendementLevel label="بالساعة" data={chainRendement.hourly} />
-            <RendementLevel label="اليوم" data={chainRendement.daily} />
-          </div>
-        </GlowCard>
-      )}
-
-      {selected && <DashboardBody data={selected} role={selected.role} hideRendement />}
+      {selected && <DashboardBody key={selected.id} data={selected} role={selected.role} hideRendement chainShared />}
     </div>
   )
 }
@@ -267,7 +312,9 @@ function LoadingSpinner() {
 // overlap: the model's role badge on its identity card, and its own
 // per-model Rendement card hidden — the chain Rendement shown above it is
 // the meaningful one then (see MultiModelDashboard).
-function DashboardBody({ data, role = null, hideRendement = false }) {
+// `chainShared`: the chain runs 2 models — workforce is shown once, for the
+// chain, above (MultiModelDashboard); every figure here is this model's own.
+function DashboardBody({ data, role = null, hideRendement = false, chainShared = false }) {
   const [showHistorique, setShowHistorique] = useState(false)
   const [showDetailsFinale, setShowDetailsFinale] = useState(false)
   // Couleur/Variante — null means "combined" (every color summed, the
@@ -398,18 +445,28 @@ function DashboardBody({ data, role = null, hideRendement = false }) {
               {data.prodAMaintenant.toLocaleString('fr-FR')}
             </div>
           </GlowCard>
-          <GlowCard className="flex-1">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Ouvriers</div>
-            <div className="mt-1 flex flex-col gap-0.5">
-              <span className="font-mono text-sm text-slate-300">Présents: {data.ouvriers.presents}</span>
-              <span className="font-mono text-sm text-slate-300">Requis: {data.ouvriers.requis}</span>
-            </div>
-          </GlowCard>
+          {!chainShared && (
+            <GlowCard className="flex-1">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Ouvriers</div>
+              <div className="mt-1 flex flex-col gap-0.5">
+                <span className="font-mono text-sm text-slate-300">Présents: {data.ouvriers.presents}</span>
+                <span className="font-mono text-sm text-slate-300">Requis: {data.ouvriers.requis}</span>
+              </div>
+            </GlowCard>
+          )}
         </div>
       </div>
 
       {/* 3. Bilan de la chaîne */}
-      <GlowCard title={selectedColor ? `Bilan — ${selectedColor.label || 'Défaut'}` : 'Bilan de la chaîne'}>
+      <GlowCard
+        title={
+          selectedColor
+            ? `Bilan — ${selectedColor.label || 'Défaut'}`
+            : chainShared
+              ? `Bilan — ${data.identity.client}${data.identity.dessin ? ` · ${data.identity.dessin}` : ''}`
+              : 'Bilan de la chaîne'
+        }
+      >
         <div className="flex flex-wrap justify-around gap-4">
           <StatCircle label="Total entré" value={displayedBilan.totalEntree} size="lg" />
           <StatCircle label="Total sortie" value={displayedBilan.totalSortie} size="lg" />

@@ -2,7 +2,9 @@
 // once. One button per model (fin de série first, démarrage second), each
 // with how many of today's hours already have an entry — so whoever is
 // entering data doesn't forget the other model.
-const ROLE_LABEL = { fin_de_serie: 'fin', demarrage: 'début' }
+// Labels only (internal role names unchanged): the old model has stopped
+// entering the chain but is still coming out → "fin d'entrée".
+const ROLE_LABEL = { fin_de_serie: "fin d'entrée", demarrage: 'démarrage' }
 
 export default function ModelSwitcher({ openModels, selectedId, onSelect, totalSlots }) {
   if (!openModels || openModels.length < 2) return null

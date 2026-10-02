@@ -3457,3 +3457,81 @@ test('Session: survit aux démarrages à froid, renouvellement glissant, expirat
     assert.equal(r.data.error, 'wrong_department')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Trial bug D: a chain with 2 open models — every Home number belongs to one
+// model only; chain-level blocks are labelled and computed for the chain.
+// ---------------------------------------------------------------------------
+
+test('Chaîne à 2 modèles: chaque chiffre du tableau de bord appartient à son propre modèle', async (t) => {
+  const TEST_CHAIN = 8
+  const methodeToken = await login('methode', '1111')
+  const productionToken = await login('production', '2222')
+  const rhToken = await login('rh', '8888')
+  const today = todayInFactoryTZ()
+  assert.equal((await call(`/chains/${TEST_CHAIN}/open-models`)).data.models.length, 0)
+  const created = []
+  t.after(async () => {
+    for (const id of created.reverse()) {
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+      await run('DELETE FROM models WHERE id = $1', [id])
+    }
+  })
+  const mk = async (body) => {
+    const r = await call('/methode/models', { method: 'POST', token: methodeToken, body: { chainNumber: TEST_CHAIN, ...body } })
+    created.push(r.data.id)
+    return r.data.id
+  }
+  const oldId = await mk({ client: 'TEST_DENLLO', dessin: '2500', qteTotale: 2500, debut: '2026-09-20' })
+
+  await t.test('un seul modèle ouvert: tableau de bord inchangé (pas de "multi")', async () => {
+    const one = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(one.data.multi, undefined)
+    assert.equal(one.data.chain, undefined)
+    assert.equal(one.data.id, oldId)
+  })
+
+  const newId = await mk({ client: 'TEST_1395', dessin: '800', qteTotale: 800, debut: today })
+  await call(`/methode/models/${oldId}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'A', tps: 60 }] } })
+  await call(`/methode/models/${newId}/gamme`, { method: 'PUT', token: methodeToken, body: { lines: [{ operation: 'B', tps: 120 }] } })
+  await call(`/production/models/${oldId}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 2100 } })
+  await call(`/production/models/${newId}/totals`, { method: 'PUT', token: productionToken, body: { totalEntree: 150 } })
+  await call(`/production/models/${oldId}/hourly/0`, { method: 'PUT', token: productionToken, body: { qty: 1890, date: '2026-09-25' } })
+  await call(`/production/models/${newId}/hourly/0`, { method: 'PUT', token: productionToken, body: { qty: 20, date: today } })
+  await call(`/production/models/${oldId}/hourly/0`, { method: 'PUT', token: productionToken, body: { qty: 35, date: today } })
+  await call(`/rh/models/${oldId}/attendance`, { method: 'PUT', token: rhToken, body: { attendance: { Machinistes: 12 }, date: today } })
+  await call(`/methode/models/${newId}/attendance`, { method: 'PUT', token: methodeToken, body: { attendance: { Machinistes: 3 }, date: today } })
+  await call(`/methode/models/${oldId}/effectif`, { method: 'PUT', token: methodeToken, body: { effectif: { Machinistes: 14 } } })
+  await call(`/methode/models/${newId}/effectif`, { method: 'PUT', token: methodeToken, body: { effectif: { Machinistes: 10 } } })
+
+  await t.test('chaque modèle: son propre Total entré / sortie / En cours / heures / demandé-produit', async () => {
+    const res = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(res.data.multi, true)
+    const byId = Object.fromEntries(res.data.dashboards.map((d) => [d.id, d]))
+    const old = byId[oldId]
+    const neu = byId[newId]
+    assert.equal(old.role, 'fin_de_serie')
+    assert.equal(neu.role, 'demarrage')
+    assert.deepEqual([old.bilan.totalEntree, old.bilan.totalSortie, old.bilan.enCours], [2100, 1925, 175])
+    assert.deepEqual([neu.bilan.totalEntree, neu.bilan.totalSortie, neu.bilan.enCours], [150, 20, 130])
+    assert.equal(old.hourly.find((h) => h.index === 0).qty, 35)
+    assert.equal(neu.hourly.find((h) => h.index === 0).qty, 20)
+    assert.equal(neu.produit, 20)
+    assert.equal(old.produit, 35)
+    assert.equal(neu.identity.qteTotale, 800)
+    assert.equal(neu.restant, Math.max(neu.demande - neu.produit, 0))
+    assert.equal(neu.ouvriers.presents, 3)
+    assert.equal(old.ouvriers.presents, 12)
+  })
+
+  await t.test('blocs « Chaîne »: présents additionnés, requis = le plus grand des deux, rendement chaîne présent', async () => {
+    const res = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.deepEqual(res.data.chain.ouvriers, { presents: 15, requis: Math.max(...res.data.dashboards.map((d) => d.ouvriers.requis)) })
+    assert.equal(res.data.chainRendement.modelsCount, 2)
+  })
+
+  await t.test('le sélecteur de chaîne reçoit les 2 modèles', async () => {
+    const chain = (await call('/chains')).data.find((c) => c.chainNumber === TEST_CHAIN)
+    assert.deepEqual(chain.models.map((m) => m.id).sort(), [oldId, newId].sort())
+  })
+})

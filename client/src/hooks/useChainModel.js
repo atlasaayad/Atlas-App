@@ -75,6 +75,11 @@ export function useChainModel(chainNumber, { selectable = false, badgeKind = nul
   const selectModel = useCallback(async (id) => {
     if (id === selectedRef.current) return
     selectedRef.current = id
+    // The previous model's figures must never stay attached to the newly
+    // selected id — a form initialising from `dashboard` would otherwise
+    // copy model A's values into model B's fields (seen in the trial:
+    // Total entré of the démarrage saved onto the fin d'entrée model).
+    setDashboard(null)
     setModelId(id)
     setLoading(true)
     try {
@@ -87,5 +92,7 @@ export function useChainModel(chainNumber, { selectable = false, badgeKind = nul
     }
   }, [])
 
-  return { modelId, dashboard, loading, loadError, refresh, openModels, totalSlots, selectModel }
+  // Belt and braces: only ever hand out the dashboard OF the selected model.
+  const current = dashboard && dashboard.id === modelId ? dashboard : null
+  return { modelId, dashboard: current, loading: loading || (Boolean(modelId) && !current && !loadError), loadError, refresh, openModels, totalSlots, selectModel }
 }
