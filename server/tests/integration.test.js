@@ -3647,3 +3647,90 @@ test('Type de vêtement: liste, ajout sans doublon, variantes = type du parent, 
     assert.ok(!typeById[oldId])
   })
 })
+
+test('Anti double-création: même modèle / même couleur jamais créé deux fois', async (t) => {
+  const TEST_CHAIN = 7
+  const methodeToken = await login('methode', '1111')
+  const ids = new Set()
+  t.after(async () => {
+    const rows = await all("SELECT id FROM models WHERE client LIKE 'TEST_DUP%' ORDER BY parent_model_id NULLS LAST")
+    for (const { id } of rows) {
+      await run('DELETE FROM audit_log WHERE model_id = $1', [id])
+      await run('DELETE FROM models WHERE id = $1', [id])
+    }
+  })
+  assert.equal((await call(`/chains/${TEST_CHAIN}/open-models`)).data.models.length, 0)
+  const create = (body) =>
+    call('/methode/models', { method: 'POST', token: methodeToken, body: { chainNumber: TEST_CHAIN, qteTotale: 100, ...body } })
+  const roots = async () =>
+    (await all("SELECT id FROM models WHERE chain_number = $1 AND parent_model_id IS NULL AND status = 'active' AND client LIKE 'TEST_DUP%'", [TEST_CHAIN])).length
+
+  let rootId
+  await t.test('double tap (2 requêtes en même temps) → un seul modèle, les deux réponses donnent le même id', async () => {
+    const [a, b] = await Promise.all([create({ client: 'TEST_DUP Zara', dessin: '12.22.00' }), create({ client: 'TEST_DUP Zara', dessin: '12.22.00' })])
+    assert.deepEqual([a.status, b.status].sort(), [200, 201])
+    assert.equal(a.data.id, b.data.id)
+    assert.equal(await roots(), 1)
+    rootId = a.data.id
+    ids.add(rootId)
+    const repeat = [a, b].find((r) => r.status === 200)
+    assert.equal(repeat.data.existing, true)
+    assert.equal(repeat.data.message, undefined) // a double tap is silent
+  })
+
+  await t.test('nouvel essai quelques secondes après (casse/espaces/accents différents) → même modèle, pas de message', async () => {
+    const r = await create({ client: '  test_dup zarà ', dessin: '12.22.00 ' })
+    assert.equal(r.status, 200)
+    assert.equal(r.data.id, rootId)
+    assert.equal(r.data.message, undefined)
+    assert.equal(await roots(), 1)
+  })
+
+  await t.test('même modèle déjà ouvert depuis longtemps → rien créé, existant renvoyé + message AR/FR', async () => {
+    await run('UPDATE models SET created_at = $1 WHERE id = $2', [new Date(Date.now() - 3600e3).toISOString(), rootId])
+    const r = await create({ client: 'TEST_DUP Zara', dessin: '12.22.00' })
+    assert.equal(r.status, 200)
+    assert.equal(r.data.id, rootId)
+    assert.ok(r.data.message.ar && r.data.message.fr)
+    assert.equal(await roots(), 1)
+  })
+
+  await t.test('1 modèle + couleurs: pas de boutons Démarrage / Fin d’entrée', async () => {
+    const add = (label) =>
+      call(`/methode/models/${rootId}/variants`, { method: 'POST', token: methodeToken, body: { label, qteTotale: 10 } })
+    const [v1, v2] = await Promise.all([add('Bleu'), add('Bleu')])
+    assert.equal(v1.data.id, v2.data.id)
+    assert.deepEqual([v1.status, v2.status].sort(), [200, 201])
+    const again = await add(' bleu ')
+    assert.equal(again.data.id, v1.data.id)
+    assert.equal(again.data.message, undefined)
+    const noir = await add('Noir')
+    assert.equal(noir.status, 201)
+    assert.equal((await all('SELECT id FROM models WHERE parent_model_id = $1', [rootId])).length, 2)
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.multi, undefined)
+    assert.equal(dash.data.id, rootId)
+    const chain = (await call('/chains')).data.find((c) => c.chainNumber === TEST_CHAIN)
+    assert.deepEqual(chain.models.map((m) => m.id), [rootId])
+    assert.equal((await call(`/chains/${TEST_CHAIN}/open-models`)).data.models.length, 1)
+  })
+
+  await t.test('2 vrais modèles (dessin différent) → 2 boutons; le même nom ne donne pas "chain_full"', async () => {
+    const second = await create({ client: 'TEST_DUP Zara', dessin: '12.23.00' })
+    assert.equal(second.status, 201)
+    const dash = await call(`/chains/${TEST_CHAIN}/dashboard`)
+    assert.equal(dash.data.multi, true)
+    assert.deepEqual(dash.data.dashboards.map((d) => d.role).sort(), ['demarrage', 'fin_de_serie'])
+    const repeat = await create({ client: 'TEST_DUP Zara', dessin: '12.23.00' })
+    assert.equal(repeat.status, 200)
+    assert.equal(repeat.data.id, second.data.id)
+    assert.equal((await create({ client: 'TEST_DUP Autre', dessin: '1' })).status, 409) // a real third model: chain_full
+  })
+
+  await t.test('un modèle clôturé ne bloque pas la création d’un nouveau du même nom', async () => {
+    await run("UPDATE models SET status = 'closed' WHERE id = $1", [rootId])
+    const r = await create({ client: 'TEST_DUP Zara', dessin: '12.22.00' })
+    assert.equal(r.status, 201)
+    assert.notEqual(r.data.id, rootId)
+  })
+})
