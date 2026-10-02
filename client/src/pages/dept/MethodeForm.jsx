@@ -142,7 +142,7 @@ export default function MethodeForm({ token, chainNumber }) {
       )}
       {chainFullWarning && (
         <div className="rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
-          ⚠️ خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين (Fin d'entrée + Démarrage).
+          ⚠️ خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين (Fin d&apos;entrée + Démarrage).
         </div>
       )}
     </>
