@@ -559,10 +559,20 @@ publicRouter.get('/chains/:chainNumber/dashboard', async (req, res) => {
     Promise.all(newestFirst.map(fullDashboard)),
     computeChainRendement(openModels),
   ])
+  // Chain-level workforce (one team works both models): attendance entered
+  // under either model is summed; "requis" is the larger of the two models'
+  // required headcount (not the sum — it is the same team).
+  const chain = {
+    ouvriers: {
+      presents: dashboards.reduce((sum, d) => sum + (d.ouvriers?.presents || 0), 0),
+      requis: Math.max(0, ...dashboards.map((d) => d.ouvriers?.requis || 0)),
+    },
+  }
   res.json({
     multi: true,
     dashboards: dashboards.map((d) => ({ ...d, role: roleInChain(openModels, d.id) })),
     chainRendement,
+    chain,
   })
 })
 

@@ -38,7 +38,7 @@ export default function ProductionForm({ token, chainNumber }) {
   // refresh must never silently discard an unsaved edit elsewhere on screen.
   const initializedForRef = useRef(null)
   useEffect(() => {
-    if (dashboard && initializedForRef.current !== modelId) {
+    if (dashboard && dashboard.id === modelId && initializedForRef.current !== modelId) {
       setTotalEntree(dashboard.bilan.totalEntree)
       initializedForRef.current = modelId
     }
@@ -287,7 +287,8 @@ export default function ProductionForm({ token, chainNumber }) {
         )}
       </GlowCard>
 
-      <GlowCard title="Total entré">
+      {/* With 2 models on the chain, say WHICH model this total belongs to. */}
+      <GlowCard title={openModels.length > 1 ? `Total entré — ${dashboard.identity.client}${dashboard.identity.dessin ? ` · ${dashboard.identity.dessin}` : ''}` : 'Total entré'}>
         <p className="mb-3 text-sm text-slate-400">
           أدخل المجموع الكلي للقطع اللي دخلت السلسلة من بداية الموديل لحد الآن (مش بس اليوم) — عدّله كل ما دخلت كمية
           جديدة. (يبقى دائماً القيمة الحالية بغض النظر عن التاريخ المختار فوق.)

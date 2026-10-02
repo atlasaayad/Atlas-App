@@ -142,7 +142,7 @@ export default function MethodeForm({ token, chainNumber }) {
       )}
       {chainFullWarning && (
         <div className="rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
-          ⚠️ خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين (Fin de série + Démarrage).
+          ⚠️ خاصك تسد واحد من الموديلات قبل — السلسلة فيها ديجا جوج موديلات نشيطين (Fin d'entrée + Démarrage).
         </div>
       )}
     </>
@@ -316,7 +316,7 @@ function CloseModelCard({ token, model, dashboard, onClosed }) {
 // run at once: fin de série + démarrage) plus the "start a new model in
 // parallel" action — that's how a démarrage begins while the old model is
 // still finishing. A third one is refused (see requestAddNew above).
-const ROLE_PILL = { fin_de_serie: '🟠 Fin de série', demarrage: '🟢 Démarrage' }
+const ROLE_PILL = { fin_de_serie: "🟠 Fin d'entrée", demarrage: '🟢 Démarrage' }
 
 function ModelOverlapBar({ openModels, selectedModelId, onSelect, onAddNew }) {
   if (openModels.length === 0) return null
