@@ -34,7 +34,7 @@ export function onSessionExpired(listener) {
   return () => sessionExpiredListeners.delete(listener)
 }
 
-function deptKeyForToken(token) {
+export function deptKeyForToken(token) {
   for (let i = 0; i < sessionStorage.length; i++) {
     const key = sessionStorage.key(i)
     if (key?.startsWith('atlas_token_') && sessionStorage.getItem(key) === token) return key.slice('atlas_token_'.length)

@@ -3140,10 +3140,19 @@ test('Fiche Modèle', async (t) => {
   })
 })
 
-test('Ask Atlas: bouton « Connexion » vers /departements quand la connexion est requise', () => {
+test('Ask Atlas: bouton « Connexion » qui ouvre le code PIN sur place quand la connexion est requise', () => {
   const src = readFileSync(path.join(REPO_ROOT, 'client/src/pages/Ask.jsx'), 'utf8')
-  assert.match(src, /to="\/departements"/)
   assert.match(src, />\s*Connexion\s*</)
+  assert.match(src, /<LoginPrompt/)
+})
+
+test('Fiche Modèle: tout 401 (chargement ou action) ouvre le code PIN dans la Fiche, puis recharge', () => {
+  const src = readFileSync(path.join(REPO_ROOT, 'client/src/components/FicheModeleModal.jsx'), 'utf8')
+  assert.match(src, /<LoginPrompt/)
+  assert.doesNotMatch(src, /to="\/departements"/)
+  const catches = src.split('catch (err)').slice(1)
+  assert.ok(catches.length >= 5)
+  for (const c of catches) assert.match(c.slice(0, 160), /401/, 'every catch handles 401')
 })
 
 test('Tables Predict supprimées, sans toucher aux tables Atlas', async () => {
