@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import { nanoid } from 'nanoid'
 import { all, get, run, ensureSchema, logAudit } from './index.js'
 import { DEPARTMENTS, SPECIALTIES, FINALE_SPECIALTIES, HOURLY_SLOTS } from '../constants.js'
+import { recordProductionDatabase } from '../environment.js'
 import { computeVTMinutes, computeDT, todayInFactoryTZ } from '../calc.js'
 
 // Default 4-digit PINs, one per department. Override per-deployment via env
@@ -306,6 +307,7 @@ export async function runSeed({ log = false } = {}) {
   await seedSpecialtyDefs()
   await seedWorkHours()
   await seedDemoModel()
+  await recordProductionDatabase()
 
   if (log) {
     console.log('Seed complete.')

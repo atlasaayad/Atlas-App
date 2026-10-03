@@ -32,6 +32,27 @@ export async function run(text, params = []) {
   return pool.query(text, params)
 }
 
+// Runs `fn(client)` inside one transaction holding a Postgres advisory lock
+// on `key`, so two identical requests (a double tap, two devices) run one
+// after the other instead of both passing a "does it already exist?" check.
+// Inside `fn`, use client.query only: the pool has a single connection,
+// which this function holds until COMMIT.
+export async function withAdvisoryLock(key, fn) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key])
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
 let schemaReady = null
 
 // Idempotent, cheap (CREATE TABLE IF NOT EXISTS). Called lazily before the

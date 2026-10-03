@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import GlowCard from '../../components/GlowCard'
 import NoModel from '../../components/NoModel'
 import Stepper from '../../components/Stepper'
@@ -102,6 +102,10 @@ export default function MethodeForm({ token, chainNumber }) {
       .finally(() => setLoading(false))
   }
 
+  // Set when "Créer" found the same model already open: nothing was created,
+  // the existing one is selected and this explains why.
+  const [existingNotice, setExistingNotice] = useState(null)
+
   // After a save the save itself already succeeded — a failed reload only
   // means the figures on screen are a bit stale, never a failed save.
   function quietRefresh() {
@@ -111,6 +115,7 @@ export default function MethodeForm({ token, chainNumber }) {
   useEffect(() => {
     setSelectedModelId(null)
     setShowCreateForm(false)
+    setExistingNotice(null)
     initialLoad()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainNumber])
@@ -137,9 +142,17 @@ export default function MethodeForm({ token, chainNumber }) {
         <ModelOverlapBar
           openModels={openModels}
           selectedModelId={showCreateForm ? null : selectedModelId}
-          onSelect={(id) => refresh(id).catch(() => {})}
+          onSelect={(id) => {
+            setExistingNotice(null)
+            refresh(id).catch(() => {})
+          }}
           onAddNew={requestAddNew}
         />
+      )}
+      {existingNotice && (
+        <div role="status" className="whitespace-pre-line rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
+          ⚠️ {existingNotice}
+        </div>
       )}
       {chainFullWarning && (
         <div className="rounded-md border border-amber bg-amber-soft px-3 py-2 text-sm text-amber">
@@ -159,7 +172,10 @@ export default function MethodeForm({ token, chainNumber }) {
         <CreateModelForm
           token={token}
           chainNumber={chainNumber}
-          onCreated={(newId) => refresh(newId).catch(() => {})}
+          onCreated={(newId, message) => {
+            setExistingNotice(message ? `${message.ar}\n${message.fr}` : null)
+            refresh(newId).catch(() => {})
+          }}
           onCancel={openModels.length > 0 ? quietRefresh : null}
         />
       </div>
@@ -351,16 +367,23 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [voiceMode, setVoiceMode] = useState(false)
+  // Synchronous guard: `disabled={saving}` only applies after the next
+  // render, so two taps in the same instant could both submit.
+  const busy = useRef(false)
 
   async function submit(e) {
     e.preventDefault()
+    if (busy.current) return
     if (!confirmIfLarge('Qté totale', form.qteTotale, WARNING_LIMITS.qteTotale)) return
     if (!confirmIfLarge('Commande', form.commande, WARNING_LIMITS.qteTotale)) return
+    busy.current = true
     setSaving(true)
     setError(null)
     try {
+      // Same model already open on this chain → the server creates nothing
+      // and returns it (`existing`); it is selected like a new one.
       const res = await api.methode.createModel(token, { ...form, chainNumber })
-      onCreated(res.id)
+      onCreated(res.id, res.message)
     } catch (err) {
       setError(
         errorMessage(err, {
@@ -371,6 +394,7 @@ function CreateModelForm({ token, chainNumber, onCreated, onCancel }) {
         })
       )
     } finally {
+      busy.current = false
       setSaving(false)
     }
   }
@@ -882,13 +906,20 @@ function VariantesTab({ token, model, dashboard, onSaved }) {
   const [label, setLabel] = useState('')
   const [qteTotale, setQteTotale] = useState('')
   const save = useSaveStatus()
+  const busy = useRef(false)
+  const [existingNotice, setExistingNotice] = useState(null)
 
   async function submitNew(e) {
     e.preventDefault()
-    if (!label) return
+    if (!label || busy.current) return
     if (!confirmIfLarge('Qté totale', qteTotale, WARNING_LIMITS.qteTotale)) return
-    const { ok } = await save.run(() => api.methode.addVariant(token, model.id, label, Number(qteTotale) || 0))
+    busy.current = true
+    setExistingNotice(null)
+    // Same colour already there → nothing created, the server says so.
+    const { ok, result } = await save.run(() => api.methode.addVariant(token, model.id, label, Number(qteTotale) || 0))
+    busy.current = false
     if (ok) {
+      if (result?.message) setExistingNotice(`${result.message.ar}\n${result.message.fr}`)
       setLabel('')
       setQteTotale('')
       onSaved()
@@ -912,6 +943,11 @@ function VariantesTab({ token, model, dashboard, onSaved }) {
             hint="الكمية المستهدفة الخاصة بهذا اللون فقط"
           />
           <SaveButton type="submit" saving={save.saving} saved={save.saved} error={save.error} />
+          {existingNotice && (
+            <p role="status" className="col-span-full whitespace-pre-line text-sm text-amber">
+              ⚠️ {existingNotice}
+            </p>
+          )}
         </form>
       </GlowCard>
 

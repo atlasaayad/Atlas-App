@@ -246,6 +246,7 @@ export const api = {
   login: (deptKey, pin) => request(`/auth/${deptKey}/login`, { method: 'POST', body: { pin }, retry: true }),
   getModels: () => request('/models'),
   getChains: () => request('/chains'),
+  getEnvironment: () => request('/environment'),
   getRanking: () => request('/chains/ranking'),
   getPersonnelAdmin: (token, date) => request(`/personnel-admin?date=${date}`, { token }),
   getEffectifsOverview: () => request('/effectifs/overview'),

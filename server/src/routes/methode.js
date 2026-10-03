@@ -1,8 +1,8 @@
 import { Router } from 'express'
 import { nanoid } from 'nanoid'
-import { all, get, run, logAudit } from '../db/index.js'
+import { all, get, run, logAudit, withAdvisoryLock } from '../db/index.js'
 import { requireDept } from '../auth.js'
-import { rejectNegative, rejectNegativeMap, rejectFinBeforeDebut, reject } from '../validation.js'
+import { rejectNegative, rejectNegativeMap, rejectFinBeforeDebut, reject, normalizeName } from '../validation.js'
 import { DELAY_REASONS } from '../constants.js'
 import { computeVTMinutes, computeDT, computeLaunchTimerState, todayInFactoryTZ } from '../calc.js'
 import { saveAttendance, getAttendanceForDate, DATE_RE } from '../attendanceShared.js'
@@ -10,7 +10,7 @@ import { getPlanningSummary } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
 import { getWorkHours } from '../workHours.js'
 import { uploadModelImage, deleteModelImage } from '../imageUpload.js'
-import { getOpenModelsForChain, MAX_OPEN_PER_CHAIN } from '../openModels.js'
+import { MAX_OPEN_PER_CHAIN } from '../openModels.js'
 import { getGarmentTypes, findGarmentType, addGarmentType } from '../garmentTypes.js'
 
 export const methodeRouter = Router()
@@ -88,6 +88,27 @@ async function recompute(modelId) {
 // (unlike a Couleur/Variante variant, which shares its root's gamme). A
 // chain holds at most MAX_OPEN_PER_CHAIN open roots: a third is refused
 // until one of the two is closed (see routes/lifecycle.js).
+// A repeat within this window is a double tap / retry: the existing row is
+// returned silently. An older open row with the same name is a real
+// conflict: it is still returned (and selected), with an AR/FR message.
+export const DUPLICATE_WINDOW_MS = 5 * 60 * 1000
+
+function existingAnswer(row, name, where) {
+  const recent = Date.now() - new Date(row.created_at).getTime() <= DUPLICATE_WINDOW_MS
+  return {
+    id: row.id,
+    existing: true,
+    ...(recent
+      ? {}
+      : {
+          message: {
+            ar: `«${name}» ديجا مفتوح (${where}) — ما تزاد والو، تختار الموجود.`,
+            fr: `« ${name} » est déjà ouvert (${where}) — rien n'a été créé, le modèle existant est sélectionné.`,
+          },
+        }),
+  }
+}
+
 methodeRouter.post('/models', async (req, res) => {
   const { client, qteTotale, debut, finPrevue, dessin, commande, chainNumber } = req.body || {}
   if (!client || !chainNumber) return res.status(400).json({ error: 'client_and_chain_required' })
@@ -96,17 +117,35 @@ methodeRouter.post('/models', async (req, res) => {
   const garmentType = await resolveGarmentType(res, req.body?.garmentType)
   if (!garmentType) return
 
-  const openOnChain = await getOpenModelsForChain(Number(chainNumber))
-  if (openOnChain.length >= MAX_OPEN_PER_CHAIN) return res.status(409).json({ error: 'chain_full' })
-
   const now = new Date().toISOString()
   const id = `mdl_${nanoid(10)}`
 
-  await run(
-    `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at, garment_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9, $10)`,
-    [id, client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, chainNumber, now, garmentType.value]
-  )
+  // Anti double-create: the check and the INSERT run under one lock per
+  // chain, so a double tap (or a retry after a slow answer) can never open
+  // the same model twice. Same client + dessin already open on this chain →
+  // nothing is created, the existing model is returned (and selected).
+  const outcome = await withAdvisoryLock(`create_model:${Number(chainNumber)}`, async (db) => {
+    // Same "open root" definition as openModels.js (OPEN_ROOTS_WHERE).
+    const { rows: openOnChain } = await db.query(
+      `SELECT id, client, dessin, created_at FROM models
+       WHERE chain_number = $1 AND active = 1 AND parent_model_id IS NULL AND status = 'active'
+       ORDER BY created_at ASC`,
+      [Number(chainNumber)]
+    )
+    const same = openOnChain.find(
+      (m) => normalizeName(m.client) === normalizeName(client) && normalizeName(m.dessin) === normalizeName(dessin)
+    )
+    if (same) return { existing: same }
+    if (openOnChain.length >= MAX_OPEN_PER_CHAIN) return { full: true }
+    await db.query(
+      `INSERT INTO models (id, client, qte_totale, debut, fin_prevue, dessin, commande, chain_number, active, created_at, updated_at, garment_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9, $10)`,
+      [id, client, qteTotale || 0, debut || null, finPrevue || null, dessin || null, commande || 0, chainNumber, now, garmentType.value]
+    )
+    return { created: true }
+  })
+  if (outcome.existing) return res.json(existingAnswer(outcome.existing, `${client}${dessin ? ` · ${dessin}` : ''}`, `Chaîne ${chainNumber}`))
+  if (outcome.full) return res.status(409).json({ error: 'chain_full' })
 
   // No hourly_production seeding — production_history has no rows yet for
   // this brand-new model, and an absent row already reads back as qty 0
@@ -145,11 +184,22 @@ methodeRouter.post('/models/:id/variants', async (req, res) => {
 
   const now = new Date().toISOString()
   const id = `mdl_${nanoid(10)}`
-  await run(
-    `INSERT INTO models (id, client, qte_totale, dessin, chain_number, active, parent_model_id, variant_label, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $8)`,
-    [id, parent.client, Number(qteTotale) || 0, parent.dessin, parent.chain_number, parent.id, label, now]
-  )
+  // Same anti double-create rule as models: one open colour per label.
+  const outcome = await withAdvisoryLock(`create_variant:${parent.id}`, async (db) => {
+    const { rows: colours } = await db.query(
+      `SELECT id, variant_label, created_at FROM models WHERE parent_model_id = $1 AND active = 1 AND status = 'active'`,
+      [parent.id]
+    )
+    const same = colours.find((v) => normalizeName(v.variant_label) === normalizeName(label))
+    if (same) return { existing: same }
+    await db.query(
+      `INSERT INTO models (id, client, qte_totale, dessin, chain_number, active, parent_model_id, variant_label, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $8)`,
+      [id, parent.client, Number(qteTotale) || 0, parent.dessin, parent.chain_number, parent.id, label, now]
+    )
+    return { created: true }
+  })
+  if (outcome.existing) return res.json(existingAnswer(outcome.existing, `Couleur ${outcome.existing.variant_label}`, `${parent.client}${parent.dessin ? ` · ${parent.dessin}` : ''}`))
   await run('INSERT INTO production_totals (model_id, total_entree, total_sortie, updated_at) VALUES ($1, 0, 0, $2)', [id, now])
 
   await logAudit({ deptKey: 'methode', modelId: id, action: 'create_variant', details: { parentModelId: parent.id, label, qteTotale } })
