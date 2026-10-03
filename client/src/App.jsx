@@ -8,6 +8,7 @@ import EffectifsOverview from './pages/EffectifsOverview'
 import Ask from './pages/Ask'
 import SettingsGate from './pages/SettingsGate'
 import SlowNotice from './components/SlowNotice'
+import EnvironmentBanner from './components/EnvironmentBanner'
 
 function Header() {
   const { companyName } = useCompany()
@@ -27,6 +28,7 @@ function FactoryApp() {
   return (
     <CompanyProvider>
       <div className="flex min-h-screen flex-col pb-20">
+        <EnvironmentBanner />
         <SlowNotice />
         <Header />
         <main className="mx-auto w-full max-w-6xl flex-1 px-3 py-4 sm:px-6">

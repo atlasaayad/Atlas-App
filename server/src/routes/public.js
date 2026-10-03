@@ -5,6 +5,7 @@ import { DEPARTMENTS, CHAIN_NUMBERS, GENERIC_POSTE_DEPARTMENTS } from '../consta
 import { getPersonnelAdmin } from '../attendanceShared.js'
 import { getOpenModelsForChain, getAllOpenModels, getFamilyIds, roleInChain } from '../openModels.js'
 import { garmentTypeOf } from '../garmentTypes.js'
+import { environmentStatus } from '../environment.js'
 import { getPlanVsReel } from '../planning.js'
 import { getSpecialties } from '../specialties.js'
 import { getWorkHours } from '../workHours.js'
@@ -44,6 +45,13 @@ publicRouter.post('/auth/:deptKey/login', async (req, res) => {
 
   const token = issueToken(deptKey, result.dept.pin_hash)
   res.json({ token, dept: deptKey })
+})
+
+// Which database this deployment uses (preview safety banner). Status and a
+// 6-character hint only — never the connection string (environment.js).
+publicRouter.get('/environment', async (req, res) => {
+  res.set('Cache-Control', 'no-store')
+  res.json(await environmentStatus())
 })
 
 publicRouter.get('/models', async (req, res) => {

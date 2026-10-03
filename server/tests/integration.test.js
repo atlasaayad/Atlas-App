@@ -3734,3 +3734,16 @@ test('Anti double-création: même modèle / même couleur jamais créé deux fo
     assert.notEqual(r.data.id, rootId)
   })
 })
+
+test('/api/environment: public, statut seulement, jamais l’URL de la base', async () => {
+  const res = await call('/environment')
+  assert.equal(res.status, 200)
+  assert.deepEqual(Object.keys(res.data).sort(), ['database', 'env', 'hint'])
+  assert.equal(res.data.database, 'test') // local test database
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL
+  const { username, password } = new URL(url)
+  const json = JSON.stringify(res.data)
+  assert.ok(!json.includes('postgres'))
+  if (password) assert.ok(!json.includes(password))
+  if (username) assert.ok(!json.includes(username))
+})
